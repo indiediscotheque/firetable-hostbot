@@ -520,7 +520,7 @@ var startSong = function(noPrevPlay) {
               .catch(function(error) {
                 console.log("Song Remove failed: " + error.message);
               });
-            if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+            if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
             setTimeout(function() {
               startSong(true); //try again with SAME DJ
             }, 3000);
@@ -545,7 +545,7 @@ var startSong = function(noPrevPlay) {
                 .catch(function(error) {
                   console.log("Song Remove failed: " + error.message);
                 });
-              if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+              if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -569,7 +569,7 @@ var startSong = function(noPrevPlay) {
                   console.log("Song Remove failed: " + error.message);
                 });
               if (theDJ.id !== botid)
-                if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is blocked in the US. Letting you play whatever is next in your queue instead.");
+                if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is blocked in the US. Letting you play whatever is next in your queue instead.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -592,7 +592,7 @@ var startSong = function(noPrevPlay) {
                 .catch(function(error) {
                   console.log("Song Remove failed: " + error.message);
                 });
-              if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is age restricted and can't be played outside of Youtube.com. Letting you play whatever is next in your queue instead.");
+              if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is age restricted and can't be played outside of Youtube.com. Letting you play whatever is next in your queue instead.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -915,7 +915,7 @@ begin sc check
                   .catch(function(error) {
                     console.log("Song Remove failed: " + error.message);
                   });
-                if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+                if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
                 setTimeout(function() {
                   startSong(true); //try again with SAME DJ
                 }, 3000);
@@ -940,7 +940,7 @@ begin sc check
                 .catch(function(error) {
                   console.log("Song Remove failed: " + error.message);
                 });
-              if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+              if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -966,7 +966,7 @@ begin sc check
               .catch(function(error) {
                 console.log("Song Remove failed: " + error.message);
               });
-            if (theDJ.id !== botid && process.env.TRACKBROKEN_MESSAGES) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... There might also be a Soundcloud api issue right now...");
+            if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... There might also be a Soundcloud api issue right now...");
             setTimeout(function() {
               startSong(true); //try again with SAME DJ
             }, 3000);
