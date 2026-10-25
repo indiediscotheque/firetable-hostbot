@@ -114,7 +114,6 @@
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
     "queues": {
-      ".read": true,
       "$uid": {
         ".read": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
         ".write": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
@@ -199,9 +198,15 @@
         "selectedList": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true"
         },
+        "avatarStyle": {
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[1-4]|dicebear:[a-z0-9-]{1,32})$/)"
+        },
         "username": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
           ".validate": "(root.child('nameClaim/' + newData.val() ).val() == auth.uid)"
         }
       }
     }
+  }
+}
