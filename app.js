@@ -1586,13 +1586,14 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
           }
         } else if (command == "fixtags") {
           if (args) {
-            var song_data = args.split(' - ')
-            if (song_data.length < 2) {
+            // split on the FIRST " - " only, so "Song - Live" titles stay whole
+            var sep = args.indexOf(' - ');
+            if (sep < 1 || !args.slice(sep + 3).trim()) {
               //bad format
               talk("what");
             } else {
-              var newartist = song_data[0].replace(/&amp;/g, '&');
-              var newtitle = song_data[1].replace(/&amp;/g, '&');
+              var newartist = args.slice(0, sep).trim().replace(/&amp;/g, '&');
+              var newtitle = args.slice(sep + 3).trim().replace(/&amp;/g, '&');
               gts.fixTags(newartist, newtitle);
               talk("ok. updating tags to artist: `" + newartist + "` and title: `" + newtitle + "`. thank you.")
             }
@@ -1799,8 +1800,8 @@ var gts = {
           });
 
           globalpeek.set({
-            artist: song.artist,
-            title: song.title,
+            artist: fixedartist,
+            title: fixedtitle,
             last_play_date: Date.now(),
             first_play_date: Date.now(),
             last_play_dj: song.djname,
