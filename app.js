@@ -336,10 +336,30 @@ var newMusicCheck = function(data) {
 };
 
 var updateThings = function() {
-  updateTable();
-  updateWaitlist();
-  updatePlaydex();
-  updateLimit();
+  // One write, so clients never see the new deck with the old spotlight
+  var limitHere = "∞";
+  if (queue.length && (table.length >= 4)) limitHere = playlimit;
+  firebase.database().ref().update({
+    table: table,
+    waitlist: queue,
+    playdex: playDex,
+    playlimit: limitHere
+  });
+};
+
+// Seat a new DJ at the back of the line: they play after everyone already on
+// deck. They go just before the seat the spotlight is on, which is the DJ
+// playing now (mid-song) or the DJ about to play (between songs, when
+// nextSong() has already moved the spotlight on).
+var seatDJ = function(pson) {
+  if (!table.length) {
+    table.push(pson);
+    playDex = 0;
+    return;
+  }
+  if (playDex < 0 || playDex >= table.length) playDex = 0;
+  table.splice(playDex, 0, pson);
+  playDex++;
 };
 
 var nextSong = function(noPrevPlay) {
@@ -487,10 +507,9 @@ var startSong = function(noPrevPlay) {
             playDex = 0;
             startSong();
           } else {
-            table.push(pson);
+            seatDJ(pson);
             console.log(table);
-            updateTable();
-            updateLimit();
+            updateThings();
           }
         }
       } else {
@@ -542,15 +561,10 @@ var startSong = function(noPrevPlay) {
             removeThis.remove()
               .then(function() {
                 console.log("song remove went great.");
-                var songBack = {
-                  cid: data[nextSongkey].cid,
-                  name: data[nextSongkey].name,
-                  type: data[nextSongkey].type,
-                  flagged: {
-                    date: Date.now(),
-                    code: 1
-                  }
-                };
+                // keep everything saved with the track (artwork, page URL)
+                var songBack = Object.assign({}, data[nextSongkey], {
+                  flagged: { date: Date.now(), code: 1 }
+                });
                 queueRef.push(songBack);
               })
               .catch(function(error) {
@@ -567,15 +581,10 @@ var startSong = function(noPrevPlay) {
               removeThis.remove()
                 .then(function() {
                   console.log("song remove went great.");
-                  var songBack = {
-                    cid: data[nextSongkey].cid,
-                    name: data[nextSongkey].name,
-                    type: data[nextSongkey].type,
-                    flagged: {
-                      date: Date.now(),
-                      code: 2
-                    }
-                  };
+                  // keep everything saved with the track (artwork, page URL)
+                  var songBack = Object.assign({}, data[nextSongkey], {
+                    flagged: { date: Date.now(), code: 2 }
+                  });
                   queueRef.push(songBack);
                 })
                 .catch(function(error) {
@@ -590,15 +599,10 @@ var startSong = function(noPrevPlay) {
               removeThis.remove()
                 .then(function() {
                   console.log("song remove went great.");
-                  var songBack = {
-                    cid: data[nextSongkey].cid,
-                    name: data[nextSongkey].name,
-                    type: data[nextSongkey].type,
-                    flagged: {
-                      date: Date.now(),
-                      code: 3
-                    }
-                  };
+                  // keep everything saved with the track (artwork, page URL)
+                  var songBack = Object.assign({}, data[nextSongkey], {
+                    flagged: { date: Date.now(), code: 3 }
+                  });
                   queueRef.push(songBack);
                 })
                 .catch(function(error) {
@@ -614,15 +618,10 @@ var startSong = function(noPrevPlay) {
               removeThis.remove()
                 .then(function() {
                   console.log("song remove went great.");
-                  var songBack = {
-                    cid: data[nextSongkey].cid,
-                    name: data[nextSongkey].name,
-                    type: data[nextSongkey].type,
-                    flagged: {
-                      date: Date.now(),
-                      code: 7
-                    }
-                  };
+                  // keep everything saved with the track (artwork, page URL)
+                  var songBack = Object.assign({}, data[nextSongkey], {
+                    flagged: { date: Date.now(), code: 7 }
+                  });
                   queueRef.push(songBack);
                 })
                 .catch(function(error) {
@@ -762,11 +761,18 @@ var startSong = function(noPrevPlay) {
                 .then(function() {
                   console.log("song remove went great.");
                   var sname = song.artist + " - " + song.title;
-                  var songBack = {
-                    cid: song.cid,
-                    name: sname,
-                    type: song.type
-                  };
+                  // keep everything saved with the track, and remember SoundCloud
+                    // artwork / page URL learned just now
+                    var songBack = Object.assign({}, data[nextSongkey], {
+                      cid: song.cid,
+                      name: sname,
+                      type: song.type
+                    });
+                    delete songBack.flagged;
+                    if (song.type == 2) {
+                      if (!songBack.img && song.image && song.image !== "img/idlogo.png") songBack.img = song.image;
+                      if (!songBack.url && song.url) songBack.url = song.url;
+                    }
                   queueRef.push(songBack);
                   gts.np();
                 })
@@ -911,11 +917,18 @@ begin sc check
                   .then(function() {
                     console.log("song remove went great.");
                     var sname = song.artist + " - " + song.title;
-                    var songBack = {
-                      cid: song.cid,
-                      name: sname,
-                      type: song.type
-                    };
+                    // keep everything saved with the track, and remember SoundCloud
+                      // artwork / page URL learned just now
+                      var songBack = Object.assign({}, data[nextSongkey], {
+                        cid: song.cid,
+                        name: sname,
+                        type: song.type
+                      });
+                      delete songBack.flagged;
+                      if (song.type == 2) {
+                        if (!songBack.img && song.image && song.image !== "img/idlogo.png") songBack.img = song.image;
+                        if (!songBack.url && song.url) songBack.url = song.url;
+                      }
                     queueRef.push(songBack);
                     gts.np();
                   })
@@ -937,15 +950,10 @@ begin sc check
                 removeThis.remove()
                   .then(function() {
                     console.log("song remove went great.");
-                    var songBack = {
-                      cid: data[nextSongkey].cid,
-                      name: data[nextSongkey].name,
-                      type: data[nextSongkey].type,
-                      flagged: {
-                        date: Date.now(),
-                        code: 4
-                      }
-                    };
+                    // keep everything saved with the track (artwork, page URL)
+                    var songBack = Object.assign({}, data[nextSongkey], {
+                      flagged: { date: Date.now(), code: 4 }
+                    });
                     queueRef.push(songBack);
                   })
                   .catch(function(error) {
@@ -962,15 +970,10 @@ begin sc check
               removeThis.remove()
                 .then(function() {
                   console.log("song remove went great.");
-                  var songBack = {
-                    cid: data[nextSongkey].cid,
-                    name: data[nextSongkey].name,
-                    type: data[nextSongkey].type,
-                    flagged: {
-                      date: Date.now(),
-                      code: 5
-                    }
-                  };
+                  // keep everything saved with the track (artwork, page URL)
+                  var songBack = Object.assign({}, data[nextSongkey], {
+                    flagged: { date: Date.now(), code: 5 }
+                  });
                   queueRef.push(songBack);
                 })
                 .catch(function(error) {
@@ -988,15 +991,10 @@ begin sc check
             removeThis.remove()
               .then(function() {
                 console.log("song remove went great.");
-                var songBack = {
-                  cid: data[nextSongkey].cid,
-                  name: data[nextSongkey].name,
-                  type: data[nextSongkey].type,
-                  flagged: {
-                    date: Date.now(),
-                    code: 5
-                  }
-                };
+                // keep everything saved with the track (artwork, page URL)
+                var songBack = Object.assign({}, data[nextSongkey], {
+                  flagged: { date: Date.now(), code: 5 }
+                });
                 queueRef.push(songBack);
               })
               .catch(function(error) {
@@ -1161,24 +1159,20 @@ var removeMe = function(id) {
   }
   for (var i = 0; i < table.length; i++) {
     if (table[i].id == id) {
-      table.splice(i, 1);
-      if (queue.length) {
-        //now, let's fill the empty seat
-        var nextUp = queue[0];
-        table.push(nextUp);
-        queue.shift();
-        updateWaitlist();
-      }
-      updateTable();
-
-      if (i <= playDex) {
-        //shift spotlight to the left if a dj to the left of it leaves
-        playDex = playDex - 1;
-        updatePlaydex();
-      }
-      if (id == theDJ.id) {
+      if (theDJ && id == theDJ.id) {
+        // The DJ playing now leaves: end the song. nextSong() takes them off
+        // and gives the seat to the waitlist.
+        theDJ.removeAfter = true;
+        table[i].removeAfter = true;
         nextSong();
+        return true;
       }
+      table.splice(i, 1);
+      // keep the spotlight on the DJ playing now
+      if (i < playDex) playDex = playDex - 1;
+      if (playDex >= table.length) playDex = 0;
+      if (queue.length) seatDJ(queue.shift());
+      updateThings();
       return true;
     }
   }
@@ -1199,21 +1193,16 @@ var isAlphaNumeric = function(str) {
   return true;
 };
 
+// Take a DJ off the deck between songs (nextSong() has already moved the
+// spotlight on) and give the seat to the first person on the waitlist.
 var removePerson = function(id) {
   for (var i = 0; i < table.length; i++) {
     if (table[i].id == id) {
       table.splice(i, 1);
-      if (queue.length) {
-        //now, let's fill the empty seat
-        var nextUp = queue[0];
-        table.push(nextUp);
-        queue.shift();
-      }
-      if (i < playDex && i != 3) {
-        //shift spotlight to the left if a dj to the left of it leaves
-        playDex = playDex - 1;
-
-      }
+      // keep the spotlight on the same DJ when someone to its left leaves
+      if (i < playDex) playDex = playDex - 1;
+      if (playDex >= table.length) playDex = 0;
+      if (queue.length) seatDJ(queue.shift());
       return true;
     }
   }
@@ -1326,10 +1315,9 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
                 playDex = 0;
                 startSong();
               } else {
-                table.push(pson);
+                seatDJ(pson);
                 console.log(table);
-                updateTable();
-                updateLimit();
+                updateThings();
               }
             }
 
@@ -1514,10 +1502,9 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
                   playDex = 0;
                   startSong();
                 } else {
-                  table.push(pson);
+                  seatDJ(pson);
                   console.log(table);
-                  updateTable();
-                  updateLimit();
+                  updateThings();
                 }
               }
             } else {
@@ -1654,10 +1641,9 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
                     playDex = 0;
                     startSong();
                   } else {
-                    table.push(pson);
+                    seatDJ(pson);
                     console.log(table);
-                    updateTable();
-                    updateLimit();
+                    updateThings();
                   }
                 }
 
