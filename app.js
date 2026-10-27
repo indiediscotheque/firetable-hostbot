@@ -46,8 +46,12 @@ var configs = {
 };
 firebase.initializeApp(configs);
 
-var avatarset = "set1";
-if (process.env.AVATARSET) avatarset = process.env.AVATARSET;
+// Robohash set stamped on new trading cards. AVATARSET forces one set all
+// year; otherwise cards match the site's seasonal theme (monsters in October).
+function cardAvatarSet() {
+  if (process.env.AVATARSET) return process.env.AVATARSET;
+  return new Date().getMonth() === 9 ? "set2" : "set1";
+}
 
 firebase.auth().onAuthStateChanged(function(user) {
   if (user) {
@@ -1042,7 +1046,7 @@ var printCard = function(newEntry) {
       title: newEntry.title,
       artist: newEntry.artist,
       image: newEntry.img,
-      set: avatarset,
+      set: cardAvatarSet(),
       date: now,
       special: cardSpecial,
       owner: false
