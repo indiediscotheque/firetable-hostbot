@@ -1274,6 +1274,37 @@ var reactionForOtherSong = function(chatData) {
   return !!(chatData.forSong && song && song.started && chatData.forSong !== song.started);
 };
 
+// !flag / !flagplay reasons
+var flagCodeFor = function(reason) {
+  if (reason == "broken" || reason == "8") return 8;
+  if (reason == "bitrate" || reason == "quality" || reason == "incomplete" || reason == "9") return 9;
+  if (reason == "offtheme" || reason == "10") return 10;
+  return false;
+};
+
+// Flag a track in all of a DJ's lists (default queue and every playlist).
+// Resolves with how many copies were flagged.
+var flagTrackForDJ = function(djid, cid, type, flag) {
+  var db = firebase.database();
+  var lists = [db.ref("queues/" + djid)];
+  return db.ref("playlists/" + djid).once("value").then(function(snap) {
+    snap.forEach(function(pl) {
+      lists.push(db.ref("playlists/" + djid + "/" + pl.key + "/list"));
+    });
+    return Promise.all(lists.map(function(ref) {
+      return ref.orderByChild("cid").equalTo(cid).once("value").then(function(s) {
+        var writes = [];
+        s.forEach(function(t) {
+          if (t.val() && t.val().type == type) writes.push(ref.child(t.key + "/flagged").set(flag));
+        });
+        return Promise.all(writes).then(function() { return writes.length; });
+      });
+    }));
+  }).then(function(counts) {
+    return counts.reduce(function(a, b) { return a + b; }, 0);
+  });
+};
+
 var lookupChatData = function(chatID, callback) {
   var chatData = firebase.database().ref("chatData/" + chatID);
   chatData.once('value')
@@ -1582,6 +1613,27 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
               }
             } else {
               talk("I just reloaded... I don't remember where in the DJ's lists I got this from.");
+            }
+          }
+        } else if (command == "flagplay") {
+          // Flag a track from Recent: !flagplay <songHistory id> <reason>.
+          // Marks it in every list of the DJ who played it.
+          if (users[chatData.id].mod || users[chatData.id].supermod) {
+            var fp = (args || "").trim().split(/\s+/);
+            var fpCode = flagCodeFor(fp[1]);
+            if (!fp[0] || !fpCode) {
+              talk("Use !flagplay <play> <broken|quality|offtheme>");
+            } else {
+              firebase.database().ref("songHistory/" + fp[0]).once("value").then(function(snap) {
+                var play = snap.val();
+                if (!play || !play.djid || !play.cid) return talk("I can't find that play anymore.");
+                return flagTrackForDJ(play.djid, play.cid, play.type, { date: Date.now(), code: fpCode }).then(function(n) {
+                  talk(n ? ":triangular_flag_on_post: FLAGGED " + play.artist + " - " + play.title + " (CODE " + fpCode + ")"
+                         : "That track isn't in " + play.dj + "'s playlists anymore.");
+                });
+              }).catch(function(err) {
+                console.log("flagplay error:", err);
+              });
             }
           }
         } else if (command == "fixtags") {
