@@ -53,6 +53,38 @@ function cardAvatarSet() {
   return new Date().getMonth() === 9 ? "set2" : "set1";
 }
 
+// Stage string lights. The site keeps them on all December by itself; the
+// rest of the year supermods switch them with !lights, !lightson, !lightsoff.
+// LIGHTS_MONTHS (e.g. "12" or "11,12") should match config.js lightsMonths.
+var lightsMonths = (process.env.LIGHTS_MONTHS || "12").split(",").map(Number);
+var lightsOn = false;
+firebase.database().ref("lights").on("value", function(snapshot) {
+  lightsOn = !!snapshot.val();
+});
+
+function isLightsSeason() {
+  return lightsMonths.indexOf(new Date().getMonth() + 1) !== -1;
+}
+
+function lightsCommand(command, namebo) {
+  if (isLightsSeason()) {
+    var month = new Date().toLocaleString("en-US", { month: "long" });
+    talk("🎄 The string lights stay on all " + month + ", " + namebo + ".");
+    return;
+  }
+  var turnOn = command == "lightson" ? true : command == "lightsoff" ? false : !lightsOn;
+  if (turnOn === lightsOn) {
+    talk("The string lights are already " + (turnOn ? "on" : "off") + ".");
+    return;
+  }
+  firebase.database().ref("lights").set(turnOn).then(function() {
+    talk(turnOn ? "💡 String lights on." : "String lights off.");
+  }).catch(function(err) {
+    console.log("lights error:", err);
+    talk("Couldn't switch the string lights.");
+  });
+}
+
 firebase.auth().onAuthStateChanged(function(user) {
   if (user) {
     botid = user.uid;
@@ -1430,6 +1462,12 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
               setTheme(args);
               talk("Theme has been set to: " + args);
             }
+          } else {
+            talk("i will absolutely not do that " + namebo);
+          }
+        } else if (command == "lights" || command == "lightson" || command == "lightsoff") {
+          if (users[chatData.id].supermod) {
+            lightsCommand(command, namebo);
           } else {
             talk("i will absolutely not do that " + namebo);
           }
