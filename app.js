@@ -1267,6 +1267,13 @@ themepeek.once("value").then(function(snapshot) {
   }
 });
 
+// The site stamps 🔥/🌧 reactions with the song they were sent for
+// (songToPlay.started). One that arrives after the song changed is for the
+// previous song and must not count towards this one.
+var reactionForOtherSong = function(chatData) {
+  return !!(chatData.forSong && song && song.started && chatData.forSong !== song.started);
+};
+
 var lookupChatData = function(chatID, callback) {
   var chatData = firebase.database().ref("chatData/" + chatID);
   chatData.once('value')
@@ -1696,9 +1703,9 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "wait") {
           talk("wait");
         } else if (command == "hot") {
-          firelevel.hot(chatData.id, namebo);
+          if (!reactionForOtherSong(chatData)) firelevel.hot(chatData.id, namebo);
         } else if (command == "storm") {
-          firelevel.storm(chatData.id, namebo);
+          if (!reactionForOtherSong(chatData)) firelevel.storm(chatData.id, namebo);
         } else if (command == "link") {
           if (song) {
             if (song.url) {
@@ -1721,6 +1728,8 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
             talk(":red_circle::satellite: unable to communicate with the D.A.N.C.E. satellite... if you gift the DJ a h0t new card, i'm sure they'll help boost your signal");
           }
         }
+      } else if (reactionForOtherSong(chatData)) {
+        // a 🔥/🌧 sent for the song before (it arrived after the song changed)
       } else if (chatData.txt == "🔥" || chatData.txt == ":fire:") {
         firelevel.hot(chatData.id, namebo);
       } else if (chatData.txt == "🌧" || chatData.txt == ":cloud_with_rain:") {
