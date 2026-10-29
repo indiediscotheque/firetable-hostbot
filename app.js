@@ -1305,6 +1305,50 @@ var flagTrackForDJ = function(djid, cid, type, flag) {
   });
 };
 
+// Who a bus command is for: the sender, or (mods) someone of lower rank.
+var busRank = function(u) {
+  if (!u) return 0;
+  if (u.supermod) return 2;
+  if (u.mod) return 1;
+  return 0; // members, and the room bot (mods may send it home too)
+};
+var busTargetFor = function(senderId, senderName, args) {
+  var name = (args || "").trim().replace(/^@/, "");
+  if (!name) return { id: senderId, name: senderName, self: true };
+  var sender = users[senderId] || {};
+  if (!sender.mod && !sender.supermod) return { error: "Only mods can do that for someone else, " + senderName + "." };
+  var id = uidLookup(name);
+  if (!id) return { error: "who is that" };
+  if (id == senderId) return { id: senderId, name: senderName, self: true };
+  if (busRank(users[id]) >= busRank(sender)) return { error: "You can't do that for " + name + "." };
+  return { id: id, name: (users[id] && users[id].username) || name, self: false };
+};
+var setBus = function(target, on, byId) {
+  var check = addCheck(target.id);
+  var who = target.self ? target.name + ", " : "@" + target.name + ", a mod has set it so ";
+  if (!check) {
+    talk(target.self ? target.name + ", you aren't even DJing..." : target.name + " isn't DJing.");
+    return;
+  }
+  var list = check == 1 ? queue : table;
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].id == target.id) {
+      list[i].removeAfter = on;
+      break;
+    }
+  }
+  var isPlaying = check == 2 && theDJ && theDJ.id == target.id;
+  if (isPlaying) theDJ.removeAfter = on;
+  if (target.self) {
+    if (on) talk(isPlaying ? who + "I'll remove you at the end of this song." : who + "I'll remove you after your next song.");
+    else talk(isPlaying ? who + "I will NOT remove you after this song." : who + "I will NOT remove you after your next song.");
+  } else {
+    if (on) talk(who + (isPlaying ? "you'll step down at the end of this song." : "you'll step down after your next song."));
+    else talk("@" + target.name + ", you're staying on after all.");
+  }
+  if (check == 1) updateWaitlist(); else updateTable();
+};
+
 var lookupChatData = function(chatID, callback) {
   var chatData = firebase.database().ref("chatData/" + chatID);
   chatData.once('value')
@@ -1399,69 +1443,16 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "removeme") {
           var removed = removeMe(chatData.id);
           if (!removed) talk(namebo + ", you aren't even DJing...");
-        } else if (command == "removemeafter" || command == "removeafter" || command == "gottacatchmybus") {
-          var check = addCheck(chatData.id);
-          if (!check) {
-            talk(namebo + ", you aren't even DJing...");
-          } else if (check == 1) {
-            //user in waitlist
-            for (var i = 0; i < queue.length; i++) {
-              if (queue[i].id == chatData.id) {
-                queue[i].removeAfter = true;
-                updateWaitlist();
-                talk(namebo + ", I'll remove you after your next song.");
-                break;
-              }
-            }
-          } else if (check == 2) {
-            //user on deck
-            if (chatData.id == theDJ.id) {
-              // user is current dj
-              talk(namebo + ", I'll remove you at the end of this song.");
-              theDJ.removeAfter = true;
-            } else {
-              // user is not current dj
-              talk(namebo + ", I'll remove you after your next song.");
-            }
-            for (var i = 0; i < table.length; i++) {
-              if (table[i].id == chatData.id) {
-                table[i].removeAfter = true
-                updateTable();
-                break;
-              }
-            }
-          }
-        } else if (command == "dontremovemeafter" || command == "dontremoveafter" || command == "dontremoveme" || command == "dontremove") {
-          var check = addCheck(chatData.id);
-          if (!check) {
-            talk(namebo + ", you aren't even DJing...");
-          } else if (check == 1) {
-            //user in waitlist
-            for (var i = 0; i < queue.length; i++) {
-              if (queue[i].id == chatData.id) {
-                queue[i].removeAfter = false;
-                updateWaitlist();
-                talk(namebo + ", I will be sure to not remove you after your next track.");
-                break;
-              }
-            }
-          } else if (check == 2) {
-            //user on deck
-            if (chatData.id == theDJ.id) {
-              // user is current dj
-              talk(namebo + ", I will NOT remove you after this song.");
-              theDJ.removeAfter = false;
-            } else {
-              // user is not current dj
-              talk(namebo + ", I will NOT remove you after your next song.");
-            }
-            for (var i = 0; i < table.length; i++) {
-              if (table[i].id == chatData.id) {
-                table[i].removeAfter = false;
-                updateTable();
-                break;
-              }
-            }
+        } else if (command == "removemeafter" || command == "removeafter" || command == "gottacatchmybus" ||
+                   command == "dontremovemeafter" || command == "dontremoveafter" || command == "dontremoveme" || command == "dontremove") {
+          // "take the bus": step down after your next play. Mods can also set
+          // it for someone of lower rank: !removeafter <name> (#121).
+          var busOn = command.indexOf("dont") !== 0;
+          var busTarget = busTargetFor(chatData.id, namebo, args);
+          if (busTarget.error) {
+            talk(busTarget.error);
+          } else {
+            setBus(busTarget, busOn, chatData.id);
           }
         } else if (command == "skip") {
           if (users[chatData.id].mod || users[chatData.id].supermod || (chatData.id == theDJ.id)) {
