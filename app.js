@@ -46,6 +46,17 @@ var configs = {
 };
 firebase.initializeApp(configs);
 
+// The database's clock, as the site uses it (ftapi.now()). Song start times
+// are stamped with it so every listener's position, the beat and the
+// progress bar line up, whatever this server's own clock says.
+var serverTimeOffset = 0;
+firebase.database().ref(".info/serverTimeOffset").on("value", function(snapshot) {
+  serverTimeOffset = snapshot.val() || 0;
+});
+function serverNow() {
+  return Date.now() + serverTimeOffset;
+}
+
 // Robohash set stamped on new trading cards. AVATARSET forces one set all
 // year; otherwise cards match the site's seasonal theme (monsters in October).
 function cardAvatarSet() {
@@ -126,7 +137,7 @@ firebase.auth().onAuthStateChanged(function(user) {
             var twopeek = firebase.database().ref("songToPlay");
             twopeek.once("value").then(function(snapshot) {
               var data = snapshot.val();
-              var nownow = Date.now();
+              var nownow = serverNow();
               song = data;
               theDJ = table[playDex];
               console.log(queue);
@@ -458,7 +469,7 @@ var startSong = function(noPrevPlay) {
   if (!table.length) {
     console.log("no length");
     var s2p = firebase.database().ref("songToPlay");
-    var now = Date.now();
+    var now = serverNow();
     var songInfo = {
       type: 1,
       cid: 0,
@@ -679,7 +690,7 @@ var startSong = function(noPrevPlay) {
               }
               var thedate = new Date(result.items[0].snippet.publishedAt);
               var postedDate = thedate.getTime();
-              var now = Date.now();
+              var now = serverNow();
               var songInfo = {
                 type: data[nextSongkey].type,
                 cid: data[nextSongkey].cid,
@@ -834,7 +845,7 @@ begin sc check
                 if (sartist == "Unknown") sartist = tracks[0].user.username;
                 var thedate = new Date(tracks[0].created_at);
                 var postedDate = thedate.getTime();
-                var now = Date.now();
+                var now = serverNow();
                 var songInfo = {
                   type: data[nextSongkey].type,
                   cid: data[nextSongkey].cid,
