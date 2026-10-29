@@ -35,7 +35,7 @@
             ".validate": "$emoji.matches(/^[a-z0-9_+-]{1,40}$/)",
             "$reactor": {
               ".write": "auth.uid != null && auth.uid == $reactor && root.child('banned/' + auth.uid).val() != true && data.parent().parent().parent().child('txt').exists()",
-              ".validate": "newData.val() == true"
+              ".validate": "newData.val() == true && $reactor == auth.uid"
             }
           }
         }
