@@ -51,6 +51,7 @@
     "mentions": {
       "$uid": {
         ".read": "auth.uid == $uid",
+        ".indexOn": "time",
         ".write": "auth.uid == $uid || root.child('users/' + auth.uid + '/hostbot').val() == true",
         "$mention": {
           "read": {
