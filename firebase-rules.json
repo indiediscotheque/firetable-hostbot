@@ -59,6 +59,26 @@
         }
       }
     },
+    "playlistPrefs": {
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+        "defaultList": {
+          ".validate": "newData.isString() && newData.val().length <= 40"
+        },
+        "defaultName": {
+          ".validate": "newData.isString() && newData.val().length <= 80"
+        },
+        "order": {
+          "$list": {
+            ".validate": "newData.isNumber()"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
     "grabs": {
       "$djid": {
         ".read": "auth.uid == $djid",
@@ -235,23 +255,6 @@
         },
         "selectedList": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true"
-        },
-        "playlistPrefs": {
-          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
-          "defaultList": {
-            ".validate": "newData.isString() && newData.val().length <= 40"
-          },
-          "defaultName": {
-            ".validate": "newData.isString() && newData.val().length <= 80"
-          },
-          "order": {
-            "$list": {
-              ".validate": "newData.isNumber()"
-            }
-          },
-          "$other": {
-            ".validate": false
-          }
         },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
