@@ -1274,6 +1274,84 @@ var reactionForOtherSong = function(chatData) {
   return !!(chatData.forSong && song && song.started && chatData.forSong !== song.started);
 };
 
+// ─── Song tempo (BPM) ────────────────────────────────────────────────────────
+// When a song starts, look up its tempo on Deezer (free, no key) and publish
+// it as songBpm {started, bpm, src} so the site can bop to the beat (not on
+// songToPlay: clients treat any change there as a new song). Tempos are cached per
+// track in bpm/<type>_<cid>; anyone DJing or a mod can correct one with
+// "!bpm 128" (manual values are never overwritten by a lookup).
+var BPM_MIN = 40, BPM_MAX = 250;
+var bpmKey = function(type, cid) {
+  return String(type) + "_" + String(cid).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+};
+var normalizeForMatch = function(str) {
+  return String(str || "").toLowerCase()
+    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/&amp;/g, "&").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "") // (Official Video), [Remastered]...
+    .replace(/\b(feat|ft|featuring)\.?\s.*$/, "")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+};
+var looselyMatches = function(a, b) {
+  a = normalizeForMatch(a); b = normalizeForMatch(b);
+  if (!a || !b) return false;
+  return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0;
+};
+var getJSON = function(url) {
+  return new Promise(function(resolve, reject) {
+    request({ url: url, json: true, timeout: 10000 }, function(err, res, body) {
+      if (err || !res || res.statusCode !== 200 || !body || body.error) return reject(err || (body && body.error) || new Error("HTTP " + (res && res.statusCode)));
+      resolve(body);
+    });
+  });
+};
+var deezerBpm = function(artist, title) {
+  var q = 'artist:"' + String(artist).replace(/"/g, "") + '" track:"' + normalizeForMatch(title).replace(/"/g, "") + '"';
+  return getJSON("https://api.deezer.com/search?limit=5&q=" + encodeURIComponent(q)).then(function(res) {
+    var hit = (res.data || []).filter(function(t) {
+      return t && t.artist && looselyMatches(t.artist.name, artist) && looselyMatches(t.title, title);
+    })[0];
+    if (!hit) return null;
+    return getJSON("https://api.deezer.com/track/" + hit.id).then(function(t) {
+      var bpm = Number(t && t.bpm);
+      return bpm >= BPM_MIN && bpm <= BPM_MAX ? Math.round(bpm * 10) / 10 : null;
+    });
+  });
+};
+// Put a tempo on the playing song, if it's still the same song
+var setSongBpm = function(started, bpm, src) {
+  if (!song || song.started !== started) return Promise.resolve();
+  song.bpm = bpm;
+  song.bpmSrc = src;
+  return firebase.database().ref("songBpm").set({ started: started, bpm: bpm, src: src }).catch(function(e) {
+    console.log("bpm update failed:", e.message);
+  });
+};
+var findBpm = function(s) {
+  if (!s || !s.cid || !s.started) return;
+  var key = bpmKey(s.type, s.cid);
+  firebase.database().ref("bpm/" + key).once("value").then(function(snap) {
+    var cached = snap.val();
+    if (cached && cached.bpm) return setSongBpm(s.started, cached.bpm, cached.src || "cache");
+    if (cached && cached.none && Date.now() - cached.at < 30 * 24 * 3600 * 1000) return; // looked up recently, nothing found
+    if (!s.artist || !s.title || s.artist === "Unknown") return;
+    return deezerBpm(s.artist, s.title).then(function(bpm) {
+      var entry = bpm ? { bpm: bpm, src: "deezer", at: Date.now() } : { none: true, at: Date.now() };
+      return firebase.database().ref("bpm/" + key).set(entry).then(function() {
+        if (bpm) return setSongBpm(s.started, bpm, "deezer");
+      });
+    });
+  }).catch(function(e) {
+    console.log("bpm lookup failed:", e && e.message);
+  });
+};
+var bpmLookedUpFor = null;
+firebase.database().ref("songToPlay").on("value", function(snap) {
+  var s = snap.val();
+  if (!s || !s.started || s.started === bpmLookedUpFor) return;
+  bpmLookedUpFor = s.started;
+  setTimeout(function() { findBpm(s); }, 500); // let the song settle first
+});
+
 // !flag / !flagplay reasons
 var flagCodeFor = function(reason) {
   if (reason == "broken" || reason == "8") return 8;
@@ -1683,6 +1761,24 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
               }).catch(function(err) {
                 console.log("flagplay error:", err);
               });
+            }
+          }
+        } else if (command == "bpm") {
+          if (!song || !song.cid) {
+            talk("Nothing's playing.");
+          } else if (!args) {
+            talk(song.bpm ? "This track is about " + song.bpm + " BPM" + (song.bpmSrc === "manual" ? " (set by hand)." : ".") : "I don't know this one's tempo. The DJ or a mod can set it with `!bpm 128`.");
+          } else {
+            var u = users[chatData.id] || {};
+            var newBpm = Math.round(Number(String(args).trim()) * 10) / 10;
+            if (!(chatData.id === song.djid || u.mod || u.supermod)) {
+              talk("Only the DJ or a mod can set the tempo.");
+            } else if (!(newBpm >= BPM_MIN && newBpm <= BPM_MAX)) {
+              talk("Give me a number between " + BPM_MIN + " and " + BPM_MAX + ", like `!bpm 128`.");
+            } else {
+              firebase.database().ref("bpm/" + bpmKey(song.type, song.cid)).set({ bpm: newBpm, src: "manual", by: chatData.id, at: Date.now() });
+              setSongBpm(song.started, newBpm, "manual");
+              talk("Got it: " + newBpm + " BPM.");
             }
           }
         } else if (command == "fixtags") {

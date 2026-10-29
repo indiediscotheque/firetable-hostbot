@@ -60,6 +60,17 @@
         }
       }
     },
+    "songBpm": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
+    "bpm": {
+      ".read": true,
+      "$track": {
+        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+        ".validate": "$track.matches(/^[0-9]{1,2}_[A-Za-z0-9_-]{1,64}$/)"
+      }
+    },
     "playlistPrefs": {
       "$uid": {
         ".read": "auth.uid == $uid",
