@@ -29,8 +29,39 @@
         },
         "feedID": {
           ".validate": "root.child('chatFeed/' + newData.val() + '/chatID' ).val() == $comment",
+        },
+        "reactions": {
+          "$emoji": {
+            ".validate": "$emoji.matches(/^[a-z0-9_+-]{1,40}$/)",
+            "$reactor": {
+              ".write": "auth.uid != null && auth.uid == $reactor && root.child('banned/' + auth.uid).val() != true && data.parent().parent().parent().child('txt').exists()",
+              ".validate": "newData.val() == true"
+            }
+          }
         }
       }
+    },
+    "typing": {
+      ".read": true,
+      "$uid": {
+        ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+        ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').val() == root.child('users/' + $uid + '/username').val() && newData.child('at').val() == now"
+      }
+    },
+    "mentions": {
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".write": "auth.uid == $uid || root.child('users/' + auth.uid + '/hostbot').val() == true",
+        "$mention": {
+          "read": {
+            ".validate": "newData.isBoolean()"
+          }
+        }
+      }
+    },
+    "djStats": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
     "nameClaim": {
       "$uname": {
@@ -197,6 +228,23 @@
         },
         "selectedList": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true"
+        },
+        "playlistPrefs": {
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          "defaultList": {
+            ".validate": "newData.isString() && newData.val().length <= 40"
+          },
+          "defaultName": {
+            ".validate": "newData.isString() && newData.val().length <= 80"
+          },
+          "order": {
+            "$list": {
+              ".validate": "newData.isNumber()"
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
         },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
