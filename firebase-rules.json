@@ -59,9 +59,16 @@
         }
       }
     },
-    "djStats": {
-      ".read": true,
-      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    "grabs": {
+      "$djid": {
+        ".read": "auth.uid == $djid",
+        "$track": {
+          "$uid": {
+            ".write": "auth.uid == $uid && auth.uid != $djid && !data.exists() && root.child('banned/' + auth.uid).val() != true && root.child('users/' + $djid).exists()",
+            ".validate": "newData.val() == now && $track.matches(/^[0-9]{1,2}_[A-Za-z0-9_-]{1,64}$/)"
+          }
+        }
+      }
     },
     "nameClaim": {
       "$uname": {
