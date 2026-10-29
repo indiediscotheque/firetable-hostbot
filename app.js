@@ -1349,6 +1349,62 @@ var setBus = function(target, on, byId) {
   if (check == 1) updateWaitlist(); else updateTable();
 };
 
+// @mention inbox (indiediscotheque/firetable-user#96): file every @name in a
+// chat message under mentions/<their uid>, so they see it even if they were
+// away. Not for bot commands, @everyone, yourself, the bot, or between people
+// who have blocked each other.
+var fileMentions = function(chatID, chatData, fromName) {
+  if (chatData.botCmd || !chatData.id || chatData.id == botid) return;
+  var re = /@([A-Za-z0-9_]{1,22})(?![A-Za-z0-9_])/g, m, seen = {};
+  while ((m = re.exec(chatData.txt))) {
+    var name = m[1].toLowerCase();
+    if (name == "everyone" || seen[name]) continue;
+    seen[name] = true;
+    var target = null;
+    for (var uid in users) {
+      if (users.hasOwnProperty(uid) && users[uid].username && users[uid].username.toLowerCase() == name) target = uid;
+    }
+    if (!target || target == chatData.id || users[target].hostbot) continue;
+    (function(target) {
+      var db = firebase.database();
+      Promise.all([
+        db.ref("blocks/" + target + "/" + chatData.id).once("value"),
+        db.ref("blocks/" + chatData.id + "/" + target).once("value")
+      ]).then(function(blocked) {
+        if (blocked[0].val() || blocked[1].val()) return;
+        return db.ref("mentions/" + target + "/" + chatID).set({
+          from: fromName,
+          fromId: chatData.id,
+          txt: chatData.txt,
+          time: chatData.time || Date.now(),
+          read: false
+        });
+      }).catch(function(err) {
+        console.log("mention error:", err && err.message);
+      });
+    })(target);
+  }
+};
+
+// Mentions are kept for 30 days
+var pruneMentions = function() {
+  var cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  var ref = firebase.database().ref("mentions");
+  ref.once("value").then(function(snap) {
+    var updates = {};
+    snap.forEach(function(person) {
+      person.forEach(function(item) {
+        var v = item.val();
+        if (!v || !v.time || v.time < cutoff) updates[person.key + "/" + item.key] = null;
+      });
+    });
+    if (Object.keys(updates).length) return ref.update(updates);
+  }).catch(function(err) {
+    console.log("mention prune error:", err && err.message);
+  });
+};
+setInterval(pruneMentions, 6 * 60 * 60 * 1000);
+
 var lookupChatData = function(chatID, callback) {
   var chatData = firebase.database().ref("chatData/" + chatID);
   chatData.once('value')
@@ -1364,11 +1420,13 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
   var chatID = feedData.chatID;
   if (!ignoreChats) {
     lookupChatData(chatID, function(chatData) {
+      if (!chatData || typeof chatData.txt !== "string") return; // already pruned
       var namebo = chatData.id;
       if (users[chatData.id]) {
         if (users[chatData.id].username) namebo = users[chatData.id].username;
       }
       console.log(namebo + ": " + chatData.txt);
+      fileMentions(chatID, chatData, namebo);
       var matches = chatData.txt.match(/^(?:[!])(\w+)\s*(.*)/i);
       if (matches && botid !== chatData.id && started) {
         var command = matches[1].toLowerCase();
