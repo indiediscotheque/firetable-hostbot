@@ -49,6 +49,7 @@
       }
     },
     "mentions": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$uid": {
         ".read": "auth.uid == $uid",
         ".indexOn": "time",
