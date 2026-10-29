@@ -1267,6 +1267,222 @@ themepeek.once("value").then(function(snapshot) {
   }
 });
 
+// The site stamps 🔥/🌧 reactions with the song they were sent for
+// (songToPlay.started). One that arrives after the song changed is for the
+// previous song and must not count towards this one.
+var reactionForOtherSong = function(chatData) {
+  return !!(chatData.forSong && song && song.started && chatData.forSong !== song.started);
+};
+
+// ─── Song tempo (BPM) ────────────────────────────────────────────────────────
+// When a song starts, look up its tempo on Deezer (free, no key) and publish
+// it as songBpm {started, bpm, src} so the site can bop to the beat (not on
+// songToPlay: clients treat any change there as a new song). Tempos are cached per
+// track in bpm/<type>_<cid>; anyone DJing or a mod can correct one with
+// "!bpm 128" (manual values are never overwritten by a lookup).
+var BPM_MIN = 40, BPM_MAX = 250;
+var bpmKey = function(type, cid) {
+  return String(type) + "_" + String(cid).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+};
+var normalizeForMatch = function(str) {
+  return String(str || "").toLowerCase()
+    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/&amp;/g, "&").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "") // (Official Video), [Remastered]...
+    .replace(/\b(feat|ft|featuring)\.?\s.*$/, "")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+};
+var looselyMatches = function(a, b) {
+  a = normalizeForMatch(a); b = normalizeForMatch(b);
+  if (!a || !b) return false;
+  return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0;
+};
+var getJSON = function(url) {
+  return new Promise(function(resolve, reject) {
+    request({ url: url, json: true, timeout: 10000 }, function(err, res, body) {
+      if (err || !res || res.statusCode !== 200 || !body || body.error) return reject(err || (body && body.error) || new Error("HTTP " + (res && res.statusCode)));
+      resolve(body);
+    });
+  });
+};
+var deezerBpm = function(artist, title) {
+  var q = 'artist:"' + String(artist).replace(/"/g, "") + '" track:"' + normalizeForMatch(title).replace(/"/g, "") + '"';
+  return getJSON("https://api.deezer.com/search?limit=5&q=" + encodeURIComponent(q)).then(function(res) {
+    var hit = (res.data || []).filter(function(t) {
+      return t && t.artist && looselyMatches(t.artist.name, artist) && looselyMatches(t.title, title);
+    })[0];
+    if (!hit) return null;
+    return getJSON("https://api.deezer.com/track/" + hit.id).then(function(t) {
+      var bpm = Number(t && t.bpm);
+      return bpm >= BPM_MIN && bpm <= BPM_MAX ? Math.round(bpm * 10) / 10 : null;
+    });
+  });
+};
+// Put a tempo on the playing song, if it's still the same song
+var setSongBpm = function(started, bpm, src) {
+  if (!song || song.started !== started) return Promise.resolve();
+  song.bpm = bpm;
+  song.bpmSrc = src;
+  return firebase.database().ref("songBpm").set({ started: started, bpm: bpm, src: src }).catch(function(e) {
+    console.log("bpm update failed:", e.message);
+  });
+};
+var findBpm = function(s) {
+  if (!s || !s.cid || !s.started) return;
+  var key = bpmKey(s.type, s.cid);
+  firebase.database().ref("bpm/" + key).once("value").then(function(snap) {
+    var cached = snap.val();
+    if (cached && cached.bpm) return setSongBpm(s.started, cached.bpm, cached.src || "cache");
+    if (cached && cached.none && Date.now() - cached.at < 30 * 24 * 3600 * 1000) return; // looked up recently, nothing found
+    if (!s.artist || !s.title || s.artist === "Unknown") return;
+    return deezerBpm(s.artist, s.title).then(function(bpm) {
+      var entry = bpm ? { bpm: bpm, src: "deezer", at: Date.now() } : { none: true, at: Date.now() };
+      return firebase.database().ref("bpm/" + key).set(entry).then(function() {
+        if (bpm) return setSongBpm(s.started, bpm, "deezer");
+      });
+    });
+  }).catch(function(e) {
+    console.log("bpm lookup failed:", e && e.message);
+  });
+};
+var bpmLookedUpFor = null;
+firebase.database().ref("songToPlay").on("value", function(snap) {
+  var s = snap.val();
+  if (!s || !s.started || s.started === bpmLookedUpFor) return;
+  bpmLookedUpFor = s.started;
+  setTimeout(function() { findBpm(s); }, 500); // let the song settle first
+});
+
+// !flag / !flagplay reasons
+var flagCodeFor = function(reason) {
+  if (reason == "broken" || reason == "8") return 8;
+  if (reason == "bitrate" || reason == "quality" || reason == "incomplete" || reason == "9") return 9;
+  if (reason == "offtheme" || reason == "10") return 10;
+  return false;
+};
+
+// Flag a track in all of a DJ's lists (default queue and every playlist).
+// Resolves with how many copies were flagged.
+var flagTrackForDJ = function(djid, cid, type, flag) {
+  var db = firebase.database();
+  var lists = [db.ref("queues/" + djid)];
+  return db.ref("playlists/" + djid).once("value").then(function(snap) {
+    snap.forEach(function(pl) {
+      lists.push(db.ref("playlists/" + djid + "/" + pl.key + "/list"));
+    });
+    return Promise.all(lists.map(function(ref) {
+      return ref.orderByChild("cid").equalTo(cid).once("value").then(function(s) {
+        var writes = [];
+        s.forEach(function(t) {
+          if (t.val() && t.val().type == type) writes.push(ref.child(t.key + "/flagged").set(flag));
+        });
+        return Promise.all(writes).then(function() { return writes.length; });
+      });
+    }));
+  }).then(function(counts) {
+    return counts.reduce(function(a, b) { return a + b; }, 0);
+  });
+};
+
+// Who a bus command is for: the sender, or (mods) someone of lower rank.
+var busRank = function(u) {
+  if (!u) return 0;
+  if (u.supermod) return 2;
+  if (u.mod) return 1;
+  return 0; // members, and the room bot (mods may send it home too)
+};
+var busTargetFor = function(senderId, senderName, args) {
+  var name = (args || "").trim().replace(/^@/, "");
+  if (!name) return { id: senderId, name: senderName, self: true };
+  var sender = users[senderId] || {};
+  if (!sender.mod && !sender.supermod) return { error: "Only mods can do that for someone else, " + senderName + "." };
+  var id = uidLookup(name);
+  if (!id) return { error: "who is that" };
+  if (id == senderId) return { id: senderId, name: senderName, self: true };
+  if (busRank(users[id]) >= busRank(sender)) return { error: "You can't do that for " + name + "." };
+  return { id: id, name: (users[id] && users[id].username) || name, self: false };
+};
+var setBus = function(target, on, byId) {
+  var check = addCheck(target.id);
+  var who = target.self ? target.name + ", " : "@" + target.name + ", a mod has set it so ";
+  if (!check) {
+    talk(target.self ? target.name + ", you aren't even DJing..." : target.name + " isn't DJing.");
+    return;
+  }
+  var list = check == 1 ? queue : table;
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].id == target.id) {
+      list[i].removeAfter = on;
+      break;
+    }
+  }
+  var isPlaying = check == 2 && theDJ && theDJ.id == target.id;
+  if (isPlaying) theDJ.removeAfter = on;
+  if (target.self) {
+    if (on) talk(isPlaying ? who + "I'll remove you at the end of this song." : who + "I'll remove you after your next song.");
+    else talk(isPlaying ? who + "I will NOT remove you after this song." : who + "I will NOT remove you after your next song.");
+  } else {
+    if (on) talk(who + (isPlaying ? "you'll step down at the end of this song." : "you'll step down after your next song."));
+    else talk("@" + target.name + ", you're staying on after all.");
+  }
+  if (check == 1) updateWaitlist(); else updateTable();
+};
+
+// @mention inbox (indiediscotheque/firetable-user#96): file every @name in a
+// chat message under mentions/<their uid>, so they see it even if they were
+// away. Not for bot commands, @everyone, yourself, the bot, or between people
+// who have blocked each other.
+var fileMentions = function(chatID, chatData, fromName) {
+  if (chatData.botCmd || !chatData.id || chatData.id == botid) return;
+  var re = /@([A-Za-z0-9_]{1,22})(?![A-Za-z0-9_])/g, m, seen = {};
+  while ((m = re.exec(chatData.txt))) {
+    var name = m[1].toLowerCase();
+    if (name == "everyone" || seen[name]) continue;
+    seen[name] = true;
+    var target = null;
+    for (var uid in users) {
+      if (users.hasOwnProperty(uid) && users[uid].username && users[uid].username.toLowerCase() == name) target = uid;
+    }
+    if (!target || target == chatData.id || users[target].hostbot) continue;
+    (function(target) {
+      var db = firebase.database();
+      Promise.all([
+        db.ref("blocks/" + target + "/" + chatData.id).once("value"),
+        db.ref("blocks/" + chatData.id + "/" + target).once("value")
+      ]).then(function(blocked) {
+        if (blocked[0].val() || blocked[1].val()) return;
+        return db.ref("mentions/" + target + "/" + chatID).set({
+          from: fromName,
+          fromId: chatData.id,
+          txt: chatData.txt,
+          time: chatData.time || Date.now(),
+          read: false
+        });
+      }).catch(function(err) {
+        console.log("mention error:", err && err.message);
+      });
+    })(target);
+  }
+};
+
+// Mentions are kept for 30 days
+var pruneMentions = function() {
+  var cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  var ref = firebase.database().ref("mentions");
+  ref.once("value").then(function(snap) {
+    var updates = {};
+    snap.forEach(function(person) {
+      person.forEach(function(item) {
+        var v = item.val();
+        if (!v || !v.time || v.time < cutoff) updates[person.key + "/" + item.key] = null;
+      });
+    });
+    if (Object.keys(updates).length) return ref.update(updates);
+  }).catch(function(err) {
+    console.log("mention prune error:", err && err.message);
+  });
+};
+setInterval(pruneMentions, 6 * 60 * 60 * 1000);
+
 var lookupChatData = function(chatID, callback) {
   var chatData = firebase.database().ref("chatData/" + chatID);
   chatData.once('value')
@@ -1282,11 +1498,13 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
   var chatID = feedData.chatID;
   if (!ignoreChats) {
     lookupChatData(chatID, function(chatData) {
+      if (!chatData || typeof chatData.txt !== "string") return; // already pruned
       var namebo = chatData.id;
       if (users[chatData.id]) {
         if (users[chatData.id].username) namebo = users[chatData.id].username;
       }
       console.log(namebo + ": " + chatData.txt);
+      fileMentions(chatID, chatData, namebo);
       var matches = chatData.txt.match(/^(?:[!])(\w+)\s*(.*)/i);
       if (matches && botid !== chatData.id && started) {
         var command = matches[1].toLowerCase();
@@ -1361,69 +1579,16 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "removeme") {
           var removed = removeMe(chatData.id);
           if (!removed) talk(namebo + ", you aren't even DJing...");
-        } else if (command == "removemeafter" || command == "removeafter" || command == "gottacatchmybus") {
-          var check = addCheck(chatData.id);
-          if (!check) {
-            talk(namebo + ", you aren't even DJing...");
-          } else if (check == 1) {
-            //user in waitlist
-            for (var i = 0; i < queue.length; i++) {
-              if (queue[i].id == chatData.id) {
-                queue[i].removeAfter = true;
-                updateWaitlist();
-                talk(namebo + ", I'll remove you after your next song.");
-                break;
-              }
-            }
-          } else if (check == 2) {
-            //user on deck
-            if (chatData.id == theDJ.id) {
-              // user is current dj
-              talk(namebo + ", I'll remove you at the end of this song.");
-              theDJ.removeAfter = true;
-            } else {
-              // user is not current dj
-              talk(namebo + ", I'll remove you after your next song.");
-            }
-            for (var i = 0; i < table.length; i++) {
-              if (table[i].id == chatData.id) {
-                table[i].removeAfter = true
-                updateTable();
-                break;
-              }
-            }
-          }
-        } else if (command == "dontremovemeafter" || command == "dontremoveafter" || command == "dontremoveme" || command == "dontremove") {
-          var check = addCheck(chatData.id);
-          if (!check) {
-            talk(namebo + ", you aren't even DJing...");
-          } else if (check == 1) {
-            //user in waitlist
-            for (var i = 0; i < queue.length; i++) {
-              if (queue[i].id == chatData.id) {
-                queue[i].removeAfter = false;
-                updateWaitlist();
-                talk(namebo + ", I will be sure to not remove you after your next track.");
-                break;
-              }
-            }
-          } else if (check == 2) {
-            //user on deck
-            if (chatData.id == theDJ.id) {
-              // user is current dj
-              talk(namebo + ", I will NOT remove you after this song.");
-              theDJ.removeAfter = false;
-            } else {
-              // user is not current dj
-              talk(namebo + ", I will NOT remove you after your next song.");
-            }
-            for (var i = 0; i < table.length; i++) {
-              if (table[i].id == chatData.id) {
-                table[i].removeAfter = false;
-                updateTable();
-                break;
-              }
-            }
+        } else if (command == "removemeafter" || command == "removeafter" || command == "gottacatchmybus" ||
+                   command == "dontremovemeafter" || command == "dontremoveafter" || command == "dontremoveme" || command == "dontremove") {
+          // "take the bus": step down after your next play. Mods can also set
+          // it for someone of lower rank: !removeafter <name> (#121).
+          var busOn = command.indexOf("dont") !== 0;
+          var busTarget = busTargetFor(chatData.id, namebo, args);
+          if (busTarget.error) {
+            talk(busTarget.error);
+          } else {
+            setBus(busTarget, busOn, chatData.id);
           }
         } else if (command == "skip") {
           if (users[chatData.id].mod || users[chatData.id].supermod || (chatData.id == theDJ.id)) {
@@ -1577,15 +1742,55 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
               talk("I just reloaded... I don't remember where in the DJ's lists I got this from.");
             }
           }
+        } else if (command == "flagplay") {
+          // Flag a track from Recent: !flagplay <songHistory id> <reason>.
+          // Marks it in every list of the DJ who played it.
+          if (users[chatData.id].mod || users[chatData.id].supermod) {
+            var fp = (args || "").trim().split(/\s+/);
+            var fpCode = flagCodeFor(fp[1]);
+            if (!fp[0] || !fpCode) {
+              talk("Use !flagplay <play> <broken|quality|offtheme>");
+            } else {
+              firebase.database().ref("songHistory/" + fp[0]).once("value").then(function(snap) {
+                var play = snap.val();
+                if (!play || !play.djid || !play.cid) return talk("I can't find that play anymore.");
+                return flagTrackForDJ(play.djid, play.cid, play.type, { date: Date.now(), code: fpCode }).then(function(n) {
+                  talk(n ? ":triangular_flag_on_post: FLAGGED " + play.artist + " - " + play.title + " (CODE " + fpCode + ")"
+                         : "That track isn't in " + play.dj + "'s playlists anymore.");
+                });
+              }).catch(function(err) {
+                console.log("flagplay error:", err);
+              });
+            }
+          }
+        } else if (command == "bpm") {
+          if (!song || !song.cid) {
+            talk("Nothing's playing.");
+          } else if (!args) {
+            talk(song.bpm ? "This track is about " + song.bpm + " BPM" + (song.bpmSrc === "manual" ? " (set by hand)." : ".") : "I don't know this one's tempo. The DJ or a mod can set it with `!bpm 128`.");
+          } else {
+            var u = users[chatData.id] || {};
+            var newBpm = Math.round(Number(String(args).trim()) * 10) / 10;
+            if (!(chatData.id === song.djid || u.mod || u.supermod)) {
+              talk("Only the DJ or a mod can set the tempo.");
+            } else if (!(newBpm >= BPM_MIN && newBpm <= BPM_MAX)) {
+              talk("Give me a number between " + BPM_MIN + " and " + BPM_MAX + ", like `!bpm 128`.");
+            } else {
+              firebase.database().ref("bpm/" + bpmKey(song.type, song.cid)).set({ bpm: newBpm, src: "manual", by: chatData.id, at: Date.now() });
+              setSongBpm(song.started, newBpm, "manual");
+              talk("Got it: " + newBpm + " BPM.");
+            }
+          }
         } else if (command == "fixtags") {
           if (args) {
-            var song_data = args.split(' - ')
-            if (song_data.length < 2) {
+            // split on the FIRST " - " only, so "Song - Live" titles stay whole
+            var sep = args.indexOf(' - ');
+            if (sep < 1 || !args.slice(sep + 3).trim()) {
               //bad format
               talk("what");
             } else {
-              var newartist = song_data[0].replace(/&amp;/g, '&');
-              var newtitle = song_data[1].replace(/&amp;/g, '&');
+              var newartist = args.slice(0, sep).trim().replace(/&amp;/g, '&');
+              var newtitle = args.slice(sep + 3).trim().replace(/&amp;/g, '&');
               gts.fixTags(newartist, newtitle);
               talk("ok. updating tags to artist: `" + newartist + "` and title: `" + newtitle + "`. thank you.")
             }
@@ -1696,9 +1901,9 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "wait") {
           talk("wait");
         } else if (command == "hot") {
-          firelevel.hot(chatData.id, namebo);
+          if (!reactionForOtherSong(chatData)) firelevel.hot(chatData.id, namebo);
         } else if (command == "storm") {
-          firelevel.storm(chatData.id, namebo);
+          if (!reactionForOtherSong(chatData)) firelevel.storm(chatData.id, namebo);
         } else if (command == "link") {
           if (song) {
             if (song.url) {
@@ -1721,6 +1926,8 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
             talk(":red_circle::satellite: unable to communicate with the D.A.N.C.E. satellite... if you gift the DJ a h0t new card, i'm sure they'll help boost your signal");
           }
         }
+      } else if (reactionForOtherSong(chatData)) {
+        // a 🔥/🌧 sent for the song before (it arrived after the song changed)
       } else if (chatData.txt == "🔥" || chatData.txt == ":fire:") {
         firelevel.hot(chatData.id, namebo);
       } else if (chatData.txt == "🌧" || chatData.txt == ":cloud_with_rain:") {
@@ -1790,8 +1997,8 @@ var gts = {
           });
 
           globalpeek.set({
-            artist: song.artist,
-            title: song.title,
+            artist: fixedartist,
+            title: fixedtitle,
             last_play_date: Date.now(),
             first_play_date: Date.now(),
             last_play_dj: song.djname,

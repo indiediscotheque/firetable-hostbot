@@ -29,6 +29,76 @@
         },
         "feedID": {
           ".validate": "root.child('chatFeed/' + newData.val() + '/chatID' ).val() == $comment",
+        },
+        "reactions": {
+          "$emoji": {
+            ".validate": "$emoji.matches(/^[a-z0-9_+-]{1,40}$/)",
+            "$reactor": {
+              ".write": "auth.uid != null && auth.uid == $reactor && root.child('banned/' + auth.uid).val() != true && data.parent().parent().parent().child('txt').exists()",
+              ".validate": "newData.val() == true && $reactor == auth.uid"
+            }
+          }
+        }
+      }
+    },
+    "typing": {
+      ".read": true,
+      "$uid": {
+        ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+        ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').val() == root.child('users/' + $uid + '/username').val() && newData.child('at').val() == now"
+      }
+    },
+    "mentions": {
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".indexOn": "time",
+        ".write": "auth.uid == $uid || root.child('users/' + auth.uid + '/hostbot').val() == true",
+        "$mention": {
+          "read": {
+            ".validate": "newData.isBoolean()"
+          }
+        }
+      }
+    },
+    "songBpm": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
+    "bpm": {
+      ".read": true,
+      "$track": {
+        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+        ".validate": "$track.matches(/^[0-9]{1,2}_[A-Za-z0-9_-]{1,64}$/)"
+      }
+    },
+    "playlistPrefs": {
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+        "defaultList": {
+          ".validate": "newData.isString() && newData.val().length <= 40"
+        },
+        "defaultName": {
+          ".validate": "newData.isString() && newData.val().length <= 80"
+        },
+        "order": {
+          "$list": {
+            ".validate": "newData.isNumber()"
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "grabs": {
+      "$djid": {
+        ".read": "auth.uid == $djid",
+        "$track": {
+          "$uid": {
+            ".write": "auth.uid == $uid && auth.uid != $djid && !data.exists() && root.child('banned/' + auth.uid).val() != true && root.child('users/' + $djid).exists()",
+            ".validate": "newData.val() == now && $track.matches(/^[0-9]{1,2}_[A-Za-z0-9_-]{1,64}$/)"
+          }
         }
       }
     },
