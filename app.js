@@ -74,6 +74,7 @@ var SITE_SEASON_DEFAULTS = {
   lightsMonths: [12] // December
 };
 var siteSeasons = JSON.parse(JSON.stringify(SITE_SEASON_DEFAULTS));
+var siteSeasonsRead = false;
 
 function fetchSiteFile(path) {
   var url = new URL(path, process.env.SITE_URL.trim().replace(/\/?$/, "/"));
@@ -91,7 +92,11 @@ function firstDefined() {
 }
 
 function refreshSiteSeasons() {
-  if (!process.env.SITE_URL) return Promise.resolve();
+  if (!process.env.SITE_URL) {
+    if (!siteSeasonsRead) console.log("site seasons: SITE_URL isn't set, using the defaults:", JSON.stringify(siteSeasons));
+    siteSeasonsRead = true;
+    return Promise.resolve();
+  }
   return Promise.all([
     // An older site without js/seasons.js still works: its defaults are ours.
     fetchSiteFile("js/seasons.js").catch(function() { return ""; }),
@@ -108,10 +113,12 @@ function refreshSiteSeasons() {
       avatarSeasons: firstDefined(cfg.avatarSeasons, context.AVATAR_SEASONS, SITE_SEASON_DEFAULTS.avatarSeasons),
       lightsMonths: firstDefined(cfg.lightsMonths, context.LIGHTS_MONTHS, SITE_SEASON_DEFAULTS.lightsMonths)
     }));
-    if (JSON.stringify(next) !== JSON.stringify(siteSeasons)) {
-      console.log("site seasons:", JSON.stringify(next));
+    // Say what was read at startup, then only when something changes.
+    if (!siteSeasonsRead || JSON.stringify(next) !== JSON.stringify(siteSeasons)) {
+      console.log("site seasons:", JSON.stringify(next), "from", process.env.SITE_URL);
     }
     siteSeasons = next;
+    siteSeasonsRead = true;
   }).catch(function(err) {
     console.log("couldn't read seasons from " + process.env.SITE_URL + " (keeping the last ones):", err.message);
   });

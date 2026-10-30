@@ -147,7 +147,7 @@ The bot keeps the music going. When no one is DJing it takes the decks and plays
 - On by default. Set `AUTODJ=false` to turn it off.
 
 ## seasons
-The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The log shows `site seasons: …` whenever they change. If the site can't be reached the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
+The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The log shows `site seasons: …` at startup and whenever they change. If the site can't be reached the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
 
 ## timing
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.
