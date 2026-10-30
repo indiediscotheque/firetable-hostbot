@@ -1,3 +1,4 @@
+'use strict';
 require('dotenv').config({
   silent: process.env.NODE_ENV === 'production'
 });
@@ -6,6 +7,9 @@ var firebase = require('firebase');
 var YouTube = require('youtube-node');
 var Vibrant = require('node-vibrant');
 var acorn = require('acorn');
+var text = require('./lib/text');
+var splitTags = text.splitTags;
+var fitChat = text.fitChat;
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -22,7 +26,7 @@ var started = false;
 var queue = [];
 var removalPending = {};
 var queueRef = null;
-theDJ = null;
+var theDJ = null;
 var cardForGrabs = null;
 var totalCards = 0;
 var cardGen = false;
@@ -36,7 +40,6 @@ var table = [];
 var lastBlipped = {};
 var playlimit = 2;
 var thingcopy;
-var tagFixData = null;
 var song = null;
 var playDex = 0; //where does the spotlight go? (tracks SEATS not people)
 var theme = null;
@@ -403,6 +406,7 @@ var claimLowercaseNames = function() {
 setInterval(claimLowercaseNames, 6 * 60 * 60 * 1000);
 
 var talk = function(txt, card) {
+  txt = fitChat(txt);
   var namebo2 = botid;
   if (users[botid]) {
     if (users[botid].username) namebo2 = users[botid].username;
@@ -844,7 +848,7 @@ var beginSong = function(seq, listRef, key, track, songInfo) {
         if (!songBack.url && songInfo.url) songBack.url = songInfo.url;
       }
       listRef.push(songBack);
-      if (seq === startSeq) gts.np(); // global tags, for the song still playing
+      if (seq === startSeq) gts.np(songInfo, listRef); // global tags, for the song still playing
     })
     .catch(function(error) {
       console.log("Song Remove failed: " + error.message);
@@ -1023,8 +1027,7 @@ var startSong = function(noPrevPlay) {
     updateThings();
     return false;
   };
-  maxindex = table.length - 1;
-  if (playDex > maxindex) {
+  if (playDex > table.length - 1) {
     playDex = 0;
   }
   theDJ = table[playDex];
@@ -1067,7 +1070,7 @@ var startSong = function(noPrevPlay) {
             } else {
               var video = result.items[0];
               var snippet = video.snippet || {};
-              var yargo = String(data[nextSongkey].name || "").split(" - ");
+              var yargo = splitTags(data[nextSongkey].name);
               var sartist = yargo[0];
               var stitle = yargo[1];
               var input = (video.contentDetails && video.contentDetails.duration) || "";
@@ -1121,11 +1124,11 @@ begin sc check
           } else {
             lookupWorked("SoundCloud");
             var uploader = (scTrack.user && scTrack.user.username) || "Unknown";
-            var yargo = String(data[nextSongkey].name || "").split(" - ");
+            var yargo = splitTags(data[nextSongkey].name);
             var sartist = yargo[0];
             var stitle = yargo[1];
             if (sartist == "Unknown" && !stitle) {
-              var cutetags = String(scTrack.title || "").split(" - ");
+              var cutetags = splitTags(scTrack.title);
               sartist = cutetags[0];
               stitle = cutetags[1];
             }
@@ -1862,7 +1865,23 @@ var lookupChatData = function(chatID, callback) {
     });
 };
 
-var handleChat = function(chatID) {
+// Commands, 🔥/🌧 and votes only count once, from their own feed entry, and
+// only while fresh. Anyone can add a feed entry pointing at an older message
+// (one saved without a feedID by an older site), which would otherwise run
+// that message again as if its sender had just sent it; a late one (after a
+// long disconnect) would act on a room that has moved on.
+var CHAT_MAX_AGE = 2 * 60 * 1000;
+var HANDLED_MAX = 500;
+var handledChats = new Set();
+var chatCounts = function(chatID, feedKey, chatData) {
+  if (handledChats.has(chatID)) return false;
+  handledChats.add(chatID);
+  if (handledChats.size > HANDLED_MAX) handledChats.delete(handledChats.values().next().value);
+  if (feedKey && chatData.feedID && chatData.feedID !== feedKey) return false;
+  return true;
+};
+
+var handleChat = function(chatID, feedKey) {
     lookupChatData(chatID, function(chatData) {
       if (!chatData || typeof chatData.txt !== "string") return; // already pruned
       var sender = users[chatData.id] || {};
@@ -1870,7 +1889,15 @@ var handleChat = function(chatID) {
       var senderIsSupermod = !!sender.supermod;
       var namebo = sender.username || chatData.id;
       console.log(namebo + ": " + chatData.txt);
+      if (!chatCounts(chatID, feedKey, chatData)) {
+        console.log("ignored a repeated chat message (" + chatID + ")");
+        return;
+      }
       fileMentions(chatID, chatData, namebo);
+      if (typeof chatData.time === "number" && serverNow() - chatData.time > CHAT_MAX_AGE) {
+        console.log("ignored a chat message from " + Math.round((serverNow() - chatData.time) / 1000) + " seconds ago");
+        return;
+      }
       var matches = chatData.txt.match(/^(?:[!])(\w+)\s*(.*)/i);
       if (matches && botid !== chatData.id && started) {
         var command = matches[1].toLowerCase();
@@ -2085,9 +2112,7 @@ var handleChat = function(chatID) {
                     if (data) {
                       for (var key in data) {
                         if (data[key].type == song.type) {
-                          newData = data[key];
-                          newData.flagged = flag;
-                          queueRef.child(key).set(newData);
+                          queueRef.child(key + "/flagged").set(flag);
                         }
                       }
                     }
@@ -2153,7 +2178,7 @@ var handleChat = function(chatID) {
             } else {
               var newartist = args.slice(0, sep).trim().replace(/&amp;/g, '&');
               var newtitle = args.slice(sep + 3).trim().replace(/&amp;/g, '&');
-              gts.fixTags(newartist, newtitle);
+              gts.fixTags(song, currentListRef(), newartist, newtitle);
               talk("ok. updating tags to artist: `" + newartist + "` and title: `" + newtitle + "`. thank you.")
             }
 
@@ -2283,7 +2308,7 @@ var markChatReady = function() {
   chatReady = true;
   var waiting = chatWaiting;
   chatWaiting = [];
-  waiting.forEach(handleChat);
+  waiting.forEach(function(item) { handleChat(item.chatID, item.feedKey); });
   console.log("Listening now.");
   claimLowercaseNames();
   pruneMentions();
@@ -2299,8 +2324,8 @@ chatFeedRef.once("value").then(function(snap) {
     if (before[childSnapshot.key]) return;
     var feedData = childSnapshot.val() || {};
     if (!feedData.chatID) return;
-    if (chatReady) return handleChat(feedData.chatID);
-    chatWaiting.push(feedData.chatID);
+    if (chatReady) return handleChat(feedData.chatID, childSnapshot.key);
+    chatWaiting.push({ chatID: feedData.chatID, feedKey: childSnapshot.key });
     if (chatWaiting.length > CHAT_WAITING_MAX) chatWaiting.shift();
   });
 }).catch(function(err) {
@@ -2308,154 +2333,134 @@ chatFeedRef.once("value").then(function(snap) {
 });
 
 // GLOBAL TAG SYSTEM
+// Each call works on the song (and the DJ list) it was started for: the
+// lookups below answer later, when another song may be playing, and their
+// answers must not land on that one.
 var gts = {
-  np: function() {
-    var globalpeek = firebase.database().ref("globalTracks/" + song.type + "" + song.cid);
+  np: function(s, listRef) {
+    if (!s || !s.cid) return;
+    var globalpeek = firebase.database().ref("globalTracks/" + s.type + "" + s.cid);
     globalpeek.once("value")
       .then(function(snapshot) {
         var thing = snapshot.val();
-        console.log("THING START", thing);
         if (thing) {
-          // NOT FIRST... LET'S MANAGE THAT
-          gts.reportNp(thing);
-          //update lp
-          var thing2 = thing;
-          thing2.last_play_date = Date.now();
-          thing2.last_play_dj = song.djname;
-          globalpeek.set(thing2);
-        } else {
-          // FIRST PLAY
-          gts.reportNp({
-            artist: song.artist,
-            title: song.title,
-            type: song.type
-          });
-
-          globalpeek.set({
-            artist: song.artist,
-            title: song.title,
-            last_play_date: Date.now(),
-            first_play_date: Date.now(),
-            last_play_dj: song.djname,
-            first_play_dj: song.djname,
-            type: song.type
-          });
+          // played before: use its saved tags, then update the last play
+          gts.reportNp(s, listRef, thing);
+          thing.last_play_date = Date.now();
+          thing.last_play_dj = s.djname;
+          return globalpeek.set(thing);
         }
-      });
-  },
-  fixTags: function(fixedartist, fixedtitle) {
-    var globalpeek = firebase.database().ref("globalTracks/" + song.type + "" + song.cid);
-    globalpeek.once("value")
-      .then(function(snapshot) {
-        var thing = snapshot.val();
-        console.log("THING FIX", thing);
-        if (thing) {
-          var thing2 = thing;
-          thing2.artist = fixedartist;
-          thing2.title = fixedtitle;
-          globalpeek.set(thing2);
-          gts.reportNp(thing2);
-        } else {
-          // FIRST PLAY
-          gts.reportNp({
-            artist: fixedartist,
-            title: fixedtitle,
-            type: song.type
-          });
-
-          globalpeek.set({
-            artist: fixedartist,
-            title: fixedtitle,
-            last_play_date: Date.now(),
-            first_play_date: Date.now(),
-            last_play_dj: song.djname,
-            first_play_dj: song.djname,
-            type: song.type
-          });
-        }
-      });
-  },
-  reportNp: function(adm) {
-    console.log("thing 3", adm);
-    if (adm) {
-      if (adm.title) {
-        //if no track name, adam tags bad... dont use.
-        if (adm.artist) {
-          if (adm.artist !== "Unknown") {
-            song.artist = adm.artist;
-            song.title = adm.title;
-          } else {
-            // if ADAM thinks the artist's name is UNKNOWN, overwrite with whatever hostbot came up with
-            //adam.fix_tags(adm.track_id, song.artist + " - " + song.title);
-          }
-        }
-      } else {
-        //NO TRACK NAME... if we have enough data, let's tell ADAM what we know
-        //adam.fix_tags(adm.track_id, song.artist + " - " + song.title);
-      }
-
-
-      tagFixData = {
-        adamData: {
-          artist: song.artist,
-          track_name: song.title
-        },
-        cid: song.cid
-      };
-      if (adm.last_play_dj) tagFixData.adamData.last_play_dj = adm.last_play_dj;
-      if (adm.last_play_date) tagFixData.adamData.last_play = new Date(adm.last_play_date).toISOString();
-      if (adm.first_play_dj) tagFixData.adamData.first_play_dj = adm.first_play_dj;
-      if (adm.first_play_date) tagFixData.adamData.first_play = new Date(adm.first_play_date).toISOString();
-
-      request('https://ws.audioscrobbler.com/2.0/?method=track.getInfo&track=' + encodeURIComponent(adm.title) + '&artist=' + encodeURIComponent(adm.artist) + '&username=' + process.env.LASTFM_USERNAME + '&api_key=' + process.env.LASTFM_APIKEY + '&format=json', function cbfunc(error, response, body) {
-        //If call returned correctly, continue
-        var playcount = false;
-        console.log("thing 4", tagFixData);
-
-        if (!error && response.statusCode == 200) {
-          try {
-            var lfm = [JSON.parse(body)];
-            if (lfm[0].track.userplaycount) {
-              playcount = parseInt(lfm[0].track.userplaycount);
-            } else {
-
-            }
-          } catch (e) {
-            console.log(e);
-
-          }
-        }
-
-        var tagUpdate = firebase.database().ref("tagUpdate");
-        if (playcount) {
-          tagFixData.adamData.playcount = playcount;
-          song.playcount = playcount;
-        }
-        // send tag update to clients
-        tagUpdate.set(tagFixData);
-
-      });
-
-
-      // update the dj's playlist with updated tags
-      var listRef = currentListRef();
-      if (listRef) listRef.orderByChild('cid').equalTo(song.cid).once("value")
-        .then(function(snapshot) {
-          var data = snapshot.val();
-          if (data) {
-            for (var key in data) {
-              var fixedName = song.artist + " - " + song.title;
-              // unchanged names aren't rewritten: the DJ's site would download it again
-              if (data[key].type == song.type && data[key].name !== fixedName) {
-                listRef.child(key + "/name").set(fixedName);
-              }
-            }
-          }
+        // first play
+        gts.reportNp(s, listRef, {
+          artist: s.artist,
+          title: s.title,
+          type: s.type
         });
+        return globalpeek.set({
+          artist: s.artist,
+          title: s.title,
+          last_play_date: Date.now(),
+          first_play_date: Date.now(),
+          last_play_dj: s.djname,
+          first_play_dj: s.djname,
+          type: s.type
+        });
+      })
+      .catch(function(err) {
+        console.log("global tags error:", err && err.message);
+      });
+  },
+  fixTags: function(s, listRef, fixedartist, fixedtitle) {
+    if (!s || !s.cid) return;
+    var globalpeek = firebase.database().ref("globalTracks/" + s.type + "" + s.cid);
+    globalpeek.once("value")
+      .then(function(snapshot) {
+        var thing = snapshot.val();
+        if (thing) {
+          thing.artist = fixedartist;
+          thing.title = fixedtitle;
+          gts.reportNp(s, listRef, thing);
+          return globalpeek.set(thing);
+        }
+        gts.reportNp(s, listRef, {
+          artist: fixedartist,
+          title: fixedtitle,
+          type: s.type
+        });
+        return globalpeek.set({
+          artist: fixedartist,
+          title: fixedtitle,
+          last_play_date: Date.now(),
+          first_play_date: Date.now(),
+          last_play_dj: s.djname,
+          first_play_dj: s.djname,
+          type: s.type
+        });
+      })
+      .catch(function(err) {
+        console.log("fix tags error:", err && err.message);
+      });
+  },
+  // Put the saved tags (adm) on song s, tell the room, and rename the track in
+  // the DJ's list (listRef) to match.
+  reportNp: function(s, listRef, adm) {
+    if (!adm) return;
+    // no title, or an "Unknown" artist: keep what the bot worked out
+    if (adm.title && adm.artist && adm.artist !== "Unknown") {
+      s.artist = adm.artist;
+      s.title = adm.title;
     }
 
+    var tagFixData = {
+      adamData: {
+        artist: s.artist,
+        track_name: s.title
+      },
+      cid: s.cid
+    };
+    if (adm.last_play_dj) tagFixData.adamData.last_play_dj = adm.last_play_dj;
+    if (adm.last_play_date) tagFixData.adamData.last_play = new Date(adm.last_play_date).toISOString();
+    if (adm.first_play_dj) tagFixData.adamData.first_play_dj = adm.first_play_dj;
+    if (adm.first_play_date) tagFixData.adamData.first_play = new Date(adm.first_play_date).toISOString();
+
+    request('https://ws.audioscrobbler.com/2.0/?method=track.getInfo&track=' + encodeURIComponent(adm.title) + '&artist=' + encodeURIComponent(adm.artist) + '&username=' + encodeURIComponent(process.env.LASTFM_USERNAME || "") + '&api_key=' + encodeURIComponent(process.env.LASTFM_APIKEY || "") + '&format=json', function(error, response, body) {
+      var playcount = false;
+      if (!error && response && response.statusCode == 200) {
+        try {
+          var lfm = JSON.parse(body);
+          if (lfm && lfm.track && lfm.track.userplaycount) playcount = parseInt(lfm.track.userplaycount, 10);
+        } catch (e) {
+          console.log("last.fm play count unreadable:", e.message);
+        }
+      }
+      if (playcount) {
+        tagFixData.adamData.playcount = playcount;
+        s.playcount = playcount;
+      }
+      // the room only hears about the song still playing
+      if (s !== song) return;
+      firebase.database().ref("tagUpdate").set(tagFixData).catch(function(err) {
+        console.log("tag update error:", err.message);
+      });
+    });
+
+    // update the DJ's list with the corrected tags
+    if (listRef) listRef.orderByChild('cid').equalTo(s.cid).once("value")
+      .then(function(snapshot) {
+        var data = snapshot.val();
+        var fixedName = s.artist + " - " + s.title;
+        for (var key in data) {
+          // unchanged names aren't rewritten: the DJ's site would download it again
+          if (data[key] && data[key].type == s.type && data[key].name !== fixedName) {
+            listRef.child(key + "/name").set(fixedName);
+          }
+        }
+      })
+      .catch(function(err) {
+        console.log("playlist tag update error:", err && err.message);
+      });
   }
-}
+};
 /*
 var adam = {
   np: function(song_name, dj, link, source) {
@@ -2604,8 +2609,6 @@ var lastfm = {
     params.api_sig = sig;
 
     var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
-
-    var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
     var options = {
       method: "POST",
       url: request_url
@@ -2665,8 +2668,6 @@ var lastfm = {
     params.api_sig = sig;
 
     var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
-
-    var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
     var options = {
       method: "POST",
       url: request_url
@@ -2696,7 +2697,7 @@ var lastfm = {
       paramString += key + params[key];
     }
 
-    return calcMD5(paramString + lastfm.secret);
+    return text.md5(paramString + lastfm.secret);
   }
 };
 
@@ -2763,175 +2764,6 @@ setInterval(function() {
     }
   }
 }, 2 * 60000);
-
-/*
- * A JavaScript implementation of the RSA Data Security, Inc. MD5 Message
- * Digest Algorithm, as defined in RFC 1321.
- * Copyright (C) Paul Johnston 1999 - 2000.
- * Updated by Greg Holt 2000 - 2001.
- * See http://pajhome.org.uk/site/legal.html for details.
- */
-
-/*
- * Convert a 32-bit number to a hex string with ls-byte first
- */
-var hex_chr = "0123456789abcdef";
-
-function rhex(num) {
-  str = "";
-  for (j = 0; j <= 3; j++)
-    str += hex_chr.charAt((num >> (j * 8 + 4)) & 0x0F) +
-    hex_chr.charAt((num >> (j * 8)) & 0x0F);
-  return str;
-}
-
-/*
- * Convert a string to a sequence of 16-word blocks, stored as an array.
- * Append padding bits and the length, as described in the MD5 standard.
- */
-function str2blks_MD5(str) {
-  nblk = ((str.length + 8) >> 6) + 1;
-  blks = new Array(nblk * 16);
-  for (i = 0; i < nblk * 16; i++) blks[i] = 0;
-  for (i = 0; i < str.length; i++)
-    blks[i >> 2] |= str.charCodeAt(i) << ((i % 4) * 8);
-  blks[i >> 2] |= 0x80 << ((i % 4) * 8);
-  blks[nblk * 16 - 2] = str.length * 8;
-  return blks;
-}
-
-/*
- * Add integers, wrapping at 2^32. This uses 16-bit operations internally
- * to work around bugs in some JS interpreters.
- */
-function add(x, y) {
-  var lsw = (x & 0xFFFF) + (y & 0xFFFF);
-  var msw = (x >> 16) + (y >> 16) + (lsw >> 16);
-  return (msw << 16) | (lsw & 0xFFFF);
-}
-
-/*
- * Bitwise rotate a 32-bit number to the left
- */
-function rol(num, cnt) {
-  return (num << cnt) | (num >>> (32 - cnt));
-}
-
-/*
- * These functions implement the basic operation for each round of the
- * algorithm.
- */
-function cmn(q, a, b, x, s, t) {
-  return add(rol(add(add(a, q), add(x, t)), s), b);
-}
-
-function ff(a, b, c, d, x, s, t) {
-  return cmn((b & c) | ((~b) & d), a, b, x, s, t);
-}
-
-function gg(a, b, c, d, x, s, t) {
-  return cmn((b & d) | (c & (~d)), a, b, x, s, t);
-}
-
-function hh(a, b, c, d, x, s, t) {
-  return cmn(b ^ c ^ d, a, b, x, s, t);
-}
-
-function ii(a, b, c, d, x, s, t) {
-  return cmn(c ^ (b | (~d)), a, b, x, s, t);
-}
-
-/*
- * Take a string and return the hex representation of its MD5.
- */
-function calcMD5(str) {
-  x = str2blks_MD5(str);
-  a = 1732584193;
-  b = -271733879;
-  c = -1732584194;
-  d = 271733878;
-
-  for (i = 0; i < x.length; i += 16) {
-    olda = a;
-    oldb = b;
-    oldc = c;
-    oldd = d;
-
-    a = ff(a, b, c, d, x[i + 0], 7, -680876936);
-    d = ff(d, a, b, c, x[i + 1], 12, -389564586);
-    c = ff(c, d, a, b, x[i + 2], 17, 606105819);
-    b = ff(b, c, d, a, x[i + 3], 22, -1044525330);
-    a = ff(a, b, c, d, x[i + 4], 7, -176418897);
-    d = ff(d, a, b, c, x[i + 5], 12, 1200080426);
-    c = ff(c, d, a, b, x[i + 6], 17, -1473231341);
-    b = ff(b, c, d, a, x[i + 7], 22, -45705983);
-    a = ff(a, b, c, d, x[i + 8], 7, 1770035416);
-    d = ff(d, a, b, c, x[i + 9], 12, -1958414417);
-    c = ff(c, d, a, b, x[i + 10], 17, -42063);
-    b = ff(b, c, d, a, x[i + 11], 22, -1990404162);
-    a = ff(a, b, c, d, x[i + 12], 7, 1804603682);
-    d = ff(d, a, b, c, x[i + 13], 12, -40341101);
-    c = ff(c, d, a, b, x[i + 14], 17, -1502002290);
-    b = ff(b, c, d, a, x[i + 15], 22, 1236535329);
-
-    a = gg(a, b, c, d, x[i + 1], 5, -165796510);
-    d = gg(d, a, b, c, x[i + 6], 9, -1069501632);
-    c = gg(c, d, a, b, x[i + 11], 14, 643717713);
-    b = gg(b, c, d, a, x[i + 0], 20, -373897302);
-    a = gg(a, b, c, d, x[i + 5], 5, -701558691);
-    d = gg(d, a, b, c, x[i + 10], 9, 38016083);
-    c = gg(c, d, a, b, x[i + 15], 14, -660478335);
-    b = gg(b, c, d, a, x[i + 4], 20, -405537848);
-    a = gg(a, b, c, d, x[i + 9], 5, 568446438);
-    d = gg(d, a, b, c, x[i + 14], 9, -1019803690);
-    c = gg(c, d, a, b, x[i + 3], 14, -187363961);
-    b = gg(b, c, d, a, x[i + 8], 20, 1163531501);
-    a = gg(a, b, c, d, x[i + 13], 5, -1444681467);
-    d = gg(d, a, b, c, x[i + 2], 9, -51403784);
-    c = gg(c, d, a, b, x[i + 7], 14, 1735328473);
-    b = gg(b, c, d, a, x[i + 12], 20, -1926607734);
-
-    a = hh(a, b, c, d, x[i + 5], 4, -378558);
-    d = hh(d, a, b, c, x[i + 8], 11, -2022574463);
-    c = hh(c, d, a, b, x[i + 11], 16, 1839030562);
-    b = hh(b, c, d, a, x[i + 14], 23, -35309556);
-    a = hh(a, b, c, d, x[i + 1], 4, -1530992060);
-    d = hh(d, a, b, c, x[i + 4], 11, 1272893353);
-    c = hh(c, d, a, b, x[i + 7], 16, -155497632);
-    b = hh(b, c, d, a, x[i + 10], 23, -1094730640);
-    a = hh(a, b, c, d, x[i + 13], 4, 681279174);
-    d = hh(d, a, b, c, x[i + 0], 11, -358537222);
-    c = hh(c, d, a, b, x[i + 3], 16, -722521979);
-    b = hh(b, c, d, a, x[i + 6], 23, 76029189);
-    a = hh(a, b, c, d, x[i + 9], 4, -640364487);
-    d = hh(d, a, b, c, x[i + 12], 11, -421815835);
-    c = hh(c, d, a, b, x[i + 15], 16, 530742520);
-    b = hh(b, c, d, a, x[i + 2], 23, -995338651);
-
-    a = ii(a, b, c, d, x[i + 0], 6, -198630844);
-    d = ii(d, a, b, c, x[i + 7], 10, 1126891415);
-    c = ii(c, d, a, b, x[i + 14], 15, -1416354905);
-    b = ii(b, c, d, a, x[i + 5], 21, -57434055);
-    a = ii(a, b, c, d, x[i + 12], 6, 1700485571);
-    d = ii(d, a, b, c, x[i + 3], 10, -1894986606);
-    c = ii(c, d, a, b, x[i + 10], 15, -1051523);
-    b = ii(b, c, d, a, x[i + 1], 21, -2054922799);
-    a = ii(a, b, c, d, x[i + 8], 6, 1873313359);
-    d = ii(d, a, b, c, x[i + 15], 10, -30611744);
-    c = ii(c, d, a, b, x[i + 6], 15, -1560198380);
-    b = ii(b, c, d, a, x[i + 13], 21, 1309151649);
-    a = ii(a, b, c, d, x[i + 4], 6, -145523070);
-    d = ii(d, a, b, c, x[i + 11], 10, -1120210379);
-    c = ii(c, d, a, b, x[i + 2], 15, 718787259);
-    b = ii(b, c, d, a, x[i + 9], 21, -343485551);
-
-    a = add(a, olda);
-    b = add(b, oldb);
-    c = add(c, oldc);
-    d = add(d, oldd);
-  }
-  return rhex(a) + rhex(b) + rhex(c) + rhex(d);
-}
 
 var serialize = function(obj, prefix) {
   var str = [];

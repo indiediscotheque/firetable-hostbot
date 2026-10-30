@@ -3,13 +3,16 @@
   "private": true,
   "description": "Tests for firetable-hostbot: database rules and the bot itself in the Firebase emulators, and the auto-update script. Never installed on the bot server.",
   "scripts": {
-    "test": "npm run test:rules && npm run test:bot && npm run test:auto-update",
+    "test": "npm run lint && npm run test:unit && npm run test:rules && npm run test:bot && npm run test:auto-update",
+    "lint": "cd .. && test/node_modules/.bin/eslint app.js lib",
+    "test:unit": "node --test unit.test.mjs",
     "test:rules": "cd .. && firebase emulators:exec --only database,auth --project demo-ft \"node test/rules.test.mjs\"",
     "test:bot": "cd .. && firebase emulators:exec --only database,auth --project demo-ft \"node test/bot.test.mjs\"",
     "test:auto-update": "bash auto-update.test.sh"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
+    "eslint": "^9.39.1",
     "firebase": "^11.10.0",
     "firebase-tools": "^15.34.2"
   }

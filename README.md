@@ -185,10 +185,10 @@ When a song starts, the bot looks up its BPM on Deezer's public API (no key need
 
 Usernames are unique whatever their case ("Boss" and "boss" are one name): names are claimed in lowercase under `nameClaim/`. The bot gives every existing name its lowercase claim when it starts (and every 6 hours); if two older accounts differ only in case, the earlier member keeps the claim and the log says so.
 
-Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working.
+Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working. The bot acts on each message once, and ignores commands more than 2 minutes old (sent before a long disconnect, or a copy of an old message added to the feed again).
 
 ## tests
-`.github/workflows/test.yml` runs on every push and pull request: the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud answers (outages, broken tracks, skips, commands, names, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js` and `lib/` (it catches undeclared variables), unit tests of the helpers in `lib/`, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud answers (outages, broken tracks, skips, commands, names, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
 ```
 npm ci && cd test && npm ci && npm test
 ```

@@ -1,5 +1,6 @@
 # Checks every push and pull request:
 #   - app.js, the auto-update script and firebase-rules.json parse
+#   - ESLint on app.js, and unit tests of its small helpers
 #   - the database rules refuse what they should and allow what the site and
 #     bot write (Firebase emulator)
 #   - the bot itself, against the emulators with fake YouTube / SoundCloud
@@ -45,6 +46,12 @@ jobs:
           node --check app.js
           bash -n scripts/auto-update.sh
           node -e 'JSON.parse(require("fs").readFileSync("firebase-rules.json", "utf8")); console.log("firebase-rules.json is valid JSON")'
+
+      - name: Lint (undeclared variables and other mistakes)
+        run: cd test && npm run lint
+
+      - name: Unit tests
+        run: cd test && npm run test:unit
 
       # The emulators need Java 21, which the runner has installed
       - name: Database rules

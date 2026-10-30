@@ -159,6 +159,31 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async titles_long_replies_and_replays() {
+    await put("/", base({ queues: { dj1: { k1: yt("yt1", "Art - Song - Live Version") }, dj2: { s1: yt("yt2") } } }));
+    const p = startBot("guards");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    // a command from 10 minutes ago (e.g. delivered after a long disconnect)
+    const oldID = await post("/chatData", { id: "boss", name: "boss", txt: "!remove dj2", time: Date.now() - 600000 });
+    await post("/chatFeed", { chatID: oldID });
+    // the same message added to the feed twice: it counts once
+    const twice = await post("/chatData", { id: "dj1", name: "dj1", txt: "!theme", time: { ".sv": "timestamp" } });
+    await post("/chatFeed", { chatID: twice });
+    await post("/chatFeed", { chatID: twice });
+    // a reply longer than chat allows is shortened, not lost
+    await say("boss", "!fixtags Art - " + "t".repeat(200));
+    await sleep(2000);
+    const st = await get("/");
+    const s = said(st);
+    check(st.songToPlay.cid === "yt1" && st.songToPlay.artist === "Art" && st.songToPlay.title === "Song - Live Version",
+      "a title with a second ' - ' keeps all of it (" + st.songToPlay.title + ")");
+    check((st.table || []).some((d) => d.id === "dj2") && /ignored a chat message from \d+ seconds ago/.test(p.out), "a 10-minute-old !remove is ignored");
+    check(s.filter((t) => /no theme/.test(t)).length === 1, "a message in the feed twice is handled once");
+    check(s.some((t) => /^ok\. updating tags/.test(t) && t.length === 240 && t.endsWith("…")), "a reply over 240 characters is shortened to fit");
+    await healthy(p);
+    return p;
+  },
   async names() {
     await put("/", base({
       users: Object.assign(base().users, {
