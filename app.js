@@ -435,30 +435,46 @@ var talk = function(txt, card) {
   });
 };
 
+// Room state only the bot writes (deck, line, spotlight, play limit, dance,
+// colours). Everyone in the room downloads every write, even one that changes
+// nothing, so only values that changed are sent.
+var lastWritten = {};
+var writeRoomState = function(values) {
+  var changes = {};
+  Object.keys(values).forEach(function(path) {
+    var value = values[path] === undefined ? null : values[path];
+    var json = JSON.stringify(value);
+    if (lastWritten[path] === json) return;
+    lastWritten[path] = json;
+    changes[path] = value;
+  });
+  var paths = Object.keys(changes);
+  if (!paths.length) return Promise.resolve();
+  return firebase.database().ref().update(changes).catch(function(err) {
+    paths.forEach(function(path) { delete lastWritten[path]; }); // send it again next time
+    console.log("couldn't save " + paths.join(", ") + ":", err.message);
+  });
+};
+var currentLimit = function() {
+  return queue.length && table.length >= 4 ? playlimit : "∞";
+};
+
 var updateTable = function() {
-  var table2 = firebase.database().ref("table");
-  table2.set(table);
+  writeRoomState({ table: table });
   autoDJ.check();
 };
 
 var updateWaitlist = function() {
-  var waitlist2 = firebase.database().ref("waitlist");
-  waitlist2.set(queue);
+  writeRoomState({ waitlist: queue });
   autoDJ.check();
 };
 
 var updateLimit = function() {
-  var limit2 = firebase.database().ref("playlimit");
-  var limitHere = "∞";
-  if (queue.length && (table.length >= 4)) {
-    limitHere = playlimit;
-  }
-  limit2.set(limitHere);
+  writeRoomState({ playlimit: currentLimit() });
 };
 
 var updatePlaydex = function() {
-  var playdex2 = firebase.database().ref("playdex");
-  playdex2.set(playDex);
+  writeRoomState({ playdex: playDex });
 };
 
 var firelevel = {
@@ -580,13 +596,11 @@ var newMusicCheck = function(data) {
 
 var updateThings = function() {
   // One write, so clients never see the new deck with the old spotlight
-  var limitHere = "∞";
-  if (queue.length && (table.length >= 4)) limitHere = playlimit;
-  firebase.database().ref().update({
+  writeRoomState({
     table: table,
     waitlist: queue,
     playdex: playDex,
-    playlimit: limitHere
+    playlimit: currentLimit()
   });
   autoDJ.check();
 };
@@ -773,15 +787,7 @@ var LOAD_TIMEOUT = 30000; // no answer by then: count it as a failed check
 
 var setColors = function(thecolors) {
   colors = thecolors;
-  firebase.database().ref("colors").set(thecolors);
-};
-
-var PALETTE_SWATCHES = {
-  lightVibrant: "LightVibrant",
-  darkVibrant: "DarkVibrant",
-  muted: "Muted",
-  lightMuted: "LightMuted",
-  darkMuted: "DarkMuted"
+  writeRoomState({ colors: thecolors });
 };
 
 // The room's colours, from the track's artwork (plain white without one, or if
@@ -792,15 +798,11 @@ var applyArtworkColors = function(seq, image) {
   Vibrant.from(image).getPalette().then(function(palette) {
     if (seq !== startSeq) return; // a newer song has its own colours
     var main = palette && palette.Vibrant;
-    var altColors = {};
-    for (var name in PALETTE_SWATCHES) {
-      var swatch = palette && palette[PALETTE_SWATCHES[name]];
-      if (swatch) altColors[name] = { color: swatch.getHex(), txt: swatch.getBodyTextColor() };
-    }
+    // just the accent the site uses; every song's colours go to everyone in
+    // the room and into Recent, Fresh and cards
     setColors({
       color: main ? main.getHex() : plain.color,
-      txt: main ? main.getBodyTextColor() : plain.txt,
-      altColors: altColors
+      txt: main ? main.getBodyTextColor() : plain.txt
     });
   }).catch(function(err) {
     console.log("couldn't read the artwork's colours (" + image + "):", err && err.message);
@@ -925,6 +927,28 @@ var currentListRef = function() {
   return queueRef;
 };
 
+// The first track in a list that isn't flagged, in play order (key order).
+// Read a page at a time, so a song costs a few tracks of download instead of
+// the DJ's whole list.
+var TRACK_PAGE = 20;
+var firstPlayable = function(listRef, after) {
+  var query = listRef.orderByKey();
+  if (after) query = query.startAfter(after);
+  return query.limitToFirst(TRACK_PAGE).once("value").then(function(snap) {
+    var found = null;
+    var last = null;
+    var count = 0;
+    snap.forEach(function(child) {
+      count++;
+      last = child.key;
+      var track = child.val();
+      if (!found && track && !track.flagged) found = { key: child.key, track: track };
+    });
+    if (found || count < TRACK_PAGE) return found;
+    return firstPlayable(listRef, last);
+  });
+};
+
 var startSong = function(noPrevPlay) {
   var seq = ++startSeq;
   if (retryTimer) {
@@ -940,8 +964,7 @@ var startSong = function(noPrevPlay) {
   }
   console.log(table.length);
   firelevel.clear();
-  var danceref = firebase.database().ref("dance");
-  danceref.set(false);
+  writeRoomState({ dance: false });
   robotsDancing = false;
   cardGiftedThisSong = false;
   if (song && !noPrevPlay) {
@@ -955,7 +978,7 @@ var startSong = function(noPrevPlay) {
         duration: song.duration,
         url: song.url,
         cid: song.cid,
-        colors: colors,
+        colors: { color: colors.color, txt: colors.txt },
         when: song.started,
         postedDate: song.postedDate,
         img: song.image
@@ -996,15 +1019,7 @@ var startSong = function(noPrevPlay) {
     };
     song = songInfo;
     s2p.set(songInfo);
-    var clrs = "#fff";
-    var textcol = "#fff";
-    var colref = firebase.database().ref("colors");
-    var thecolors = {
-      color: clrs,
-      txt: textcol
-    };
-    colref.set(thecolors);
-    colors = thecolors;
+    setColors({ color: "#fff", txt: "#fff" });
     updateThings();
     return false;
   };
@@ -1023,17 +1038,13 @@ var startSong = function(noPrevPlay) {
   queueRef = djListRef(theDJ.id);
 
   var listRef = queueRef; // this DJ's list, even if queueRef moves on meanwhile
-  listRef.once("value").then(function(snapshot) {
+  firstPlayable(listRef).then(function(found) {
     if (seq !== startSeq) return; // skipped or restarted meanwhile
-    var data = snapshot.val();
+    var data = {};
     var goodTrack = null;
-    for (var key in data) {
-      if (data[key]) {
-        if (!data[key].flagged) {
-          goodTrack = key;
-          break;
-        }
-      }
+    if (found) {
+      goodTrack = found.key;
+      data[goodTrack] = found.track;
     }
     if (goodTrack) {
       var nextSongkey = goodTrack;
@@ -1174,7 +1185,7 @@ var printCard = function(newEntry) {
         duration: song.duration,
         url: song.url,
         cid: song.cid,
-        colors: colors,
+        colors: { color: colors.color, txt: colors.txt },
         when: song.started,
         postedDate: song.postedDate,
         img: song.image
@@ -2237,8 +2248,7 @@ var handleChat = function(chatID) {
         } else if (command == "dance") {
           if (cardGiftedThisSong) {
             if (!robotsDancing) {
-              var danceref = firebase.database().ref("dance");
-              danceref.set(true);
+              writeRoomState({ dance: true });
               robotsDancing = true;
               talk(":artificial_satellite: D.A.N.C.E satellite: `GLOBAL DANCE SEQUENCE NO. 1 HAS BEEN INITIATED.`");
             } else {
@@ -2434,10 +2444,10 @@ var gts = {
           var data = snapshot.val();
           if (data) {
             for (var key in data) {
-              if (data[key].type == song.type) {
-                newData = data[key];
-                newData.name = song.artist + " - " + song.title;
-                listRef.child(key).set(newData);
+              var fixedName = song.artist + " - " + song.title;
+              // unchanged names aren't rewritten: the DJ's site would download it again
+              if (data[key].type == song.type && data[key].name !== fixedName) {
+                listRef.child(key + "/name").set(fixedName);
               }
             }
           }
