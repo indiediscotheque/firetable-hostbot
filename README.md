@@ -133,6 +133,7 @@ pm2 start app.js --name hostbot && pm2 save
 YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 1 unit of quota per song).
 
 ## commands added recently
+- `!remove name` (mods): takes someone off the decks or the waitlist; a mod can't remove a supermod.
 - `!removeafter` / `!dontremoveme`: step down after your next song, or cancel it. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
 - `!fixtags artist - title` (mods): correct the playing song's tags (only the first " - " splits artist from title).
 - `!suggest <theme>`: start a theme vote (pings @everyone). One vote at a time, up to 80 characters, and one suggestion per person every 15 minutes (mods are exempt).
@@ -181,6 +182,8 @@ When a song starts, the bot looks up its BPM on Deezer's public API (no key need
 
 ## database rules
 `firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
+
+Playlists and queues have no limit on how many tracks they hold (the bot's own crate is over 10,000). The rules only check each track's fields: `type` and `cid` are short text or numbers (older imports saved them as text), `name` is text up to 1,000 characters, `img` / `url` links up to 2,048, `flagged` is `{date, code}`, and any other field can't be text over 2,048 characters. Playlist names, and the artist / title mods fix in Recent and the global tags, are text up to 500 characters. The tests reorder a 12,000-track list to make sure big lists keep working.
 
 Usernames are unique whatever their case ("Boss" and "boss" are one name): names are claimed in lowercase under `nameClaim/`. The bot gives every existing name its lowercase claim when it starts (and every 6 hours); if two older accounts differ only in case, the earlier member keeps the claim and the log says so.
 

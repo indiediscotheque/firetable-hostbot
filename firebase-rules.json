@@ -173,10 +173,12 @@
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$trackid":{
         "artist":{
-          ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true"
+          ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true",
+          ".validate": "newData.isString() && newData.val().length <= 500"
         },
         "title":{
-          ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true"
+          ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true",
+          ".validate": "newData.isString() && newData.val().length <= 500"
         }
       }
     },
@@ -209,7 +211,10 @@
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$histitem": {
-        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true"      }
+        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true",
+        "artist": { ".validate": "newData.isString() && newData.val().length <= 500" },
+        "title": { ".validate": "newData.isString() && newData.val().length <= 500" }
+      }
     },
     "newMusic": {
       ".read": true,
@@ -223,7 +228,21 @@
       "$uid": {
         ".read": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
         ".write": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
-        ".indexOn": "cid"
+        ".indexOn": "cid",
+        "$track": {
+          ".validate": "newData.hasChildren()",
+          "type": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 8)" },
+          "cid": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 256)" },
+          "name": { ".validate": "newData.isString() && newData.val().length <= 1000" },
+          "img": { ".validate": "newData.isString() && newData.val().length <= 2048" },
+          "url": { ".validate": "newData.isString() && newData.val().length <= 2048" },
+          "flagged": {
+            ".validate": "newData.hasChildren()",
+            "date": { ".validate": "newData.isNumber()" },
+            "code": { ".validate": "newData.isNumber()" }
+          },
+          "$other": { ".validate": "!newData.isString() || newData.val().length <= 2048" }
+        }
       }
     },
     "playlists": {
@@ -232,8 +251,23 @@
         ".read": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
         ".write": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
         "$listid": {
+          "name": { ".validate": "newData.isString() && newData.val().length <= 500" },
           "list":{
-            ".indexOn": "cid"
+            ".indexOn": "cid",
+            "$track": {
+              ".validate": "newData.hasChildren()",
+              "type": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 8)" },
+              "cid": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 256)" },
+              "name": { ".validate": "newData.isString() && newData.val().length <= 1000" },
+              "img": { ".validate": "newData.isString() && newData.val().length <= 2048" },
+              "url": { ".validate": "newData.isString() && newData.val().length <= 2048" },
+              "flagged": {
+                ".validate": "newData.hasChildren()",
+                "date": { ".validate": "newData.isNumber()" },
+                "code": { ".validate": "newData.isNumber()" }
+              },
+              "$other": { ".validate": "!newData.isString() || newData.val().length <= 2048" }
+            }
           }
         }
       }

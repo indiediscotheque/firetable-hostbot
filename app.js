@@ -2177,8 +2177,11 @@ var handleChat = function(chatID, feedKey) {
         } else if (command == "remove") {
           if (senderIsMod) {
             var prsnToRemove = uidLookup(args);
-            if (prsnToRemove == botid) autoDJ.override("down");
-            if (prsnToRemove) {
+            if (prsnToRemove && prsnToRemove != chatData.id && busRank(users[prsnToRemove]) > busRank(sender)) {
+              // a mod can't take a supermod off the decks
+              talk("You can't remove " + ((users[prsnToRemove] && users[prsnToRemove].username) || args) + ", " + namebo + ".");
+            } else if (prsnToRemove) {
+              if (prsnToRemove == botid) autoDJ.override("down");
               if (!removeMe(prsnToRemove)) talk("Can not remove " + args + " because they are not on the table or in the waitlist. Thanks.");
             } else {
               talk("who is that");

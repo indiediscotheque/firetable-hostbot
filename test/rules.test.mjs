@@ -97,6 +97,66 @@ await expect("ALLOWED", "change the case of your own name", eve.ref("users/eve/u
 await expect("ALLOWED", "claim a name its old holder no longer uses", eve.ref("nameClaim/oldname").set("eve"));
 await expect("ALLOWED", "bot writes lowercase claims for others", db("bot").ref("nameClaim/renamed").set("left"));
 
+console.log("-- playlists and queues: abuse (DENIED)");
+const track = (cid, extra) => Object.assign({ type: 1, name: "Artist - Title " + cid, cid: String(cid), img: "https://i.ytimg.com/vi/" + cid + "/mqdefault.jpg", url: "https://www.youtube.com/watch?v=" + cid }, extra);
+await expect("DENIED", "track name of 200 KB", eve.ref("queues/eve/j1").set(track("a", { name: big })));
+await expect("DENIED", "track name that's an object", eve.ref("queues/eve/j2").set(track("a", { name: { big } })));
+await expect("DENIED", "track type that's an object", eve.ref("queues/eve/j3").set(track("a", { type: { big } })));
+await expect("DENIED", "track cid of 200 KB", eve.ref("queues/eve/j4").set(track("a", { cid: big })));
+await expect("DENIED", "track artwork link of 200 KB", eve.ref("queues/eve/j5").set(track("a", { img: big })));
+await expect("DENIED", "extra track field of 200 KB", eve.ref("queues/eve/j6").set(track("a", { junk: big })));
+await expect("DENIED", "track that's just text", eve.ref("queues/eve/j7").set(big));
+await expect("DENIED", "flagged that's text", eve.ref("queues/eve/j8").set(track("a", { flagged: big })));
+await expect("DENIED", "playlist track name of 200 KB", eve.ref("playlists/eve/pl1/list/j1").set(track("a", { name: big })));
+await expect("DENIED", "playlist name of 200 KB", eve.ref("playlists/eve/pl1/name").set(big));
+await expect("DENIED", "write someone else's queue", eve.ref("queues/bob/x").set(track("a")));
+await expect("DENIED", "mod sets a global artist of 200 KB", db("mod1").ref("globalTracks/1abc/artist").set(big));
+await expect("DENIED", "mod sets a global title that's an object", db("mod1").ref("globalTracks/1abc/title").set({ big }));
+await expect("DENIED", "mod sets a Recent title of 200 KB", db("mod1").ref("songHistory/h1/title").set(big));
+
+console.log("-- playlists and queues: normal use (ALLOWED)");
+await env.withSecurityRulesDisabled(async (ctx) => {
+  // old tracks, as older versions of the site and imports saved them
+  const legacy = {
+    old1: { type: "1", name: "Old import - Track", cid: "dQw4w9WgXcQ" },
+    old2: { type: 2, name: "SoundCloud - Track", cid: 13158665 },
+    old3: { type: 1, name: "Extra fields - Track", cid: "abc", duration: 213, added: { by: "someone", at: 1 }, note: "hi" },
+    old4: { type: 1, name: "Flagged - Track", cid: "def", flagged: { date: 1577836800000, code: 3 } }
+  };
+  const many = (n) => { const l = {}; for (let i = 0; i < n; i++) l["k" + String(i).padStart(6, "0")] = track("v" + i, i % 7 ? {} : { flagged: { date: 1, code: 2 } }); return l; };
+  await ctx.database().ref().update({
+    "queues/eve": Object.assign(many(10000), legacy),
+    "playlists/bot/big": { name: "the bot's crate", list: many(12000) },
+    "playlists/eve/pl2": { name: "2,500 tracks", list: many(2500) },
+    "songHistory/h1": { artist: "A", title: "T", cid: "abc", type: 1 }
+  });
+});
+await expect("ALLOWED", "add a track as the site does", eve.ref("queues/eve").push(track("n1")));
+await expect("ALLOWED", "add a SoundCloud track (number id, no artwork)", eve.ref("playlists/eve/pl2/list").push({ type: 2, name: "SC - Song", cid: 13158665, url: "https://soundcloud.com/u/s" }));
+await expect("ALLOWED", "create a playlist", eve.ref("playlists/eve/pl3").set({ name: "new list", list: { a: track("x") } }));
+await expect("ALLOWED", "rename a playlist", eve.ref("playlists/eve/pl3/name").set("renamed"));
+await expect("ALLOWED", "flag and unflag a track", eve.ref("queues/eve/old1/flagged").set({ date: Date.now(), code: 8 }).then(() => eve.ref("queues/eve/old1/flagged").remove()));
+await expect("ALLOWED", "rename a track (bot's tag fix)", db("bot").ref("queues/eve/old2/name").set("Fixed - Name"));
+await expect("ALLOWED", "bot moves a played track to the bottom in one write",
+  db("bot").ref("playlists/bot/big/list").update({ k000001: null, zzz: track("v1") }));
+const reverse = (who, path) => db(who).ref(path).transaction((cur) => {
+  if (!cur) return cur;
+  const keys = Object.keys(cur).sort(), vals = keys.map((k) => cur[k]).reverse(), out = {};
+  keys.forEach((k, i) => { out[k] = vals[i]; });
+  return out;
+}).then((r) => { if (!r.committed) throw new Error("not committed"); });
+let t = Date.now();
+await expect("ALLOWED", "reorder a 10,000-track queue with old-style tracks in it", reverse("eve", "queues/eve"));
+console.log("         (" + (Date.now() - t) + " ms)");
+t = Date.now();
+await expect("ALLOWED", "reorder the bot's 12,000-track playlist", reverse("bot", "playlists/bot/big/list"));
+console.log("         (" + (Date.now() - t) + " ms)");
+await expect("ALLOWED", "reorder a 2,500-track playlist", reverse("eve", "playlists/eve/pl2/list"));
+await expect("ALLOWED", "mod fixes a play's tags (Recent + global, one write)", db("mod1").ref().update({
+  "songHistory/h1/artist": "Artist", "songHistory/h1/title": "Song - Live", "globalTracks/1abc/artist": "Artist", "globalTracks/1abc/title": "Song - Live"
+}));
+await expect("ALLOWED", "delete a playlist", eve.ref("playlists/eve/pl3").remove());
+
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
 process.exit(failed ? 1 : 0);

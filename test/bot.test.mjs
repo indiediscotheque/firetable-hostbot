@@ -195,6 +195,26 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async remove_respects_rank() {
+    await put("/", base({
+      users: Object.assign(base().users, { mod1: { username: "mod1", status: true, mod: true } }),
+      nameClaim: Object.assign(base().nameClaim, { mod1: "mod1" }),
+      table: [{ name: "dj1", id: "dj1", plays: 0 }, { name: "dj2", id: "dj2", plays: 0 }, { name: "boss", id: "boss", plays: 0 }],
+      queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") }, boss: { b1: yt("yt3") } }
+    }));
+    const p = startBot("ranks");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    await say("mod1", "!remove boss");
+    await say("mod1", "!remove dj2");
+    await sleep(1500);
+    const st = await get("/");
+    const ids = (st.table || []).map((d) => d.id);
+    check(ids.includes("boss") && said(st).some((t) => /You can't remove boss, mod1/.test(t)), "a mod can't remove a supermod");
+    check(!ids.includes("dj2"), "a mod can still remove a member");
+    await healthy(p);
+    return p;
+  },
   async names() {
     await put("/", base({
       users: Object.assign(base().users, {
