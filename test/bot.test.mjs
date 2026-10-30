@@ -257,6 +257,39 @@ const scenarios = {
     await healthy(p2);
     return p2;
   },
+  async members_kept_current_and_chat_pruned() {
+    const chatData = {}, chatFeed = {};
+    for (let i = 0; i < 30; i++) {
+      const n = String(i).padStart(3, "0");
+      chatData["-c" + n] = { id: "dj1", name: "dj1", txt: "old " + i, time: 1, feedID: "-f" + n };
+      chatFeed["-f" + n] = { chatID: "-c" + n };
+    }
+    await put("/", base({ chatData, chatFeed, queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") }, newbie: { n1: yt("yt3") } } }));
+    const p = startBot("members");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    let st = await get("/");
+    const left = Object.keys(st.chatFeed || {}).sort();
+    check(left.length === 20 && left[0] === "-f010" && !st.chatData["-c009"] && st.chatData["-c010"], "chat trimmed to the latest 20, messages and feed entries together (" + left.length + ")");
+    // someone signs up after the bot started, then renames
+    await put("/users/newbie", { username: "newbie", status: true });
+    await sleep(500);
+    await say("boss", "!add newbie");
+    await sleep(1000);
+    check(((await get("/table")) || []).some((d) => d && d.id === "newbie"), "!add finds a member who joined after the bot started");
+    await put("/users/newbie/username", "renamed1");
+    await put("/users/dj1/status", false);
+    await sleep(500);
+    await say("boss", "!remove renamed1");
+    await say("boss", "!lastblipped dj1");
+    await sleep(1500);
+    st = await get("/");
+    const s = said(st);
+    check(!s.some((t) => /who is that/.test(t)) && !(st.table || []).some((d) => d && d.id === "newbie"), "!remove finds them by their new name");
+    check(s.some((t) => /this person last blipped 0 minutes ago/.test(t)), "presence changes are noticed (!lastblipped)");
+    await healthy(p);
+    return p;
+  },
   async names() {
     await put("/", base({
       users: Object.assign(base().users, {

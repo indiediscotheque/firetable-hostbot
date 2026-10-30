@@ -1553,29 +1553,44 @@ firebase.database().ref("autodj").once("value").then(function(snap) {
   autoDJ.check();
 });
 
-var ref2 = firebase.database().ref("users");
+// Every member's profile, kept current one person at a time: a change (an
+// idle update, someone joining) updates that one entry instead of rebuilding
+// the whole list from scratch, as a single listener on all of users/ did.
+// It also notes when each person's presence last changed (the blip detector,
+// for the "are you there?" check and !lastblipped).
+var usersRef = firebase.database().ref("users");
 var usersLoaded = false;
-ref2.on('value', function(dataSnapshot) {
-  users = dataSnapshot.val() || {};
-  autoDJ.check(); // the bot needs its own profile before it can sit down
-  if (botid && !(users[botid] && users[botid].status)) {
+var keepBotOnline = function() {
+  if (botid && users[botid] && !users[botid].status) {
     firebase.database().ref("users/" + botid + "/status").set(true);
   }
-  if (!usersLoaded) {
-    usersLoaded = true;
-    markChatReady();
-  }
+};
+usersRef.on("child_added", function(snap) {
+  var u = snap.val();
+  users[snap.key] = u;
+  if (u && u.status) lastBlipped[snap.key] = Date.now();
+  if (usersLoaded) autoDJ.check();
 });
-
-//this is a blip detector
-ref2.orderByChild('status').equalTo(true).on('child_added', function(dataSnapshot) {
-  lastBlipped[dataSnapshot.key] = Date.now();
+usersRef.on("child_changed", function(snap) {
+  var before = users[snap.key];
+  var u = snap.val();
+  users[snap.key] = u;
+  if ((before && before.status) || (u && u.status)) lastBlipped[snap.key] = Date.now();
+  if (snap.key === botid) keepBotOnline();
+  autoDJ.check(); // the bot needs its own profile before it can sit down
 });
-ref2.orderByChild('status').equalTo(true).on('child_removed', function(dataSnapshot) {
-  lastBlipped[dataSnapshot.key] = Date.now();
+usersRef.on("child_removed", function(snap) {
+  if (users[snap.key] && users[snap.key].status) lastBlipped[snap.key] = Date.now();
+  delete users[snap.key];
 });
-ref2.orderByChild('status').equalTo(true).on('child_changed', function(dataSnapshot) {
-  lastBlipped[dataSnapshot.key] = Date.now();
+// the same data the listeners above download, so this costs nothing extra
+usersRef.once("value").then(function() {
+  usersLoaded = true;
+  keepBotOnline();
+  autoDJ.check();
+  markChatReady();
+}).catch(function(err) {
+  console.log("couldn't read the members (" + err.message + "); commands wait until they load");
 });
 
 var refCardSpecial = firebase.database().ref("cardSpecial");
@@ -2316,19 +2331,32 @@ var markChatReady = function() {
 };
 
 var chatFeedRef = firebase.database().ref("chatFeed");
+var feedEntries = []; // every chat feed entry {key, chatID}, oldest first (for pruneChat)
 chatFeedRef.once("value").then(function(snap) {
   var before = {};
   snap.forEach(function(item) {
     before[item.key] = true;
   });
   chatFeedRef.on("child_added", function(childSnapshot) {
-    if (before[childSnapshot.key]) return;
     var feedData = childSnapshot.val() || {};
+    feedEntries.push({ key: childSnapshot.key, chatID: feedData.chatID });
+    var n = feedEntries.length;
+    if (n > 1 && feedEntries[n - 2].key > childSnapshot.key) feedEntries.sort(function(x, y) { return x.key < y.key ? -1 : 1; });
+    if (before[childSnapshot.key]) return;
     if (!feedData.chatID) return;
     if (chatReady) return handleChat(feedData.chatID, childSnapshot.key);
     chatWaiting.push({ chatID: feedData.chatID, feedKey: childSnapshot.key });
     if (chatWaiting.length > CHAT_WAITING_MAX) chatWaiting.shift();
   });
+  chatFeedRef.on("child_removed", function(childSnapshot) {
+    for (var i = 0; i < feedEntries.length; i++) {
+      if (feedEntries[i].key === childSnapshot.key) {
+        feedEntries.splice(i, 1);
+        break;
+      }
+    }
+  });
+  setTimeout(pruneChat, 5000); // and every 5 minutes, below
 }).catch(function(err) {
   console.log("couldn't read the chat feed; commands won't work until a restart:", err);
 });
@@ -2347,9 +2375,8 @@ var gts = {
         if (thing) {
           // played before: use its saved tags, then update the last play
           gts.reportNp(s, listRef, thing);
-          thing.last_play_date = Date.now();
-          thing.last_play_dj = s.djname;
-          return globalpeek.set(thing);
+          // just the last play: a mod's tag fix at the same moment stays
+          return globalpeek.update({ last_play_date: Date.now(), last_play_dj: s.djname || null });
         }
         // first play
         gts.reportNp(s, listRef, {
@@ -2381,7 +2408,7 @@ var gts = {
           thing.artist = fixedartist;
           thing.title = fixedtitle;
           gts.reportNp(s, listRef, thing);
-          return globalpeek.set(thing);
+          return globalpeek.update({ artist: fixedartist, title: fixedtitle });
         }
         gts.reportNp(s, listRef, {
           artist: fixedartist,
@@ -2540,29 +2567,24 @@ if (process.env.LASTFM_APIKEY && !process.env.LASTFM_SECRET) {
   console.log("last.fm: LASTFM_SECRET isn't set in .env, so plays won't be scrobbled.");
 }
 
-setInterval(function() {
-  //keep stored chat history at 20 chats.
-  var ref = firebase.database().ref("chatFeed");
-  ref.once("value").then(function(snapshot) {
-    var data = snapshot.val();
-    var chats = [];
-    for (var key in data) {
-      chats.push({
-        feed: key,
-        data: data[key].chatID
-      });
-    }
-    if (chats.length > 20) {
-      var shave = chats.length - 21;
-      for (var i = 0; i <= shave; i++) {
-        var removeThis = firebase.database().ref('chatFeed/' + chats[i].feed);
-        var removeData = firebase.database().ref('chatData/' + chats[i].data);
-        removeThis.remove();
-        removeData.remove();
-      }
-    }
+// Keep the chat to its latest 20 messages. The feed listener already knows
+// every entry, so nothing is downloaded: the oldest messages and their feed
+// entries go in one write.
+var CHAT_KEEP = 20;
+var pruneChat = function() {
+  if (botLock.held === false && botLock.waitingSaid) return; // the other copy prunes
+  var extra = feedEntries.length - CHAT_KEEP;
+  if (extra <= 0) return;
+  var updates = {};
+  feedEntries.slice(0, extra).forEach(function(entry) {
+    updates["chatFeed/" + entry.key] = null;
+    if (entry.chatID) updates["chatData/" + entry.chatID] = null;
   });
-}, 5 * 60000);
+  firebase.database().ref().update(updates).catch(function(err) {
+    console.log("couldn't prune the chat:", err.message);
+  });
+};
+setInterval(pruneChat, 5 * 60000);
 
 // Every two minutes: anyone on deck or in line who has left gets one "are you
 // there?", then is removed at the next check, unless they were seen online in
