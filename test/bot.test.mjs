@@ -184,6 +184,17 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async lastfm_and_artwork() {
+    await put("/", base({ queues: { dj1: { k1: yt("yt1", "Björk - Jóga") }, dj2: { s1: yt("yt2") } } }));
+    const p = startBot("lastfm", { LASTFM_APIKEY: "key", LASTFM_SECRET: "secret", LASTFM_SESSIONKEY: "sk", LASTFM_USERNAME: "room" });
+    await sleep(3000);
+    const st = await get("/");
+    check(/fake last.fm: track.updateNowPlaying signature ok \(Björk - Jóga\)/.test(p.out), "now playing sent to last.fm, signed correctly for a non-English artist");
+    check(st.tagUpdate && st.tagUpdate.cid === "yt1" && st.tagUpdate.adamData.playcount === 7, "the room's last.fm play count reaches the site");
+    check(st.colors && /^#[0-9a-f]{6}$/i.test(st.colors.color) && st.colors.color.toLowerCase() !== "#ffffff", "room colours read from the artwork (" + (st.colors && st.colors.color) + ")");
+    await healthy(p);
+    return p;
+  },
   async names() {
     await put("/", base({
       users: Object.assign(base().users, {

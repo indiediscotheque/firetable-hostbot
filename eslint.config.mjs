@@ -15,7 +15,7 @@ export default [
     languageOptions: { ecmaVersion: 2022, sourceType: "commonjs", globals: nodeGlobals },
     rules: {
       "no-undef": "error",
-      "no-redeclare": "warn", // duplicate vars in the command handler; tidy when it's split up
+      "no-redeclare": "error",
       "no-dupe-keys": "error",
       "no-unreachable": "error",
       "no-self-assign": "error",

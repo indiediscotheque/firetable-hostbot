@@ -1,12 +1,24 @@
 'use strict';
-require('dotenv').config({
-  silent: process.env.NODE_ENV === 'production'
-});
-var request = require('request');
-var firebase = require('firebase');
-var YouTube = require('youtube-node');
-var Vibrant = require('node-vibrant');
+// Node 22 or newer (Firebase and the .env loader below need it). Under an older
+// Node this stops with a clear message; auto-update then puts the old code back.
+if (Number(process.versions.node.split(".")[0]) < 22) {
+  console.error("firetable-hostbot needs Node.js 22 or newer; this server has " + process.version +
+    ". Upgrade Node (see the README's install steps), then pm2 restart hostbot.");
+  process.exit(1);
+}
+// Settings from .env, next to this file. Values already set in the
+// environment win, and a missing .env is fine (e.g. on a host with env vars).
+try {
+  process.loadEnvFile(require('path').join(__dirname, '.env'));
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+}
+var firebase = require('@firebase/app-compat').default;
+require('@firebase/auth-compat');
+require('@firebase/database-compat');
 var acorn = require('acorn');
+var http = require('./lib/http').http;
+var artworkColors = require('./lib/colors').artworkColors;
 var text = require('./lib/text');
 var splitTags = text.splitTags;
 var fitChat = text.fitChat;
@@ -16,10 +28,6 @@ var fitChat = text.fitChat;
 process.on("unhandledRejection", function(reason) {
   console.log("unhandled error:", reason);
 });
-var youTube = new YouTube();
-
-youTube.setKey(process.env.YOUTUBE_KEY);
-
 var users = {};
 var botid = null;
 var started = false;
@@ -29,7 +37,6 @@ var queueRef = null;
 var theDJ = null;
 var cardForGrabs = null;
 var totalCards = 0;
-var cardGen = false;
 var colors = {
   color: "#fff",
   txt: "#fff"
@@ -39,12 +46,10 @@ var cardGiftedThisSong = false;
 var table = [];
 var lastBlipped = {};
 var playlimit = 2;
-var thingcopy;
 var song = null;
 var playDex = 0; //where does the spotlight go? (tracks SEATS not people)
 var theme = null;
 var songTimeout = null;
-var adam_last = null;
 var songtimer = null;
 var cardSpecial = false;
 
@@ -275,7 +280,7 @@ function lightsCommand(command, namebo) {
 firebase.auth().onAuthStateChanged(function(user) {
   if (user) {
     botid = user.uid;
-    console.log(botid);
+    console.log("signed in as " + botid);
     var ref0 = firebase.database().ref("users/" + user.uid + "/status");
     ref0.set(true);
     ref0.onDisconnect().set(false);
@@ -316,7 +321,7 @@ firebase.auth().onAuthStateChanged(function(user) {
               var nownow = serverNow();
               song = data;
               theDJ = table[playDex];
-              console.log(queue);
+              console.log("on deck: " + table.length + ", waitlist: " + queue.length);
               if (data) {
                 var timeSince = nownow - data.started;
                 var secSince = Math.floor(timeSince / 1000);
@@ -477,9 +482,6 @@ var updateLimit = function() {
   writeRoomState({ playlimit: currentLimit() });
 };
 
-var updatePlaydex = function() {
-  writeRoomState({ playdex: playDex });
-};
 
 var firelevel = {
   hot: function(id, name) {
@@ -488,7 +490,6 @@ var firelevel = {
     var fires = firelevel.size(firelevel.fires);
     var storms = firelevel.size(firelevel.storms);
     var level = fires - storms;
-    console.log(level);
     if (level <= 0) {
       talk(name + " thinks this track is h0t... doesn't seem very hot...");
     } else if (level == 1) {
@@ -505,7 +506,6 @@ var firelevel = {
     var fires = firelevel.size(firelevel.fires);
     var storms = firelevel.size(firelevel.storms);
     var level = fires - storms;
-    console.log(level);
     if (level >= 4) {
       talk(name + " is trying to put out the DJ's fire... doesn't seem to matter...");
     } else if (level >= 1) {
@@ -701,6 +701,29 @@ var lookupWorked = function(source) {
   }
 };
 
+// ─── YouTube video lookups ──────────────────────────────────────────────────
+// One call to the YouTube Data API (videos.list, 1 unit of quota) for what the
+// bot checks: length, title, channel, artwork, region blocks and age limits.
+// cb(error, result): result is the API's answer ({items: [...]}); error when
+// it couldn't answer (quota, API key, network), with YouTube's own message.
+var YT_FIELDS = "items(snippet(title,channelTitle,publishedAt,thumbnails),contentDetails(duration,regionRestriction,contentRating))";
+var youtubeVideo = function(id, cb) {
+  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
+  url.searchParams.set("part", "snippet,contentDetails");
+  url.searchParams.set("id", id);
+  url.searchParams.set("fields", YT_FIELDS);
+  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
+  http(url).then(function(res) {
+    if (res.status === 200 && res.json && Array.isArray(res.json.items)) return cb(null, res.json);
+    var apiError = res.json && res.json.error;
+    var err = new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
+    err.code = (apiError && apiError.code) || res.status;
+    cb(err, null);
+  }, function(err) {
+    cb(err, null);
+  });
+};
+
 // ─── SoundCloud track lookups ───────────────────────────────────────────────
 // Free, and what the room uses: SoundCloud's own web API (api-v2) with a
 // client id (SOUNDCLOUD_KEY). It needs no registered app, but it isn't
@@ -713,75 +736,52 @@ var lookupWorked = function(source) {
 var scOfficial = !!(process.env.SOUNDCLOUD_CLIENT_ID && process.env.SOUNDCLOUD_CLIENT_SECRET);
 var scToken = null; // { value, expires }
 
-var scAccessToken = function(forceNew, cb) {
-  if (!forceNew && scToken && scToken.expires > Date.now()) return cb(null, scToken.value);
+var scAccessToken = function(forceNew) {
+  if (!forceNew && scToken && scToken.expires > Date.now()) return Promise.resolve(scToken.value);
   var basic = Buffer.from(process.env.SOUNDCLOUD_CLIENT_ID + ":" + process.env.SOUNDCLOUD_CLIENT_SECRET).toString("base64");
-  request({
+  return http("https://secure.soundcloud.com/oauth/token", {
     method: "POST",
-    url: "https://secure.soundcloud.com/oauth/token",
-    timeout: 15000,
     headers: {
       Authorization: "Basic " + basic,
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json; charset=utf-8"
     },
     body: "grant_type=client_credentials"
-  }, function(err, res, body) {
-    var json = null;
-    try {
-      json = JSON.parse(body);
-    } catch (e) {
-      json = null;
-    }
-    if (err || !res || res.statusCode !== 200 || !json || !json.access_token) {
-      return cb(err || new Error("SoundCloud token request answered HTTP " + (res && res.statusCode)));
+  }).then(function(res) {
+    if (res.status !== 200 || !res.json || !res.json.access_token) {
+      throw new Error("SoundCloud token request answered HTTP " + res.status);
     }
     // reuse it until a minute before it expires (SoundCloud limits new tokens)
-    scToken = { value: json.access_token, expires: Date.now() + (Math.max(120, Number(json.expires_in) || 3600) - 60) * 1000 };
-    cb(null, scToken.value);
+    scToken = { value: res.json.access_token, expires: Date.now() + (Math.max(120, Number(res.json.expires_in) || 3600) - 60) * 1000 };
+    return scToken.value;
   });
 };
 
 // cb(error, httpStatus, track): track is SoundCloud's track object when found
 var soundcloudTrack = function(cid, cb) {
-  var parse = function(error, response, body) {
-    var status = response && response.statusCode;
-    var track = null;
-    if (!error && status == 200) {
-      try {
-        track = JSON.parse(body);
-      } catch (e) {
-        track = null;
-      }
-    }
-    return { status: status, track: track };
-  };
+  var answered = function(status, track) { cb(null, status, track); };
+  var failed = function(err) { cb(err, null, null); };
   if (!scOfficial) {
-    return request({
-      url: 'https://api-v2.soundcloud.com/resolve?url=https%3A//api.soundcloud.com/tracks/' + encodeURIComponent(cid) + '&format=json&client_id=' + process.env.SOUNDCLOUD_KEY,
-      timeout: 15000
-    }, function(error, response, body) {
-      var r = parse(error, response, body);
-      cb(error, r.status, r.track);
-    });
+    http('https://api-v2.soundcloud.com/resolve?url=https%3A//api.soundcloud.com/tracks/' + encodeURIComponent(cid) +
+      '&format=json&client_id=' + encodeURIComponent(process.env.SOUNDCLOUD_KEY || "")).then(function(res) {
+      answered(res.status, res.status === 200 ? res.json : null);
+    }, failed);
+    return;
   }
   var attempt = function(retried) {
-    scAccessToken(retried, function(err, token) {
-      if (err) return cb(err, null, null);
-      request({
-        url: "https://api.soundcloud.com/tracks/" + encodeURIComponent(cid),
-        timeout: 15000,
+    return scAccessToken(retried).then(function(token) {
+      return http("https://api.soundcloud.com/tracks/" + encodeURIComponent(cid), {
         headers: { Authorization: "OAuth " + token, Accept: "application/json; charset=utf-8" }
-      }, function(error, response, body) {
-        var r = parse(error, response, body);
-        if (r.status === 401 && !retried) return attempt(true); // token expired early
-        // the official API says when a track can't be played here
-        if (r.track && r.track.access === "blocked") return cb(null, 404, null);
-        cb(error, r.status, r.track);
       });
+    }).then(function(res) {
+      if (res.status === 401 && !retried) return attempt(true); // token expired early
+      var track = res.status === 200 ? res.json : null;
+      // the official API says when a track can't be played here
+      if (track && track.access === "blocked") return answered(404, null);
+      answered(res.status, track);
     });
   };
-  attempt(false);
+  attempt(false).catch(failed);
 };
 
 // ─── Starting a track ───────────────────────────────────────────────────────
@@ -799,15 +799,11 @@ var setColors = function(thecolors) {
 var applyArtworkColors = function(seq, image) {
   var plain = { color: "#fff", txt: "#fff" };
   if (!image || image === "img/idlogo.png") return setColors(plain);
-  Vibrant.from(image).getPalette().then(function(palette) {
+  artworkColors(image).then(function(found) {
     if (seq !== startSeq) return; // a newer song has its own colours
-    var main = palette && palette.Vibrant;
     // just the accent the site uses; every song's colours go to everyone in
     // the room and into Recent, Fresh and cards
-    setColors({
-      color: main ? main.getHex() : plain.color,
-      txt: main ? main.getBodyTextColor() : plain.txt
-    });
+    setColors(found || plain);
   }).catch(function(err) {
     console.log("couldn't read the artwork's colours (" + image + "):", err && err.message);
     if (seq === startSeq) setColors(plain);
@@ -966,7 +962,6 @@ var startSong = function(noPrevPlay) {
     clearTimeout(songTimeout);
     songTimeout = null;
   }
-  console.log(table.length);
   firelevel.clear();
   writeRoomState({ dance: false });
   robotsDancing = false;
@@ -1053,7 +1048,7 @@ var startSong = function(noPrevPlay) {
       var nextSongkey = goodTrack;
       if (data[nextSongkey].type == 1) {
         loadingSource = "YouTube";
-        youTube.getById(data[nextSongkey].cid, guarded(seq, "YouTube", function(error, result) {
+        youtubeVideo(data[nextSongkey].cid, guarded(seq, "YouTube", function(error, result) {
           if (seq !== startSeq) return; // skipped or restarted while YouTube answered
           if (error || !result || !Array.isArray(result.items)) {
             // quota, API key or network trouble: the track itself may be fine
@@ -1314,19 +1309,19 @@ var removeMe = function(id) {
       return true;
     }
   }
-  for (var i = 0; i < table.length; i++) {
-    if (table[i].id == id) {
+  for (var t = 0; t < table.length; t++) {
+    if (table[t].id == id) {
       if (theDJ && id == theDJ.id) {
         // The DJ playing now leaves: end the song. nextSong() takes them off
         // and gives the seat to the waitlist.
         theDJ.removeAfter = true;
-        table[i].removeAfter = true;
+        table[t].removeAfter = true;
         nextSong();
         return true;
       }
-      table.splice(i, 1);
+      table.splice(t, 1);
       // keep the spotlight on the DJ playing now
-      if (i < playDex) playDex = playDex - 1;
+      if (t < playDex) playDex = playDex - 1;
       if (playDex >= table.length) playDex = 0;
       if (queue.length) seatDJ(queue.shift());
       updateThings();
@@ -1336,19 +1331,6 @@ var removeMe = function(id) {
   return false;
 };
 
-var isAlphaNumeric = function(str) {
-  var code, i, len;
-
-  for (i = 0, len = str.length; i < len; i++) {
-    code = str.charCodeAt(i);
-    if (!(code > 47 && code < 58) && // numeric (0-9)
-      !(code > 64 && code < 91) && // upper alpha (A-Z)
-      !(code > 96 && code < 123)) { // lower alpha (a-z)
-      return false;
-    }
-  }
-  return true;
-};
 
 // Take a DJ off the deck between songs (nextSong() has already moved the
 // spotlight on) and give the seat to the first person on the waitlist.
@@ -1373,8 +1355,8 @@ var addCheck = function(id, hereCheck) {
       return 1;
     }
   }
-  for (var i = 0; i < table.length; i++) {
-    if (table[i].id == id) {
+  for (var t = 0; t < table.length; t++) {
+    if (table[t].id == id) {
       return 2;
     }
   }
@@ -1627,11 +1609,12 @@ var looselyMatches = function(a, b) {
   return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0;
 };
 var getJSON = function(url) {
-  return new Promise(function(resolve, reject) {
-    request({ url: url, json: true, timeout: 10000 }, function(err, res, body) {
-      if (err || !res || res.statusCode !== 200 || !body || body.error) return reject(err || (body && body.error) || new Error("HTTP " + (res && res.statusCode)));
-      resolve(body);
-    });
+  return http(url, { timeout: 10000 }).then(function(res) {
+    var body = res.json;
+    if (res.status !== 200 || !body || body.error) {
+      throw new Error((body && body.error && (body.error.message || body.error.type)) || "HTTP " + res.status);
+    }
+    return body;
   });
 };
 var deezerBpm = function(artist, title) {
@@ -1902,7 +1885,6 @@ var handleChat = function(chatID, feedKey) {
       if (matches && botid !== chatData.id && started) {
         var command = matches[1].toLowerCase();
         var args = matches[2];
-        console.log("COMMAND:", command);
         if (command == "addme") {
           var check = addCheck(chatData.id);
           if (!check) {
@@ -1922,12 +1904,10 @@ var handleChat = function(chatID, feedKey) {
               //table has room. add to table directly
               if (table.length == 0) {
                 table.push(pson);
-                console.log(table);
                 playDex = 0;
                 startSong();
               } else {
                 seatDJ(pson);
-                console.log(table);
                 updateThings();
               }
             }
@@ -2022,7 +2002,7 @@ var handleChat = function(chatID, feedKey) {
           // autopilot trigger.
           if (senderIsMod) {
             var namebo2 = autoDJ.botName();
-            var check = addCheck(botid);
+            var botCheck = addCheck(botid);
             var seat = autoDJ.botSeat();
             autoDJ.override("up");
             if (seat && seat.removeAfter) {
@@ -2030,15 +2010,15 @@ var handleChat = function(chatID, feedKey) {
               if (theDJ && theDJ.id == botid) theDJ.removeAfter = false;
               talk("OK! I'll stay on the decks.");
               updateTable();
-            } else if (!check) {
-              var pson = {
+            } else if (!botCheck) {
+              var botSeat = {
                 name: namebo2,
                 id: botid,
                 plays: 0
               };
               if (table.length >= 4) {
                 // table full. time to be on the waitlist now k
-                queue.push(pson);
+                queue.push(botSeat);
                 talk(namebo2 + " (that's me) added to waitlist. Length is now " + queue.length);
                 updateWaitlist();
                 updateLimit();
@@ -2046,15 +2026,15 @@ var handleChat = function(chatID, feedKey) {
                 //table has room. add to table directly
                 talk("OK! I will DJ.");
                 if (table.length == 0) {
-                  table.push(pson);
+                  table.push(botSeat);
                   playDex = 0;
                   startSong();
                 } else {
-                  seatDJ(pson);
+                  seatDJ(botSeat);
                   updateThings();
                 }
               }
-            } else if (check == 1) {
+            } else if (botCheck == 1) {
               talk("I am already in the waitlist.");
             } else {
               talk("I am already on deck.");
@@ -2078,14 +2058,12 @@ var handleChat = function(chatID, feedKey) {
         } else if (command == "screen" || command == "screendown") {
           if (senderIsMod) {
             talk("activating the screen.");
-            var thescreen = firebase.database().ref("thescreen");
-            thescreen.set(true);
+            firebase.database().ref("thescreen").set(true);
           }
         } else if (command == "killscreen" || command == "screenup") {
           if (senderIsMod) {
             talk("ok.");
-            var thescreen = firebase.database().ref("thescreen");
-            thescreen.set(false)
+            firebase.database().ref("thescreen").set(false);
           }
 
         } else if (command == "flag") {
@@ -2189,9 +2167,8 @@ var handleChat = function(chatID, feedKey) {
           if (args){
             var prsn = uidLookup(args);
             if (prsn){
-              let result = null;
               if (lastBlipped[prsn]){
-                talk("this person last blipped "+ (Date.now() - lastBlipped[prsn]) / 1000 / 60 +" minutes ago. or i just rebooted.");
+                talk("this person last blipped " + Math.round((Date.now() - lastBlipped[prsn]) / 60000) + " minutes ago. or i just rebooted.");
               } else {
                 talk("i am confused thank you");
               }
@@ -2202,8 +2179,7 @@ var handleChat = function(chatID, feedKey) {
             var prsnToRemove = uidLookup(args);
             if (prsnToRemove == botid) autoDJ.override("down");
             if (prsnToRemove) {
-              var removed = removeMe(prsnToRemove);
-              if (!removed) talk("Can not remove " + args + " because they are not on the table or in the waitlist. Thanks.");
+              if (!removeMe(prsnToRemove)) talk("Can not remove " + args + " because they are not on the table or in the waitlist. Thanks.");
             } else {
               talk("who is that");
             }
@@ -2213,9 +2189,9 @@ var handleChat = function(chatID, feedKey) {
             var prsnToAdd = uidLookup(args);
             if (prsnToAdd == botid) autoDJ.override("up");
             if (prsnToAdd) {
-              var check = addCheck(prsnToAdd, true);
-              if (!check) {
-                var pson = {
+              var addState = addCheck(prsnToAdd, true);
+              if (!addState) {
+                var addSeat = {
                   name: users[prsnToAdd].username,
                   id: prsnToAdd,
                   plays: 0
@@ -2223,29 +2199,27 @@ var handleChat = function(chatID, feedKey) {
 
                 if (table.length >= 4) {
                   // table full. time to be on the waitlist now k
-                  queue.push(pson);
+                  queue.push(addSeat);
                   talk(users[prsnToAdd].username + " added to waitlist. Length is now " + queue.length);
                   updateWaitlist();
                   updateLimit();
                 } else {
                   //table has room. add to table directly
                   if (table.length == 0) {
-                    table.push(pson);
-                    console.log(table);
+                    table.push(addSeat);
                     playDex = 0;
                     startSong();
                   } else {
-                    seatDJ(pson);
-                    console.log(table);
+                    seatDJ(addSeat);
                     updateThings();
                   }
                 }
               } else {
-                if (check == 1) {
+                if (addState == 1) {
                   talk(users[prsnToAdd].username + " is already in the waitlist.");
-                } else if (check == 2) {
+                } else if (addState == 2) {
                   talk(users[prsnToAdd].username + " is already on deck.");
-                } else if (check == 3) {
+                } else if (addState == 3) {
                   talk(users[prsnToAdd].username + " is almost for sure not here.");
                 }
               }
@@ -2423,25 +2397,16 @@ var gts = {
     if (adm.first_play_dj) tagFixData.adamData.first_play_dj = adm.first_play_dj;
     if (adm.first_play_date) tagFixData.adamData.first_play = new Date(adm.first_play_date).toISOString();
 
-    request('https://ws.audioscrobbler.com/2.0/?method=track.getInfo&track=' + encodeURIComponent(adm.title) + '&artist=' + encodeURIComponent(adm.artist) + '&username=' + encodeURIComponent(process.env.LASTFM_USERNAME || "") + '&api_key=' + encodeURIComponent(process.env.LASTFM_APIKEY || "") + '&format=json', function(error, response, body) {
-      var playcount = false;
-      if (!error && response && response.statusCode == 200) {
-        try {
-          var lfm = JSON.parse(body);
-          if (lfm && lfm.track && lfm.track.userplaycount) playcount = parseInt(lfm.track.userplaycount, 10);
-        } catch (e) {
-          console.log("last.fm play count unreadable:", e.message);
-        }
-      }
+    lastfm.playcount(adm.artist, adm.title).then(function(playcount) {
       if (playcount) {
         tagFixData.adamData.playcount = playcount;
         s.playcount = playcount;
       }
       // the room only hears about the song still playing
       if (s !== song) return;
-      firebase.database().ref("tagUpdate").set(tagFixData).catch(function(err) {
-        console.log("tag update error:", err.message);
-      });
+      return firebase.database().ref("tagUpdate").set(tagFixData);
+    }).catch(function(err) {
+      console.log("tag update error:", err && err.message);
     });
 
     // update the DJ's list with the corrected tags
@@ -2461,246 +2426,76 @@ var gts = {
       });
   }
 };
-/*
-var adam = {
-  np: function(song_name, dj, link, source) {
-    if (!process.env.ADAM_URL) return;
-    var thesource = "youtube";
-    if (source == 2) {
-      thesource = "soundcloud"
-    }
-    var adam_data = {
-      data: {
-        song_name: song_name,
-        dj: dj,
-        link: link,
-        source: thesource
-      }
-    };
-    // try posting to ADAM
-    var options = {
-      method: "POST",
-      url: process.env.ADAM_URL + "/new_song",
-      headers: {
-        "Content-Type": "text/html;charset=utf-8"
-      },
-      form: adam_data
-    };
 
-    request(options, function(err1, res1, body1) {
-      if (err1) console.log(err1);
-      console.log(body1);
-      if (body1) {
-        try {
-          var adm = JSON.parse(body1);
-          adam_last = adm;
-
-          console.log(adm);
-          if (adm) {
-            if (adm.track_name) {
-              //if no track name, adam tags bad... dont use.
-              if (adm.artist) {
-                if (adm.artist !== "Unknown") {
-                  song.artist = adm.artist;
-                  song.title = adm.track_name;
-                } else {
-                  // if ADAM thinks the artist's name is UNKNOWN, overwrite with whatever hostbot came up with
-                  adam.fix_tags(adm.track_id, song.artist + " - " + song.title);
-                }
-              }
-            } else {
-              //NO TRACK NAME... if we have enough data, let's tell ADAM what we know
-              adam.fix_tags(adm.track_id, song.artist + " - " + song.title);
-            }
-
-            if (adm.track_id) song.adamid = adm.track_id;
-            if (adm.playcount) song.playcount = adm.playcount;
-            var tagUpdate = firebase.database().ref("tagUpdate");
-            var tagFixData = {
-              adamData: adm,
-              cid: song.cid
-            };
-
-            // send tag update to clients
-            tagUpdate.set(tagFixData);
-
-            // update the dj's playlist with updated tags
-            queueRef.orderByChild('cid').equalTo(song.cid).once("value")
-              .then(function(snapshot) {
-                var data = snapshot.val();
-                if (data) {
-                  for (var key in data) {
-                    if (data[key].type == song.type) {
-                      newData = data[key];
-                      newData.name = song.artist + " - " + song.title;
-                      queueRef.child(key).set(newData);
-                    }
-                  }
-                }
-              });
-          }
-        } catch (e) {
-          console.log(e);
-        }
-      }
-    });
-  },
-  fix_tags: function(adamid, args) {
-    var song_data = args.split(' - ')
-    if (song_data.length < 2) {
-      //bad format
-    } else {
-      var artist0 = song_data[0].replace(/&amp;/g, '&');
-      var title0 = song_data[1].replace(/&amp;/g, '&');
-
-      var adam_data = {
-        data: {
-          artist: artist0,
-          title: title0,
-          track_id: adamid
-        }
-      };
-      var options = {
-        method: "POST",
-        url: "https://adam-indie-discotheque.herokuapp.com//fix_tags",
-        headers: {
-          "Content-Type": "text/html;charset=utf-8"
-        },
-        form: adam_data
-      };
-
-      request(options, function(err1, res1, body1) {
-        if (err1) console.log(err1);
-        console.log(body1);
-        if (body1) {
-          var adm = JSON.parse(body1);
-          console.log("good tag fix");
-        }
-      });
-
-
-    }
-  }
-};
-
-*/
-
+var LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
 var lastfm = {
-  sk: process.env.LASTFM_SESSIONKEY, //for last.fm user tt_discotheque
+  sk: process.env.LASTFM_SESSIONKEY,
   // Scrobbling needs the API key and its shared secret (.env LASTFM_SECRET)
   key: process.env.LASTFM_SECRET ? process.env.LASTFM_APIKEY : null,
   secret: process.env.LASTFM_SECRET,
   songStart: null,
   duration: null,
   scrobble: function() {
-    var artist = song.artist;
-    var track = song.title;
-
-    var params = {
-      artist: artist,
-      track: track,
-      timestamp: lastfm.songStart,
-      api_key: lastfm.key,
-      sk: lastfm.sk,
-      method: "track.scrobble"
-    };
-
-    var sig = lastfm.getApiSignature(params);
-    params.api_sig = sig;
-
-    var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
-    var options = {
-      method: "POST",
-      url: request_url
-    };
-
-    request(options, function(err1, res1, body1) {
-      if (err1) console.log(err1);
-      //console.log(body1);
+    return lastfm.call({
+      method: "track.scrobble",
+      artist: song.artist,
+      track: song.title,
+      timestamp: lastfm.songStart
     });
-  },
-  love: function() {
-    var artist = song.artist;
-    var track = song.title;
-
-    var params = {
-      artist: artist,
-      track: track,
-      api_key: lastfm.key,
-      sk: lastfm.sk,
-      method: "track.love"
-    };
-
-    var sig = lastfm.getApiSignature(params);
-    params.api_sig = sig;
-
-    var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
-    var options = {
-      method: "POST",
-      url: request_url
-    };
-
-    request(options, function(err1, res1, body1) {
-      if (err1) console.log(err1);
-      // console.log(body1);
-    });
-
-  },
-  _onAjaxError: function(xhr, status, error) {
-    console.log(xhr);
-    console.log(status);
-    console.log(error);
   },
   nowPlaying: function() {
-    var artist = song.artist;
-    var track = song.title;
-
-    var params = {
-      artist: artist,
-      track: track,
-      duration: lastfm.duration,
-      api_key: lastfm.key,
-      sk: lastfm.sk,
-      method: "track.updateNowPlaying"
-    };
-
-    var sig = lastfm.getApiSignature(params);
-    params.api_sig = sig;
-
-    var request_url = 'https://ws.audioscrobbler.com/2.0/?' + serialize(params);
-    var options = {
-      method: "POST",
-      url: request_url
-    };
-
-    request(options, function(err1, res1, body1) {
-      if (err1) console.log(err1);
-      // console.log(body1);
+    return lastfm.call({
+      method: "track.updateNowPlaying",
+      artist: song.artist,
+      track: song.title,
+      duration: lastfm.duration
     });
-
   },
-  getApiSignature: function(params) {
-    var i, key, keys, max, paramString;
-
-    keys = [];
-    paramString = "";
-
-    for (key in params) {
-      if (params.hasOwnProperty(key)) {
-        keys.push(key);
+  // A signed write call (POST). Last.fm's refusals are logged, never thrown.
+  call: function(params) {
+    params.api_key = lastfm.key;
+    params.sk = lastfm.sk;
+    Object.keys(params).forEach(function(k) {
+      if (params[k] === undefined || params[k] === null) delete params[k];
+    });
+    params.api_sig = lastfm.getApiSignature(params);
+    params.format = "json"; // never signed
+    return http(LASTFM_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString()
+    }).then(function(res) {
+      if (res.status !== 200 || (res.json && res.json.error)) {
+        console.log("last.fm " + params.method + " refused: " + ((res.json && res.json.message) || "HTTP " + res.status));
       }
-    }
-    keys.sort();
-
-    for (i = 0, max = keys.length; i < max; i += 1) {
-      key = keys[i];
-      paramString += key + params[key];
-    }
-
-    return text.md5(paramString + lastfm.secret);
+    }, function(err) {
+      console.log("last.fm " + params.method + " failed:", err.message);
+    });
+  },
+  // How often the room's last.fm account has played a track (false if unknown).
+  playcount: function(artist, title) {
+    if (!process.env.LASTFM_APIKEY || !process.env.LASTFM_USERNAME) return Promise.resolve(false);
+    var url = new URL(LASTFM_API);
+    url.searchParams.set("method", "track.getInfo");
+    url.searchParams.set("track", title);
+    url.searchParams.set("artist", artist);
+    url.searchParams.set("username", process.env.LASTFM_USERNAME);
+    url.searchParams.set("api_key", process.env.LASTFM_APIKEY);
+    url.searchParams.set("format", "json");
+    return http(url).then(function(res) {
+      var n = res.status === 200 && res.json && res.json.track && parseInt(res.json.track.userplaycount, 10);
+      return n > 0 ? n : false;
+    }, function() {
+      return false;
+    });
+  },
+  // Last.fm's api_sig: the params sorted by name, name+value joined, then the
+  // secret, MD5'd (UTF-8)
+  getApiSignature: function(params) {
+    var raw = Object.keys(params).sort().map(function(k) { return k + params[k]; }).join("");
+    return text.md5(raw + lastfm.secret);
   }
 };
-
 
 console.log("soundcloud: " + (scOfficial ? "official API (SOUNDCLOUD_CLIENT_ID / SOUNDCLOUD_CLIENT_SECRET)" : "web API with SOUNDCLOUD_KEY"));
 if (process.env.LASTFM_APIKEY && !process.env.LASTFM_SECRET) {
@@ -2709,7 +2504,6 @@ if (process.env.LASTFM_APIKEY && !process.env.LASTFM_SECRET) {
 
 setInterval(function() {
   //keep stored chat history at 20 chats.
-  console.log("hi");
   var ref = firebase.database().ref("chatFeed");
   ref.once("value").then(function(snapshot) {
     var data = snapshot.val();
@@ -2720,11 +2514,9 @@ setInterval(function() {
         data: data[key].chatID
       });
     }
-    console.log(chats.length);
     if (chats.length > 20) {
       var shave = chats.length - 21;
       for (var i = 0; i <= shave; i++) {
-        console.log(chats[i]);
         var removeThis = firebase.database().ref('chatFeed/' + chats[i].feed);
         var removeData = firebase.database().ref('chatData/' + chats[i].data);
         removeThis.remove();
@@ -2764,20 +2556,6 @@ setInterval(function() {
     }
   }
 }, 2 * 60000);
-
-var serialize = function(obj, prefix) {
-  var str = [];
-  for (var p in obj) {
-    if (obj.hasOwnProperty(p)) {
-      var k = prefix ? prefix + "[" + p + "]" : p,
-        v = obj[p];
-      str.push(typeof v == "object" ?
-        serialize(v, k) :
-        encodeURIComponent(k) + "=" + encodeURIComponent(v));
-    }
-  }
-  return str.join("&");
-}
 
 // Sign in; if that fails (network down, Firebase busy, wrong login), keep
 // trying, waiting longer each time up to 5 minutes, instead of sitting idle.

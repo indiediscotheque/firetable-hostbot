@@ -4,7 +4,7 @@ node.js "chatbot" back end for firetable, a virtual music listening room powered
 pairs with a client side front end ([firetable-user](https://github.com/mxew/firetable-user)).
 
 ## install
-Needs Node.js 18 or newer (22 recommended).
+Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup and says so.
 - `git clone https://github.com/indiediscotheque/firetable-hostbot.git`
 - `cd firetable-hostbot` and `npm ci` (installs the exact versions in `package-lock.json`)
 - copy `.env.example` to `.env` and fill it in (see below)
@@ -102,6 +102,7 @@ Work down the list; stop when it's back.
 | `couldn't sign in`, `wrong-password`, `user-not-found` | `nano ~/firetable-hostbot/.env`, fix `FIRETABLE_USER` / `FIRETABLE_PASS`, `pm2 restart hostbot` (until then the bot keeps retrying, up to every 5 minutes) |
 | `PERMISSION_DENIED` | redeploy `firebase-rules.json` |
 | `Cannot find module` | `cd ~/firetable-hostbot && npm ci && pm2 restart hostbot` |
+| `needs Node.js 22 or newer` | upgrade Node: `curl -fsSL https://deb.nodesource.com/setup_22.x \| sudo bash -`, `sudo apt install -y nodejs`, then `cd ~/firetable-hostbot && npm ci && pm2 restart hostbot` |
 | `quotaExceeded` (YouTube), `couldn't check the track` | wait; the YouTube quota resets at midnight Pacific. Until then the bot retries, then passes the decks along (SoundCloud tracks still play). It never flags tracks it couldn't check |
 | `ENOSPC` / no space left | `pm2 flush && pm2 restart hostbot` |
 | bot is on old code | `cat ~/firetable-hostbot/auto-update.log` says why (paused, failed check, GitHub unreachable) |
@@ -124,14 +125,12 @@ pm2 start app.js --name hostbot && pm2 save
 ```
 
 ## dependencies
-- node.js 18+
-- dotenv ^8.2.0
-- firebase ^8.10.0
-- youtube-node ^1.3.3
-- node-soundcloud 0.0.6
-- node-vibrant ^3.1.5
-- acorn ^8.15.0 (reads the site's season settings without running them)
-- request (loaded through youtube-node)
+- Node.js 22+ (its own `fetch` for every web request, and its own `.env` reader; values already set in the environment win over `.env`)
+- `@firebase/app-compat`, `@firebase/auth-compat`, `@firebase/database-compat` (Firebase 13's auth and Realtime Database, pinned with `@firebase/app` so there's one copy)
+- `@vibrant/*` (the room's colours from the artwork; node-vibrant 4's parts, set up in `lib/colors.js`)
+- `acorn` (reads the site's season settings without running them)
+
+YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 1 unit of quota per song).
 
 ## commands added recently
 - `!removeafter` / `!dontremoveme`: step down after your next song, or cancel it. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
