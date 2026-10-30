@@ -4,7 +4,7 @@ node.js "chatbot" back end for firetable, a virtual music listening room powered
 pairs with a client side front end ([firetable-user](https://github.com/mxew/firetable-user)).
 
 ## install
-Needs Node.js 18 or newer (22 recommended).
+Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup and says so.
 - `git clone https://github.com/indiediscotheque/firetable-hostbot.git`
 - `cd firetable-hostbot` and `npm ci` (installs the exact versions in `package-lock.json`)
 - copy `.env.example` to `.env` and fill it in (see below)
@@ -102,6 +102,7 @@ Work down the list; stop when it's back.
 | `couldn't sign in`, `wrong-password`, `user-not-found` | `nano ~/firetable-hostbot/.env`, fix `FIRETABLE_USER` / `FIRETABLE_PASS`, `pm2 restart hostbot` (until then the bot keeps retrying, up to every 5 minutes) |
 | `PERMISSION_DENIED` | redeploy `firebase-rules.json` |
 | `Cannot find module` | `cd ~/firetable-hostbot && npm ci && pm2 restart hostbot` |
+| `needs Node.js 22 or newer` | upgrade Node: `curl -fsSL https://deb.nodesource.com/setup_22.x \| sudo bash -`, `sudo apt install -y nodejs`, then `cd ~/firetable-hostbot && npm ci && pm2 restart hostbot` |
 | `quotaExceeded` (YouTube), `couldn't check the track` | wait; the YouTube quota resets at midnight Pacific. Until then the bot retries, then passes the decks along (SoundCloud tracks still play). It never flags tracks it couldn't check |
 | `ENOSPC` / no space left | `pm2 flush && pm2 restart hostbot` |
 | bot is on old code | `cat ~/firetable-hostbot/auto-update.log` says why (paused, failed check, GitHub unreachable) |
@@ -124,16 +125,15 @@ pm2 start app.js --name hostbot && pm2 save
 ```
 
 ## dependencies
-- node.js 18+
-- dotenv ^8.2.0
-- firebase ^8.10.0
-- youtube-node ^1.3.3
-- node-soundcloud 0.0.6
-- node-vibrant ^3.1.5
-- acorn ^8.15.0 (reads the site's season settings without running them)
-- request (loaded through youtube-node)
+- Node.js 22+ (its own `fetch` for every web request, and its own `.env` reader; values already set in the environment win over `.env`)
+- `@firebase/app-compat`, `@firebase/auth-compat`, `@firebase/database-compat` (Firebase 13's auth and Realtime Database, pinned with `@firebase/app` so there's one copy)
+- `@vibrant/*` (the room's colours from the artwork; node-vibrant 4's parts, set up in `lib/colors.js`)
+- `acorn` (reads the site's season settings without running them)
+
+YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 1 unit of quota per song).
 
 ## commands added recently
+- `!remove name` (mods): takes someone off the decks or the waitlist; a mod can't remove a supermod.
 - `!removeafter` / `!dontremoveme`: step down after your next song, or cancel it. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
 - `!fixtags artist - title` (mods): correct the playing song's tags (only the first " - " splits artist from title).
 - `!suggest <theme>`: start a theme vote (pings @everyone). One vote at a time, up to 80 characters, and one suggestion per person every 15 minutes (mods are exempt).
@@ -171,8 +171,21 @@ The site decides the seasonal trading-card avatars and the months the string lig
    SOUNDCLOUD_CLIENT_ID="your client id"
    SOUNDCLOUD_CLIENT_SECRET="your client secret"
    ```
-   The log says `soundcloud: official API` at startup. The bot gets an OAuth token and reuses it until it expires (SoundCloud limits how often new ones can be made). Tracks the official API marks as blocked are flagged like deleted ones.
+   The log says `soundcloud: official API` at startup. The bot gets an OAuth token and reuses it until it expires (SoundCloud limits how often new ones can be made). Tracks the official API marks as blocked are flagged as unavailable.
 4. Keep `SOUNDCLOUD_KEY` in `.env`: removing the two new lines and restarting goes straight back to today's setup.
+
+## tracks that can't play here
+Before a track plays, the bot checks it with the same rules (and flag codes) as the site's playlist checker (`lib/checks.js`). It flags the track, moves it to the bottom of the DJ's list and plays their next one when it is:
+- YouTube: gone or private (2), blocked in the US (3), not allowed to be embedded on other sites (6), age restricted (7), or a premiere that hasn't started (5)
+- SoundCloud: gone (4), blocked, private or not streamable (5), or only a 30-second preview (SoundCloud Go+ snippets; 5). Previews never play.
+
+When YouTube or SoundCloud can't be reached it flags nothing (see the README's soundcloud and troubleshooting notes).
+
+## one copy at a time
+Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.
+
+## last.fm
+With the `LASTFM_*` settings, each song is sent to last.fm as "now playing" and scrobbled when it ends, or when it's skipped after playing long enough by last.fm's rule (longer than 30 seconds, and played for half its length or 4 minutes).
 
 ## timing
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.
@@ -183,12 +196,14 @@ When a song starts, the bot looks up its BPM on Deezer's public API (no key need
 ## database rules
 `firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
 
+Playlists and queues have no limit on how many tracks they hold (the bot's own crate is over 10,000). The rules only check each track's fields: `type` and `cid` are short text or numbers (older imports saved them as text), `name` is text up to 1,000 characters, `img` / `url` links up to 2,048, `flagged` is `{date, code}`, and any other field can't be text over 2,048 characters. Playlist names, and the artist / title mods fix in Recent and the global tags, are text up to 500 characters. The tests reorder a 12,000-track list to make sure big lists keep working.
+
 Usernames are unique whatever their case ("Boss" and "boss" are one name): names are claimed in lowercase under `nameClaim/`. The bot gives every existing name its lowercase claim when it starts (and every 6 hours); if two older accounts differ only in case, the earlier member keeps the claim and the log says so.
 
-Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working.
+Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working. The bot acts on each message once, and ignores commands more than 2 minutes old (sent before a long disconnect, or a copy of an old message added to the feed again).
 
 ## tests
-`.github/workflows/test.yml` runs on every push and pull request: the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud answers (outages, broken tracks, skips, commands, names, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js` and `lib/` (it catches undeclared variables), unit tests of the helpers in `lib/`, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud answers (outages, broken tracks, skips, commands, names, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
 ```
 npm ci && cd test && npm ci && npm test
 ```

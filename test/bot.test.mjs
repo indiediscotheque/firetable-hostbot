@@ -118,7 +118,7 @@ const scenarios = {
     await sleep(4000);
     const st = await get("/");
     check(/soundcloud: official API/.test(p.out), "with client id + secret: the official API");
-    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["sc404:4","scblocked:4"]' && st.songToPlay.cid === "sc1", "blocked and missing tracks flagged, a playable one plays");
+    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["sc404:4","scblocked:5"]' && st.songToPlay.cid === "sc1", "blocked and missing tracks flagged, a playable one plays");
     await healthy(p);
     return p;
   },
@@ -134,6 +134,7 @@ const scenarios = {
     await sleep(3000);
     const st = await get("/");
     check(Object.keys(st.songHistory || {}).length === 1 && st.songToPlay.djid === "dj2", "three quick skips skip one song");
+    check(said(st).filter((t) => /Hang on, boss, the next song is already loading/.test(t)).length === 1, "skips while it loads get one \"hang on\"");
     await healthy(p);
     return p;
   },
@@ -156,6 +157,136 @@ const scenarios = {
       "!fixtags: refused for a member, works for a mod");
     check(s.some((t) => /Suggest a theme like/.test(t)) && s.some((t) => /under 80 characters/.test(t)), "!suggest: needs a theme, 80 characters at most");
     check(s.filter((t) => /@everyone/.test(t)).length === 1 && s.some((t) => /suggest another theme in 15 minute/.test(t)), "!suggest: one vote, then a 15-minute wait");
+    await healthy(p);
+    return p;
+  },
+  async titles_long_replies_and_replays() {
+    await put("/", base({ queues: { dj1: { k1: yt("yt1", "Art - Song - Live Version") }, dj2: { s1: yt("yt2") } } }));
+    const p = startBot("guards");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    // a command from 10 minutes ago (e.g. delivered after a long disconnect)
+    const oldID = await post("/chatData", { id: "boss", name: "boss", txt: "!remove dj2", time: Date.now() - 600000 });
+    await post("/chatFeed", { chatID: oldID });
+    // the same message added to the feed twice: it counts once
+    const twice = await post("/chatData", { id: "dj1", name: "dj1", txt: "!theme", time: { ".sv": "timestamp" } });
+    await post("/chatFeed", { chatID: twice });
+    await post("/chatFeed", { chatID: twice });
+    // a reply longer than chat allows is shortened, not lost
+    await say("boss", "!fixtags Art - " + "t".repeat(200));
+    await sleep(2000);
+    const st = await get("/");
+    const s = said(st);
+    check(st.songToPlay.cid === "yt1" && st.songToPlay.artist === "Art" && st.songToPlay.title === "Song - Live Version",
+      "a title with a second ' - ' keeps all of it (" + st.songToPlay.title + ")");
+    check((st.table || []).some((d) => d.id === "dj2") && /ignored a chat message from \d+ seconds ago/.test(p.out), "a 10-minute-old !remove is ignored");
+    check(s.filter((t) => /no theme/.test(t)).length === 1, "a message in the feed twice is handled once");
+    check(s.some((t) => /^ok\. updating tags/.test(t) && t.length === 240 && t.endsWith("…")), "a reply over 240 characters is shortened to fit");
+    await healthy(p);
+    return p;
+  },
+  async lastfm_and_artwork() {
+    await put("/", base({ queues: { dj1: { k1: yt("yt1", "Björk - Jóga") }, dj2: { s1: yt("yt2") } } }));
+    const p = startBot("lastfm", { LASTFM_APIKEY: "key", LASTFM_SECRET: "secret", LASTFM_SESSIONKEY: "sk", LASTFM_USERNAME: "room" });
+    await sleep(3000);
+    const st = await get("/");
+    check(/fake last.fm: track.updateNowPlaying signature ok \(Björk - Jóga\)/.test(p.out), "now playing sent to last.fm, signed correctly for a non-English artist");
+    check(st.tagUpdate && st.tagUpdate.cid === "yt1" && st.tagUpdate.adamData.playcount === 7, "the room's last.fm play count reaches the site");
+    check(st.colors && /^#[0-9a-f]{6}$/i.test(st.colors.color) && st.colors.color.toLowerCase() !== "#ffffff", "room colours read from the artwork (" + (st.colors && st.colors.color) + ")");
+    await healthy(p);
+    return p;
+  },
+  async remove_respects_rank() {
+    await put("/", base({
+      users: Object.assign(base().users, { mod1: { username: "mod1", status: true, mod: true } }),
+      nameClaim: Object.assign(base().nameClaim, { mod1: "mod1" }),
+      table: [{ name: "dj1", id: "dj1", plays: 0 }, { name: "dj2", id: "dj2", plays: 0 }, { name: "boss", id: "boss", plays: 0 }],
+      queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") }, boss: { b1: yt("yt3") } }
+    }));
+    const p = startBot("ranks");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    await say("mod1", "!remove boss");
+    await say("mod1", "!remove dj2");
+    await sleep(1500);
+    const st = await get("/");
+    const ids = (st.table || []).map((d) => d.id);
+    check(ids.includes("boss") && said(st).some((t) => /You can't remove boss, mod1/.test(t)), "a mod can't remove a supermod");
+    check(!ids.includes("dj2"), "a mod can still remove a member");
+    await healthy(p);
+    return p;
+  },
+  async tracks_that_cant_play_here() {
+    await put("/", base({ queues: {
+      dj1: { k1: yt("noembed"), k2: yt("premiere"), k3: yt("private1"), k4: sc("scpreview"), k5: sc("scsnip"), k6: sc("scshort"), k7: yt("good1") },
+      dj2: { s1: yt("yt2") }
+    } }));
+    const p = startBot("cant_play");
+    await sleep(5000);
+    const st = await get("/");
+    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["noembed:6","premiere:5","private1:2","scpreview:5","scshort:5","scsnip:5"]',
+      "not embeddable (6), premiere (5), private (2) and SoundCloud previews (5) flagged: " + JSON.stringify(flags(st.queues.dj1).sort()));
+    check(st.songToPlay.cid === "good1", "the first track that can play, plays");
+    const keys = Object.keys(st.queues.dj1).sort();
+    check(keys.length === 7 && !keys.some((k) => k.startsWith("k")), "every checked track moved to the bottom, none lost (" + keys.join(",") + ")");
+    check(said(st).some((t) => /only a preview/.test(t)), "the DJ is told why");
+    await healthy(p);
+    return p;
+  },
+  async scrobbles_and_one_copy() {
+    await put("/", base({ queues: { dj1: { k1: yt("short1", "Art - Short"), k2: yt("yt3", "Art - Skipped") }, dj2: { s1: yt("yt2", "Art - Two") } } }));
+    const lfm = { LASTFM_APIKEY: "key", LASTFM_SECRET: "secret", LASTFM_SESSIONKEY: "sk", LASTFM_USERNAME: "room" };
+    const p = startBot("one_copy", lfm);
+    check(await waitFor(p, "Listening now."), "first copy starts");
+    const p2 = startBot("one_copy", lfm);
+    check(await waitFor(p2, "another copy of the bot is running"), "a second copy waits");
+    await sleep(3500); // the 40-second track runs out (sped up), the next one starts
+    await say("boss", "!skip"); // ...and is skipped right away
+    await say("dj1", "!theme");
+    await sleep(1500);
+    let st = await get("/");
+    check(/track.scrobble signature ok \(Art - Short\)/.test(p.out), "a song that ran to its end is scrobbled");
+    check(!/track.scrobble signature ok \(Art - Two\)/.test(p.out), "a song skipped right away isn't");
+    check(said(st).filter((t) => /no theme/.test(t)).length === 1 && !p2.out.includes("Listening now."), "only one copy answers");
+    p.kill();
+    check(await waitFor(p2, "Listening now.", 15000), "when the first copy stops, the second takes over");
+    await say("dj1", "!theme");
+    await sleep(1500);
+    st = await get("/");
+    check(said(st).filter((t) => /no theme/.test(t)).length === 2, "and answers commands");
+    await healthy(p2);
+    return p2;
+  },
+  async members_kept_current_and_chat_pruned() {
+    const chatData = {}, chatFeed = {};
+    for (let i = 0; i < 30; i++) {
+      const n = String(i).padStart(3, "0");
+      chatData["-c" + n] = { id: "dj1", name: "dj1", txt: "old " + i, time: 1, feedID: "-f" + n };
+      chatFeed["-f" + n] = { chatID: "-c" + n };
+    }
+    await put("/", base({ chatData, chatFeed, queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") }, newbie: { n1: yt("yt3") } } }));
+    const p = startBot("members");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    let st = await get("/");
+    const left = Object.keys(st.chatFeed || {}).sort();
+    check(left.length === 20 && left[0] === "-f010" && !st.chatData["-c009"] && st.chatData["-c010"], "chat trimmed to the latest 20, messages and feed entries together (" + left.length + ")");
+    // someone signs up after the bot started, then renames
+    await put("/users/newbie", { username: "newbie", status: true });
+    await sleep(500);
+    await say("boss", "!add newbie");
+    await sleep(1000);
+    check(((await get("/table")) || []).some((d) => d && d.id === "newbie"), "!add finds a member who joined after the bot started");
+    await put("/users/newbie/username", "renamed1");
+    await put("/users/dj1/status", false);
+    await sleep(500);
+    await say("boss", "!remove renamed1");
+    await say("boss", "!lastblipped dj1");
+    await sleep(1500);
+    st = await get("/");
+    const s = said(st);
+    check(!s.some((t) => /who is that/.test(t)) && !(st.table || []).some((d) => d && d.id === "newbie"), "!remove finds them by their new name");
+    check(s.some((t) => /this person last blipped 0 minutes ago/.test(t)), "presence changes are noticed (!lastblipped)");
     await healthy(p);
     return p;
   },
