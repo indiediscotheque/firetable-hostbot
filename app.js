@@ -2379,7 +2379,9 @@ var adam = {
 
 var lastfm = {
   sk: process.env.LASTFM_SESSIONKEY, //for last.fm user tt_discotheque
-  key: process.env.LASTFM_APIKEY,
+  // Scrobbling needs the API key and its shared secret (.env LASTFM_SECRET)
+  key: process.env.LASTFM_SECRET ? process.env.LASTFM_APIKEY : null,
+  secret: process.env.LASTFM_SECRET,
   songStart: null,
   duration: null,
   scrobble: function() {
@@ -2491,10 +2493,14 @@ var lastfm = {
       paramString += key + params[key];
     }
 
-    return calcMD5(paramString + "e036a3702ce27990966173ce591fe14c");
+    return calcMD5(paramString + lastfm.secret);
   }
 };
 
+
+if (process.env.LASTFM_APIKEY && !process.env.LASTFM_SECRET) {
+  console.log("last.fm: LASTFM_SECRET isn't set in .env, so plays won't be scrobbled.");
+}
 
 setTimeout(function() {
   ignoreChats = false;

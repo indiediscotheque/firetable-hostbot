@@ -20,7 +20,7 @@ Needs Node.js 18 or newer (22 recommended).
 | `SOUNDCLOUD_KEY` | SoundCloud client id |
 | `AUTODJ` | autopilot DJ, on unless set to `false` |
 | `TRACKBROKEN_MESSAGES` | `true` to tell a DJ in chat when their song is broken or blocked (off by default) |
-| `LASTFM_APIKEY` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm |
+| `LASTFM_APIKEY` / `LASTFM_SECRET` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm (`LASTFM_SECRET` is the API key's "Shared secret" at last.fm/api/accounts) |
 | `ADAM_URL` | optional: server that's sent each new song |
 | `SITE_URL` | the firetable-user site's address; the bot follows its seasons from there (see [seasons](#seasons)) |
 | `TZ` | time zone for the seasonal months, e.g. `America/Chicago` (default: the server's, usually UTC) |
