@@ -8,7 +8,7 @@
         ".read": true,
         ".write": "(auth.uid != null && (newData.child('chatID').exists() || root.child('users/' + auth.uid + '/hostbot').val() == true)&& ((!data.exists() || root.child('users/' + auth.uid + '/hostbot').val() == true || newData.child('hidden').val() == true) && root.child('banned/' + auth.uid).val() != true))",
         "chatID":{
-          ".validate": "newData.isString() && root.child('chatData/' + newData.val() ).exists() && !root.child('chatData/' + newData.val()+ '/feedID').exists()"
+          ".validate": "newData.isString() && newData.parent().parent().parent().child('chatData').child(newData.val()).exists() && (!newData.parent().parent().parent().child('chatData').child(newData.val()).child('feedID').exists() || newData.parent().parent().parent().child('chatData').child(newData.val()).child('feedID').val() == $comment)"
         },
         "hidden":{
              ".validate": "newData.isBoolean() && (auth.uid != null && (root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/mod').val() == true))"
@@ -46,7 +46,7 @@
           ".validate": "newData.isNumber()"
         },
         "feedID": {
-          ".validate": "root.child('chatFeed/' + newData.val() + '/chatID' ).val() == $comment"
+          ".validate": "newData.isString() && newData.parent().parent().parent().child('chatFeed').child(newData.val()).child('chatID').val() == $comment"
         },
         "reactions": {
           "$emoji": {
@@ -134,9 +134,10 @@
       }
     },
     "nameClaim": {
+      ".read": true,
       "$uname": {
         ".write": "auth.uid != null && root.child('banned/' + auth.uid).val() != true && (newData.val() == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true)",
-        ".validate": "(!data.exists() || root.child('users/' + data.val() + '/username').val() !== $uname) && $uname.matches(/^[0-9a-zA-Z_]{1,22}$/)"
+        ".validate": "newData.isString() && $uname.matches(/^[0-9a-z_]{1,22}$/) && (!data.exists() || data.val() == newData.val() || !root.child('users/' + data.val() + '/username').isString() || root.child('users/' + data.val() + '/username').val().toLowerCase() != $uname)"
       }
     },
     "thescreen": {
@@ -322,7 +323,7 @@
         },
         "username": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
-          ".validate": "newData.isString() && (root.child('nameClaim/' + newData.val() ).val() == auth.uid)"
+          ".validate": "newData.isString() && newData.val().matches(/^[0-9a-zA-Z_]{1,22}$/) && root.child('nameClaim/' + newData.val().toLowerCase()).val() == auth.uid"
         }
       }
     }

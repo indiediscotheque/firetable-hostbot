@@ -1,0 +1,255 @@
+// End-to-end tests: the real app.js against the database and auth emulators,
+// with fake YouTube / SoundCloud answers (fake-services.js). Run inside the
+// emulators (see README):
+//   cd test && npx firebase emulators:exec --only database,auth --project demo-ft "node bot.test.mjs"
+// Pass a scenario name to run just that one.
+import { spawn } from "child_process";
+import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const FAKES = fileURLToPath(new URL("./fake-services.js", import.meta.url));
+const DB = "http://127.0.0.1:9000", NS = "?ns=demo-ft", OWNER = { Authorization: "Bearer owner" };
+const get = async (p) => (await fetch(DB + p + ".json" + NS, { headers: OWNER })).json();
+const put = (p, v) => fetch(DB + p + ".json" + NS, { method: "PUT", headers: OWNER, body: JSON.stringify(v) });
+const post = async (p, v) => (await (await fetch(DB + p + ".json" + NS, { method: "POST", headers: OWNER, body: JSON.stringify(v) })).json()).name;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// the bot's account in the auth emulator, and the real rules on the test database
+const AUTH = "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:";
+const account = async (method) => (await (await fetch(AUTH + method + "?key=fake", { method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email: "bot@test.dev", password: "botpass123", returnSecureToken: true }) })).json()).localId;
+const BOT = (await account("signUp")) || (await account("signInWithPassword"));
+await fetch(DB + "/.settings/rules.json" + NS, { method: "PUT", headers: OWNER, body: readFileSync(new URL("../firebase-rules.json", import.meta.url)) });
+
+// someone says something in chat (written as the owner, like the site would)
+const say = async (uid, txt) => {
+  const id = await post("/chatData", { id: uid, name: uid, txt, time: { ".sv": "timestamp" } });
+  await post("/chatFeed", { chatID: id });
+};
+const ended = () => ({ type: 1, cid: "old", title: "Old", artist: "Old", started: Date.now() - 300000, duration: 100, djid: "dj2", djname: "dj2",
+  url: "https://www.youtube.com/watch?v=old", image: "https://img.example/o.jpg", postedDate: 1577836800000 });
+const base = (extra) => Object.assign({
+  users: {
+    [BOT]: { username: "hostbot", hostbot: true, status: true },
+    dj1: { username: "dj1", status: true }, dj2: { username: "dj2", status: true },
+    boss: { username: "boss", status: true, mod: true, supermod: true }
+  },
+  nameClaim: { hostbot: BOT, dj1: "dj1", dj2: "dj2", boss: "boss" },
+  table: [{ name: "dj1", id: "dj1", plays: 0 }, { name: "dj2", id: "dj2", plays: 0 }],
+  playdex: 1,
+  songToPlay: ended()
+}, extra);
+const nowPlaying = (djid, cid) => ({
+  table: [{ name: "dj1", id: "dj1", plays: 1 }, { name: "dj2", id: "dj2", plays: 0 }], playdex: 0,
+  songToPlay: { type: 1, cid, title: "Now", artist: "Now", started: Date.now(), duration: 600, djid, djname: djid,
+    url: "https://www.youtube.com/watch?v=" + cid, image: "https://img.example/n.jpg", postedDate: 1577836800000, key: "kx" }
+});
+const yt = (cid, name) => ({ type: 1, cid, name: name || "Art - " + cid });
+const sc = (cid, name) => ({ type: 2, cid, name: name || "SC - " + cid });
+
+function startBot(scenario, env = {}) {
+  const p = spawn(process.execPath, ["-r", FAKES, "app.js"], {
+    cwd: ROOT,
+    env: Object.assign({
+      PATH: process.env.PATH, HOME: process.env.HOME, SCENARIO: scenario, AUTODJ: "false", TRACKBROKEN_MESSAGES: "true",
+      FIRETABLE_USER: "bot@test.dev", FIRETABLE_PASS: "botpass123", FIREBASE_KEY: "fake", FIREBASE_AUTH: "demo-ft.firebaseapp.com",
+      FIREBASE_DB: "http://127.0.0.1:9000?ns=demo-ft", SOUNDCLOUD_KEY: "web-client-id"
+    }, env)
+  });
+  p.out = "";
+  p.stdout.on("data", (d) => (p.out += d));
+  p.stderr.on("data", (d) => (p.out += d));
+  return p;
+}
+const waitFor = async (p, text, ms = 10000) => {
+  const t = Date.now();
+  while (Date.now() - t < ms) { if (p.out.includes(text)) return true; await sleep(100); }
+  return false;
+};
+let failures = 0;
+const check = (ok, msg) => { console.log((ok ? "  PASS " : "  FAIL ") + msg); if (!ok) failures++; };
+const said = (st) => Object.values(st.chatData || {}).filter((c) => c.id === BOT).map((c) => c.txt);
+const flags = (list) => Object.values(list || {}).filter((t) => t.flagged).map((t) => t.cid + ":" + t.flagged.code);
+const healthy = async (p) => {
+  const st = await get("/");
+  const botMsgs = Object.values(st.chatData || {}).filter((c) => c.id === BOT);
+  check(p.exitCode === null && !/TypeError|ReferenceError|unhandled error|PERMISSION_DENIED|permission_denied/i.test(p.out), "bot still running, no errors or refused writes in its log");
+  check(botMsgs.every((c) => c.feedID && st.chatFeed && st.chatFeed[c.feedID] && st.chatFeed[c.feedID].chatID), "the bot's chat messages are linked to their feed entries");
+};
+
+const scenarios = {
+  async yt_outage() {
+    await put("/", base({ queues: { dj1: { k1: yt("yt1"), k2: yt("yt2") }, dj2: { s1: sc("sc1") } } }));
+    const p = startBot("yt_outage");
+    await sleep(8000);
+    const st = await get("/");
+    check(flags(st.queues.dj1).length === 0 && JSON.stringify(Object.keys(st.queues.dj1)) === '["k1","k2"]', "YouTube outage: nothing flagged, list untouched");
+    check(st.songToPlay.cid === "sc1" && st.songToPlay.djid === "dj2", "decks passed to the DJ with a SoundCloud track");
+    check(said(st).filter((t) => /can't reach YouTube/.test(t)).length === 1, "room told once");
+    await healthy(p);
+    return p;
+  },
+  async yt_deleted_and_bad_art() {
+    await put("/", base({ queues: { dj1: { k1: yt("dead1"), k2: yt("badart") }, dj2: { s1: yt("yt2") } } }));
+    const p = startBot("yt_deleted");
+    await sleep(3500);
+    const st = await get("/");
+    check(JSON.stringify(flags(st.queues.dj1)) === '["dead1:2"]' && st.songToPlay.cid === "badart" && st.table[0].plays === 1,
+      "deleted video flagged (code 2), next track plays, one play counted");
+    check(st.colors && st.colors.color === "#fff" && /couldn't read the artwork's colours/.test(p.out), "unreadable artwork: plain colours, logged, no crash");
+    await healthy(p);
+    return p;
+  },
+  async soundcloud_web_api() {
+    await put("/", base({ queues: { dj1: { k1: sc("sc404"), k2: sc("sc503") }, dj2: { s1: yt("yt1") } } }));
+    const p = startBot("sc");
+    await sleep(7000);
+    const st = await get("/");
+    check(/soundcloud: web API with SOUNDCLOUD_KEY/.test(p.out), "default: SoundCloud's web API with SOUNDCLOUD_KEY");
+    check(JSON.stringify(flags(st.queues.dj1)) === '["sc404:4"]', "404 flagged (code 4), 503 not");
+    check(st.songToPlay.cid === "yt1", "SoundCloud down: decks passed on");
+    await healthy(p);
+    return p;
+  },
+  async soundcloud_official_api() {
+    await put("/", base({ queues: { dj1: { k1: sc("scblocked"), k2: sc("sc404"), k3: sc("sc1") } } }));
+    const p = startBot("sc_official", { SOUNDCLOUD_CLIENT_ID: "id", SOUNDCLOUD_CLIENT_SECRET: "secret" });
+    await sleep(4000);
+    const st = await get("/");
+    check(/soundcloud: official API/.test(p.out), "with client id + secret: the official API");
+    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["sc404:4","scblocked:4"]' && st.songToPlay.cid === "sc1", "blocked and missing tracks flagged, a playable one plays");
+    await healthy(p);
+    return p;
+  },
+  async replay_and_skips() {
+    await put("/", base(Object.assign(nowPlaying("dj1", "yt1"), { queues: { dj1: { k1: yt("yt3") }, dj2: { s1: yt("yt2") } } })));
+    await say("boss", "!skip"); // sent before the restart
+    const before = await get("/songToPlay");
+    const p = startBot("skips", { YT_DELAY: "800" });
+    check(await waitFor(p, "Listening now."), "bot says Listening now.");
+    await sleep(1500);
+    check((await get("/songToPlay")).started === before.started, "an old !skip isn't re-run after a restart");
+    await Promise.all([say("boss", "!skip"), say("boss", "!skip"), say("boss", "!skip")]);
+    await sleep(3000);
+    const st = await get("/");
+    check(Object.keys(st.songHistory || {}).length === 1 && st.songToPlay.djid === "dj2", "three quick skips skip one song");
+    await healthy(p);
+    return p;
+  },
+  async commands() {
+    await put("/", base(Object.assign(nowPlaying("dj1", "yt1"), { queues: { dj1: { k1: yt("yt3") }, dj2: { s1: yt("yt2") } } })));
+    const p = startBot("commands");
+    await waitFor(p, "Listening now.");
+    await say("dj1", "!fixtags Someone - Else");
+    await say("boss", "!fixtags Art - Fixed Title");
+    await say("ghost", "!skip"); // no profile
+    await say("dj2", "!suggest");
+    await say("dj2", "!suggest " + "x".repeat(81));
+    await say("dj2", "!suggest 90s one-hit wonders");
+    await sleep(4000); // the vote ends (60 s, sped up)
+    await say("dj2", "!suggest another one");
+    await sleep(1500);
+    const st = await get("/");
+    const s = said(st);
+    check(s.some((t) => /Only mods can fix tags, dj1/.test(t)) && st.globalTracks && st.globalTracks["1yt1"] && st.globalTracks["1yt1"].title === "Fixed Title",
+      "!fixtags: refused for a member, works for a mod");
+    check(s.some((t) => /Suggest a theme like/.test(t)) && s.some((t) => /under 80 characters/.test(t)), "!suggest: needs a theme, 80 characters at most");
+    check(s.filter((t) => /@everyone/.test(t)).length === 1 && s.some((t) => /suggest another theme in 15 minute/.test(t)), "!suggest: one vote, then a 15-minute wait");
+    await healthy(p);
+    return p;
+  },
+  async names() {
+    await put("/", base({
+      users: Object.assign(base().users, {
+        mx: { username: "MiXed", joined: 5 }, t1: { username: "Twin", joined: 1 }, t2: { username: "twin", joined: 2 }
+      }),
+      nameClaim: Object.assign(base().nameClaim, { MiXed: "mx" }),
+      queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") } }
+    }));
+    const p = startBot("names");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    await say("boss", "!remove DJ2");
+    await sleep(1500);
+    const st = await get("/");
+    check(st.nameClaim.mixed === "mx" && st.nameClaim.MiXed === "mx", "existing names get a lowercase claim (the old one stays)");
+    check(st.nameClaim.twin === "t1" && /Twin and twin differ only in case/.test(p.out), "two names differing only in case: the earlier member gets it, logged");
+    check(!(st.table || []).some((d) => d.id === "dj2"), "!remove DJ2 finds dj2 (any case)");
+    await healthy(p);
+    return p;
+  },
+  async trimming_and_shallow_reads() {
+    const history = {};
+    for (let i = 0; i < 505; i++) history["-0" + String(i).padStart(4, "0")] = { artist: "A", title: "T" + i, cid: "c" + i, type: 1, djid: "dj1", dj: "dj1" };
+    history["-0h1"] = { artist: "Flag", title: "Me", cid: "yt9", type: 1, djid: "dj1", dj: "dj1" };
+    const old = Date.now() - 40 * 24 * 3600 * 1000;
+    await put("/", base({
+      songHistory: history,
+      queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") } },
+      playlists: { dj1: { pl1: { name: "one", list: { t1: yt("yt9") } }, pl2: { name: "two", list: { t2: yt("other") } } } },
+      mentions: { dj1: { m1: { time: old, txt: "old" }, m2: { time: Date.now(), txt: "new" } }, dj2: { m3: { time: old, txt: "old" } } }
+    }));
+    const p = startBot("trim");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    await say("boss", "!flagplay -0h1 broken");
+    await sleep(2000);
+    const st = await get("/");
+    const keys = Object.keys(st.songHistory).sort();
+    check(keys.length === 500 && keys[0] === "-00007", "Recent kept to 500, oldest removed first (" + keys.length + ")");
+    check(st.playlists.dj1.pl1.list.t1.flagged && st.playlists.dj1.pl1.list.t1.flagged.code === 8 && !st.playlists.dj1.pl2.list.t2.flagged,
+      "!flagplay flags the track in the DJ's playlists");
+    check(!/shallow read .* failed/.test(p.out), "playlists and mentions listed without downloading them");
+    check(st.mentions.dj1 && st.mentions.dj1.m2 && !st.mentions.dj1.m1 && !(st.mentions.dj2 && st.mentions.dj2.m3), "mentions older than 30 days pruned, newer kept");
+    await healthy(p);
+    return p;
+  },
+  async lookup_never_answers() {
+    await put("/", base({ queues: { dj1: { k1: yt("hang1") }, dj2: { s1: sc("sc1") } } }));
+    const p = startBot("hang");
+    await sleep(12000);
+    const st = await get("/");
+    check(st.songToPlay.cid === "sc1" && flags(st.queues.dj1).length === 0 && /no answer in 30 seconds/.test(p.out),
+      "no answer: gives up after 30 s, nothing flagged, decks passed on");
+    await healthy(p);
+    return p;
+  },
+  async no_dj() {
+    await put("/", base({ table: null, playdex: 0, songToPlay: { type: 1, cid: 0, title: "Nothing Is Playing", started: Date.now(), duration: 0, image: "img/idlogo.png", artist: "x" } }));
+    const p = startBot("no_dj");
+    await waitFor(p, "Listening now.");
+    await say("dj1", "!skip");
+    await say("boss", "!printcard");
+    await say("boss", "!flag broken");
+    await sleep(1500);
+    await say("dj2", "!theme");
+    await sleep(1500);
+    const s = said(await get("/"));
+    check(s.some((t) => /no theme/.test(t)) && s.some((t) => /no card to print/.test(t)), "commands with nobody DJing don't crash the bot");
+    await healthy(p);
+    return p;
+  },
+  async wrong_password() {
+    await put("/", base({}));
+    const p = startBot("login", { FIRETABLE_PASS: "wrong" });
+    await sleep(5000);
+    check(p.exitCode === null && (p.out.match(/couldn't sign in/g) || []).length >= 2, "wrong password: keeps retrying and says so");
+    return p;
+  }
+};
+
+const only = process.argv[2];
+for (const [name, run] of Object.entries(scenarios)) {
+  if (only && name !== only) continue;
+  console.log("\n== " + name);
+  let p;
+  try { p = await run(); } catch (e) { check(false, "scenario threw: " + e.stack); }
+  if (p) {
+    if (process.env.SHOW_LOG) console.log(p.out);
+    p.kill();
+    await sleep(400);
+  }
+}
+console.log(failures ? "\n" + failures + " BOT TEST(S) FAILED" : "\nbot: all passed");
+process.exit(failures ? 1 : 0);

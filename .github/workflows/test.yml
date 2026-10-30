@@ -1,0 +1,61 @@
+# Checks every push and pull request:
+#   - app.js, the auto-update script and firebase-rules.json parse
+#   - the database rules refuse what they should and allow what the site and
+#     bot write (Firebase emulator)
+#   - the bot itself, against the emulators with fake YouTube / SoundCloud
+#     answers: outages, broken tracks, skips, commands, names, restarts
+#   - the auto-update script: updates, rollbacks and dependency installs
+# Run the same on your computer (needs Java 21 for the emulators):
+#   npm ci && cd test && npm ci && npm test
+# Nothing in test/ is installed on the bot server.
+
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            test/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          (cd test && npm ci --no-audit --no-fund)
+
+      - name: Everything parses
+        run: |
+          node --check app.js
+          bash -n scripts/auto-update.sh
+          node -e 'JSON.parse(require("fs").readFileSync("firebase-rules.json", "utf8")); console.log("firebase-rules.json is valid JSON")'
+
+      # The emulators need Java 21, which the runner has installed
+      - name: Database rules
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64" PATH="$JAVA_HOME_21_X64/bin:$PATH"
+          cd test && npm run test:rules
+
+      - name: The bot in the emulators
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64" PATH="$JAVA_HOME_21_X64/bin:$PATH"
+          cd test && npm run test:bot
+
+      - name: Auto-update script
+        run: cd test && npm run test:auto-update
