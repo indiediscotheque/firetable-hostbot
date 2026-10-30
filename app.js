@@ -208,11 +208,13 @@ var talk = function(txt, card) {
 var updateTable = function() {
   var table2 = firebase.database().ref("table");
   table2.set(table);
+  autoDJ.check();
 };
 
 var updateWaitlist = function() {
   var waitlist2 = firebase.database().ref("waitlist");
   waitlist2.set(queue);
+  autoDJ.check();
 };
 
 var updateLimit = function() {
@@ -356,6 +358,7 @@ var updateThings = function() {
     playdex: playDex,
     playlimit: limitHere
   });
+  autoDJ.check();
 };
 
 // Seat a new DJ at the back of the line: they play after everyone already on
@@ -376,6 +379,9 @@ var seatDJ = function(pson) {
 var nextSong = function(noPrevPlay) {
   //we need to remove this song that just played to the bottom of dj's queue
   playDex++; //shift the spotlight to the right
+  if (theDJ && theDJ.id == botid && theDJ.removeAfter && autoDJ.autoBus) {
+    talk(":bus: Catching the bus. The decks are yours!");
+  }
   if (queue.length && theDJ) {
     if (theDJ.removeAfter) {
       removePerson(theDJ.id);
@@ -466,6 +472,7 @@ var startSong = function(noPrevPlay) {
     clearTimeout(songtimer);
     songtimer = null;
   }
+  if (!table.length) autoDJ.fillEmptyTable();
   if (!table.length) {
     console.log("no length");
     var s2p = firebase.database().ref("songToPlay");
@@ -492,45 +499,6 @@ var startSong = function(noPrevPlay) {
     colref.set(thecolors);
     colors = thecolors;
     updateThings();
-    if (process.env.AUTODJ) {
-      var namebo2 = botid;
-      if (users[botid]) {
-        if (users[botid].username) namebo2 = users[botid].username;
-      }
-      var check = addCheck(botid);
-      if (!check) {
-        var pson = {
-          name: namebo2,
-          id: botid,
-          plays: 0
-        };
-        if (table.length >= 4) {
-          // table full. time to be on the waitlist now k
-          queue.push(pson);
-          talk(namebo2 + " (that's me) added to waitlist. Length is now " + queue.length);
-          updateWaitlist();
-          updateLimit();
-        } else {
-          //table has room. add to table directly
-          if (table.length == 0) {
-            table.push(pson);
-            console.log(table);
-            playDex = 0;
-            startSong();
-          } else {
-            seatDJ(pson);
-            console.log(table);
-            updateThings();
-          }
-        }
-      } else {
-        if (check == 1) {
-          talk("I am already in the waitlist.");
-        } else if (check == 2) {
-          talk("I am already on deck.");
-        }
-      }
-    }
     return false;
   };
   maxindex = table.length - 1;
@@ -1024,6 +992,7 @@ end sc check
 
     } else {
       console.log("no songs in queue... remove this DJ");
+      if (theDJ.id == botid) autoDJ.crateEmpty();
       removePerson(theDJ.id);
       nextSong(true);
       console.log("ok?")
@@ -1235,10 +1204,182 @@ var addCheck = function(id, hereCheck) {
   return false;
 };
 
+// ─── Autopilot DJ ────────────────────────────────────────────────────────────
+// The bot keeps the music going: it takes the decks whenever no one is DJing,
+// and once 3 people are DJing it catches the bus (steps down after its next
+// song, never mid-song). If the count drops below 3 before it leaves, it stays.
+//
+// Overrides: !upbot (stay on), !downbot (stay off), and a mod's !add, !remove,
+// !removeafter or !dontremove aimed at the bot. An override lasts until the
+// next trigger (the decks emptying, or the DJ count reaching 3); then the
+// autopilot takes over again. !autodj shows the state; mods can say
+// !autodj auto to end an override now. AUTODJ=false turns the autopilot off.
+var AUTODJ_CROWD = 3; // human DJs on deck that send the bot home
+var AUTODJ_EMPTY_CRATE_WAIT = 15 * 60000; // bot's playlist was empty: wait this long
+var autoDJ = {
+  enabled: !/^(false|0|off|no)$/i.test(String(process.env.AUTODJ || "true").trim()),
+  mode: "auto", // "auto", "up" (stay on) or "down" (stay off)
+  autoBus: false, // the autopilot set the bot's bus, so it may cancel it
+  lastHumans: null, // human DJs on deck at the last check (null: no baseline yet)
+  emptyUntil: 0,
+  loaded: false,
+  pending: false,
+
+  humans: function() {
+    var n = 0;
+    for (var i = 0; i < table.length; i++) {
+      if (table[i] && table[i].id != botid) n++;
+    }
+    return n;
+  },
+  botName: function() {
+    return (users && users[botid] && users[botid].username) || botid;
+  },
+  botSeat: function() {
+    for (var i = 0; i < table.length; i++) {
+      if (table[i].id == botid) return table[i];
+    }
+    return null;
+  },
+  save: function() {
+    firebase.database().ref("autodj").set({
+      mode: autoDJ.mode,
+      autoBus: autoDJ.autoBus
+    }).catch(function(e) {
+      console.log("autodj save failed: " + e.message);
+    });
+  },
+  setMode: function(mode) {
+    if (autoDJ.mode === mode) return;
+    autoDJ.mode = mode;
+    console.log("autodj mode: " + mode);
+    autoDJ.save();
+  },
+  // A command overrides the autopilot. Triggers are measured from now.
+  override: function(mode) {
+    autoDJ.lastHumans = autoDJ.humans();
+    autoDJ.autoBus = false;
+    autoDJ.mode = mode;
+    console.log("autodj mode: " + mode);
+    autoDJ.save();
+  },
+  // Track the human DJ count. A trigger (decks emptied, or the count reached
+  // 3) ends any override.
+  observe: function() {
+    var humans = autoDJ.humans();
+    var prev = autoDJ.lastHumans;
+    autoDJ.lastHumans = humans;
+    if (prev === null || prev === humans || autoDJ.mode === "auto") return humans;
+    if (humans === 0 || (prev < AUTODJ_CROWD && humans >= AUTODJ_CROWD)) autoDJ.setMode("auto");
+    return humans;
+  },
+  ready: function() {
+    return autoDJ.enabled && autoDJ.loaded && started && botid && users && users[botid];
+  },
+  shouldJoin: function(humans) {
+    return autoDJ.mode === "auto" && humans === 0 && !addCheck(botid) && Date.now() >= autoDJ.emptyUntil;
+  },
+  seatBot: function() {
+    table.push({ name: autoDJ.botName(), id: botid, plays: 0 });
+    playDex = 0;
+    talk("No one's on the decks, so I'll keep the music going. Hop on anytime!");
+  },
+  // startSong() found the deck empty: seat the bot so it plays next, no gap.
+  fillEmptyTable: function() {
+    if (!autoDJ.ready() || table.length) return false;
+    if (!autoDJ.shouldJoin(autoDJ.observe())) return false;
+    autoDJ.seatBot();
+    return true;
+  },
+  // Run after the table or waitlist changes, once per tick.
+  check: function() {
+    if (autoDJ.pending) return;
+    autoDJ.pending = true;
+    setImmediate(function() {
+      autoDJ.pending = false;
+      autoDJ.run();
+    });
+  },
+  run: function() {
+    if (!autoDJ.ready()) return;
+    var humans = autoDJ.observe();
+    var seat = autoDJ.botSeat();
+    if (!seat && autoDJ.autoBus) {
+      autoDJ.autoBus = false;
+      autoDJ.save();
+    }
+    if (autoDJ.mode !== "auto") return;
+    if (autoDJ.shouldJoin(humans)) {
+      if (!table.length) {
+        autoDJ.seatBot();
+        startSong(true);
+      }
+    } else if (humans >= AUTODJ_CROWD) {
+      autoDJ.catchBus(seat);
+    } else if (seat && autoDJ.autoBus && seat.removeAfter) {
+      autoDJ.stayOn(seat, humans);
+    }
+  },
+  catchBus: function(seat) {
+    if (!seat) {
+      // waiting in line: no song to finish, just step out
+      for (var i = 0; i < queue.length; i++) {
+        if (queue[i].id == botid) {
+          queue.splice(i, 1);
+          updateWaitlist();
+          updateLimit();
+          return;
+        }
+      }
+      return;
+    }
+    if (seat.removeAfter) return; // already leaving
+    var playing = theDJ && theDJ.id == botid;
+    seat.removeAfter = true;
+    if (playing) theDJ.removeAfter = true;
+    autoDJ.autoBus = true;
+    autoDJ.save();
+    talk(AUTODJ_CROWD + " DJs on deck! I'll catch the bus after " + (playing ? "this song." : "my next song."));
+    updateTable();
+  },
+  stayOn: function(seat, humans) {
+    seat.removeAfter = false;
+    if (theDJ && theDJ.id == botid) theDJ.removeAfter = false;
+    autoDJ.autoBus = false;
+    autoDJ.save();
+    talk("Down to " + humans + " DJ" + (humans == 1 ? "" : "s") + ", so I'll stay on after all.");
+    updateTable();
+  },
+  // The bot's DJ playlist has nothing playable: stop trying for a while.
+  crateEmpty: function() {
+    autoDJ.emptyUntil = Date.now() + AUTODJ_EMPTY_CRATE_WAIT;
+    talk("My DJ playlist is empty, so I can't keep the music going. Add some tracks to it and I'll be back.");
+    setTimeout(autoDJ.check, AUTODJ_EMPTY_CRATE_WAIT + 1000);
+  },
+  status: function() {
+    if (!autoDJ.enabled) return "Autopilot is off.";
+    if (autoDJ.mode === "up") return "Autopilot is paused: I'm staying on the decks until they empty or " + AUTODJ_CROWD + " people are DJing.";
+    if (autoDJ.mode === "down") return "Autopilot is paused: I'm staying off the decks until they empty or " + AUTODJ_CROWD + " people are DJing.";
+    return "Autopilot is on: I DJ when no one else is, and catch the bus once " + AUTODJ_CROWD + " people are DJing.";
+  }
+};
+
+firebase.database().ref("autodj").once("value").then(function(snap) {
+  var saved = snap.val() || {};
+  if (saved.mode === "up" || saved.mode === "down") autoDJ.mode = saved.mode;
+  autoDJ.autoBus = !!saved.autoBus;
+}).catch(function(e) {
+  console.log("autodj load failed: " + e.message);
+}).then(function() {
+  autoDJ.loaded = true;
+  autoDJ.check();
+});
+
 var ref2 = firebase.database().ref("users");
 ref2.on('value', function(dataSnapshot) {
   var okdata = dataSnapshot.val();
   users = okdata;
+  autoDJ.check(); // the bot needs its own profile before it can sit down
   if (botid) {
     if (!okdata[botid].status) {
       var statusref = firebase.database().ref("users/" + botid + "/status");
@@ -1419,6 +1560,8 @@ var setBus = function(target, on, byId) {
     talk(target.self ? target.name + ", you aren't even DJing..." : target.name + " isn't DJing.");
     return;
   }
+  // A mod sending the bot home (or keeping it) overrides the autopilot.
+  if (target.id == botid) autoDJ.override(on ? "down" : "up");
   var list = check == 1 ? queue : table;
   for (var i = 0; i < list.length; i++) {
     if (list[i].id == target.id) {
@@ -1549,37 +1692,6 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
                 updateThings();
               }
             }
-
-            if (process.env.AUTODJ) {
-              if (addCheck(botid) && table.length > 3) {
-                if (addCheck(botid) == 1) {
-                  //user in waitlist
-                  for (var i = 0; i < queue.length; i++) {
-                    if (queue[i].id == botid) {
-                      queue[i].removeAfter = true;
-                      updateWaitlist();
-                      break;
-                    }
-                  }
-                } else if (addCheck(botid) == 2) {
-                  //user on deck
-                  if (botid == theDJ.id) {
-                    // user is current dj
-                    theDJ.removeAfter = true;
-                  } else {
-                    // user is not current dj
-                  }
-                  for (var i = 0; i < table.length; i++) {
-                    if (table[i].id == botid) {
-                      table[i].removeAfter = true
-                      updateTable();
-                      break;
-                    }
-                  }
-                }
-              }
-            }
-
           } else {
             if (check == 1) {
               talk("You are already in the waitlist.");
@@ -1651,13 +1763,19 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "grab") {
           if (cardForGrabs) giveCard(chatData.id, namebo);
         } else if (command == "upbot") {
+          // Stay on the decks (even alone with a crowd) until the next
+          // autopilot trigger.
           if (users[chatData.id].mod || users[chatData.id].supermod) {
-            var namebo2 = botid;
-            if (users[botid]) {
-              if (users[botid].username) namebo2 = users[botid].username;
-            }
+            var namebo2 = autoDJ.botName();
             var check = addCheck(botid);
-            if (!check) {
+            var seat = autoDJ.botSeat();
+            autoDJ.override("up");
+            if (seat && seat.removeAfter) {
+              seat.removeAfter = false;
+              if (theDJ && theDJ.id == botid) theDJ.removeAfter = false;
+              talk("OK! I'll stay on the decks.");
+              updateTable();
+            } else if (!check) {
               var pson = {
                 name: namebo2,
                 id: botid,
@@ -1674,32 +1792,33 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
                 talk("OK! I will DJ.");
                 if (table.length == 0) {
                   table.push(pson);
-                  console.log(table);
                   playDex = 0;
                   startSong();
                 } else {
                   seatDJ(pson);
-                  console.log(table);
                   updateThings();
                 }
               }
+            } else if (check == 1) {
+              talk("I am already in the waitlist.");
             } else {
-              if (check == 1) {
-                talk("I am already in the waitlist.");
-              } else if (check == 2) {
-                talk("I am already on deck.");
-              }
+              talk("I am already on deck.");
             }
-
           }
         } else if (command == "downbot") {
+          // Leave now and stay off the decks until the next autopilot trigger.
           if (users[chatData.id].mod || users[chatData.id].supermod) {
-            var removed = removeMe(botid);
-            if (!removed) {
-              talk(namebo + ", I am not even DJing...");
-            } else {
-              talk("OK! I will not DJ.");
-            }
+            autoDJ.override("down");
+            removeMe(botid);
+            talk("OK! I will not DJ.");
+          }
+        } else if (command == "autodj") {
+          if ((args || "").trim().toLowerCase() == "auto" && (users[chatData.id].mod || users[chatData.id].supermod)) {
+            autoDJ.override("auto");
+            talk("OK! Back on autopilot.");
+            autoDJ.check();
+          } else {
+            talk(autoDJ.status());
           }
         } else if (command == "screen" || command == "screendown") {
           if (users[chatData.id].mod || users[chatData.id].supermod) {
@@ -1824,6 +1943,7 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "remove") {
           if (users[chatData.id].mod || users[chatData.id].supermod) {
             var prsnToRemove = uidLookup(args);
+            if (prsnToRemove == botid) autoDJ.override("down");
             if (prsnToRemove) {
               var removed = removeMe(prsnToRemove);
               if (!removed) talk("Can not remove " + args + " because they are not on the table or in the waitlist. Thanks.");
@@ -1834,6 +1954,7 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
         } else if (command == "add") {
           if (users[chatData.id].mod || users[chatData.id].supermod) {
             var prsnToAdd = uidLookup(args);
+            if (prsnToAdd == botid) autoDJ.override("up");
             if (prsnToAdd) {
               var check = addCheck(prsnToAdd, true);
               if (!check) {
@@ -1862,37 +1983,6 @@ ref.on('child_added', function(childSnapshot, prevChildKey) {
                     updateThings();
                   }
                 }
-
-                if (process.env.AUTODJ) {
-                  if (addCheck(botid) && table.length > 3) {
-                    if (addCheck(botid) == 1) {
-                      //user in waitlist
-                      for (var i = 0; i < queue.length; i++) {
-                        if (queue[i].id == botid) {
-                          queue[i].removeAfter = true;
-                          updateWaitlist();
-                          break;
-                        }
-                      }
-                    } else if (addCheck(botid) == 2) {
-                      //user on deck
-                      if (botid == theDJ.id) {
-                        // user is current dj
-                        theDJ.removeAfter = true;
-                      } else {
-                        // user is not current dj
-                      }
-                      for (var i = 0; i < table.length; i++) {
-                        if (table[i].id == botid) {
-                          table[i].removeAfter = true
-                          updateTable();
-                          break;
-                        }
-                      }
-                    }
-                  }
-                }
-
               } else {
                 if (check == 1) {
                   talk(users[prsnToAdd].username + " is already in the waitlist.");
