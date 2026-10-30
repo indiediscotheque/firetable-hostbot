@@ -68,6 +68,10 @@ function cardAvatarSet() {
 // rest of the year supermods switch them with !lights, !lightson, !lightsoff.
 // LIGHTS_MONTHS (e.g. "12" or "11,12") should match config.js lightsMonths.
 var lightsMonths = (process.env.LIGHTS_MONTHS || "12").split(",").map(Number);
+
+// Chat notices when a DJ's song is broken/blocked. .env values are strings,
+// so parse "true"/"1"/"on"/"yes" instead of comparing to the boolean true.
+var trackBrokenMessages = /^(true|1|on|yes)$/i.test(String(process.env.TRACKBROKEN_MESSAGES || "").trim());
 var lightsOn = false;
 firebase.database().ref("lights").on("value", function(snapshot) {
   lightsOn = !!snapshot.val();
@@ -549,7 +553,7 @@ var startSong = function(noPrevPlay) {
               .catch(function(error) {
                 console.log("Song Remove failed: " + error.message);
               });
-            if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+            if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
             setTimeout(function() {
               startSong(true); //try again with SAME DJ
             }, 3000);
@@ -569,7 +573,7 @@ var startSong = function(noPrevPlay) {
                 .catch(function(error) {
                   console.log("Song Remove failed: " + error.message);
                 });
-              if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+              if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -588,7 +592,7 @@ var startSong = function(noPrevPlay) {
                   console.log("Song Remove failed: " + error.message);
                 });
               if (theDJ.id !== botid)
-                if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is blocked in the US. Letting you play whatever is next in your queue instead.");
+                if ((theDJ.id !== botid) && trackBrokenMessages) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is blocked in the US. Letting you play whatever is next in your queue instead.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -606,7 +610,7 @@ var startSong = function(noPrevPlay) {
                 .catch(function(error) {
                   console.log("Song Remove failed: " + error.message);
                 });
-              if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is age restricted and can't be played outside of Youtube.com. Letting you play whatever is next in your queue instead.");
+              if ((theDJ.id !== botid) && trackBrokenMessages) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is age restricted and can't be played outside of Youtube.com. Letting you play whatever is next in your queue instead.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -938,7 +942,7 @@ begin sc check
                   .catch(function(error) {
                     console.log("Song Remove failed: " + error.message);
                   });
-                if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+                if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
                 setTimeout(function() {
                   startSong(true); //try again with SAME DJ
                 }, 3000);
@@ -958,7 +962,7 @@ begin sc check
                 .catch(function(error) {
                   console.log("Song Remove failed: " + error.message);
                 });
-              if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+              if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
               setTimeout(function() {
                 startSong(true); //try again with SAME DJ
               }, 3000);
@@ -979,7 +983,7 @@ begin sc check
               .catch(function(error) {
                 console.log("Song Remove failed: " + error.message);
               });
-            if ((theDJ.id !== botid) && (process.env.TRACKBROKEN_MESSAGES == true)) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... There might also be a Soundcloud api issue right now...");
+            if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... There might also be a Soundcloud api issue right now...");
             setTimeout(function() {
               startSong(true); //try again with SAME DJ
             }, 3000);
