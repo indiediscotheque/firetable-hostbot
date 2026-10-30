@@ -17,7 +17,8 @@ Needs Node.js 18 or newer (22 recommended).
 | `FIRETABLE_USER` / `FIRETABLE_PASS` | the bot's firetable login |
 | `FIREBASE_KEY` / `FIREBASE_AUTH` / `FIREBASE_DB` | Firebase console → ⚙️ Project settings → General → Your apps |
 | `YOUTUBE_KEY` | Google Cloud API key with YouTube Data API v3 enabled |
-| `SOUNDCLOUD_KEY` | SoundCloud client id |
+| `SOUNDCLOUD_KEY` | SoundCloud web client id, for checking SoundCloud tracks (see [soundcloud](#soundcloud); keep it as is) |
+| `SOUNDCLOUD_CLIENT_ID` / `SOUNDCLOUD_CLIENT_SECRET` | optional, leave unset: a registered SoundCloud app, to use SoundCloud's official API instead (see [soundcloud](#soundcloud)) |
 | `AUTODJ` | autopilot DJ, on unless set to `false` |
 | `TRACKBROKEN_MESSAGES` | `true` to tell a DJ in chat when their song is broken or blocked (off by default) |
 | `LASTFM_APIKEY` / `LASTFM_SECRET` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm (`LASTFM_SECRET` is the API key's "Shared secret" at last.fm/api/accounts) |
@@ -134,7 +135,8 @@ pm2 start app.js --name hostbot && pm2 save
 
 ## commands added recently
 - `!removeafter` / `!dontremoveme`: step down after your next song, or cancel it. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
-- `!fixtags artist - title`: correct the playing song's tags (only the first " - " splits artist from title).
+- `!fixtags artist - title` (mods): correct the playing song's tags (only the first " - " splits artist from title).
+- `!suggest <theme>`: start a theme vote (pings @everyone). One vote at a time, up to 80 characters, and one suggestion per person every 15 minutes (mods are exempt).
 - `!flagplay <play id> <reason>` (mods): flag a play from Recent in the DJ's queue and all of their playlists. Reasons: `broken`, `quality`, `offtheme`.
 - `!bpm`: say the playing song's tempo. The DJ or a mod can set it with `!bpm 128`.
 - `!autodj`: say what the autopilot DJ is doing; mods can add `auto` to end an `!upbot` / `!downbot` override (see below).
@@ -151,6 +153,27 @@ The bot keeps the music going. When no one is DJing it takes the decks and plays
 ## seasons
 The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The bot parses the settings out of those files and never runs them, so the site can't run code on the bot; values that aren't plain data (an expression or a function call) are skipped. The log shows `site seasons: …` at startup and whenever they change. If the site can't be reached, or a file has a syntax error, the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
 
+## soundcloud
+**How SoundCloud works in the room today (no paid service):**
+- Playback on the site uses SoundCloud's embeddable player, which needs no key.
+- Before a SoundCloud track plays, the bot checks it still exists and gets its length, title and artwork from SoundCloud's own web API (`api-v2`, the one soundcloud.com uses) with the client id in `SOUNDCLOUD_KEY`. That needs no registered app.
+- On the site, pasted SoundCloud links and playlist imports go through the older link resolver; keyword search asks for a link instead (it needs the official API, below).
+
+**Keep it as it is.** SoundCloud's official API only answers requests signed with a registered app's client id *and* client secret, and this room doesn't have one (the site's `api/soundcloud.php` answers `501 not configured`). Switching the bot to the official API without them would make every SoundCloud check fail, so SoundCloud tracks would never play. Leave `SOUNDCLOUD_KEY` set and `SOUNDCLOUD_CLIENT_ID` / `SOUNDCLOUD_CLIENT_SECRET` unset; the log says `soundcloud: web API with SOUNDCLOUD_KEY` at startup.
+
+**The risk, and what to do.** `api-v2` isn't SoundCloud's public API, so they can change it or stop accepting that client id without notice. If that happens, the log shows `couldn't check the track on SoundCloud (not flagging it): HTTP 401` (or 403), and the room is told once that SoundCloud can't be reached. No tracks are flagged; the bot passes the decks so YouTube tracks keep playing. To fix it, put a working client id in `SOUNDCLOUD_KEY` in `.env`, then `pm2 restart hostbot`.
+
+**Adding an official SoundCloud key later** (if the room gets a registered SoundCloud app; SoundCloud reviews app requests, and depending on their current terms that may mean a paid plan):
+1. Register the app at https://soundcloud.com/you/apps and note its **client ID** and **client secret**.
+2. The site: on the server, copy `api/soundcloud-config.php.example` to `api/soundcloud-config.php` and fill in both values (details in the firetable-user README). Check `https://<your site>/api/soundcloud.php?action=tracks&ids=13158665` answers with JSON, not `501`. Keyword search on the site starts working.
+3. The bot: add both values to `.env`, then `pm2 restart hostbot`:
+   ```
+   SOUNDCLOUD_CLIENT_ID="your client id"
+   SOUNDCLOUD_CLIENT_SECRET="your client secret"
+   ```
+   The log says `soundcloud: official API` at startup. The bot gets an OAuth token and reuses it until it expires (SoundCloud limits how often new ones can be made). Tracks the official API marks as blocked are flagged like deleted ones.
+4. Keep `SOUNDCLOUD_KEY` in `.env`: removing the two new lines and restarting goes straight back to today's setup.
+
 ## timing
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.
 
@@ -158,4 +181,15 @@ Song start times (`songToPlay/started`, and the "when" of each play) use the dat
 When a song starts, the bot looks up its BPM on Deezer's public API (no key needed). Results, including "not found", are cached per track in `bpm/`, and the playing song's tempo is published as `songBpm`. A tempo set with `!bpm` is never overwritten by a lookup.
 
 ## database rules
-`firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish. Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
+`firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
+
+Usernames are unique whatever their case ("Boss" and "boss" are one name): names are claimed in lowercase under `nameClaim/`. The bot gives every existing name its lowercase claim when it starts (and every 6 hours); if two older accounts differ only in case, the earlier member keeps the claim and the log says so.
+
+Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working.
+
+## tests
+`.github/workflows/test.yml` runs on every push and pull request: the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud answers (outages, broken tracks, skips, commands, names, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+```
+npm ci && cd test && npm ci && npm test
+```
+Nothing in `test/` is installed on the bot server.

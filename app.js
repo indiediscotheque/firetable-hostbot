@@ -339,21 +339,68 @@ firebase.auth().onAuthStateChanged(function(user) {
   }
 });
 
+// A user id from a name ("@name" works too), matching the exact name first,
+// then in any case ("boss" finds "Boss"), then a user id itself.
 var uidLookup = function(name) {
-  var match = false;
-  var usrs = users;
-  for (var key in usrs) {
-    if (usrs.hasOwnProperty(key)) {
-      if (users[key].username) {
-        if (users[key].username == name) {
-          match = key;
-        }
-      }
-    }
+  name = String(name || "").trim().replace(/^@/, "");
+  if (!name) return false;
+  var lower = name.toLowerCase();
+  var exact = false;
+  var anyCase = false;
+  for (var key in users) {
+    if (!users.hasOwnProperty(key) || !users[key] || typeof users[key].username !== "string") continue;
+    if (users[key].username == name) exact = key;
+    else if (!anyCase && users[key].username.toLowerCase() == lower) anyCase = key;
   }
-  if (!match && users[name]) match = name;
-  return match;
-}
+  return exact || anyCase || (users[name] ? name : false);
+};
+
+// Usernames are unique whatever their case, through lowercase name claims
+// (nameClaim/<lowercase name> = uid). This gives every existing username its
+// lowercase claim; names claimed before, in their original case, keep working.
+// If two older accounts differ only in case, the earlier member gets the claim
+// and the log says so. Runs once the bot is ready and every 6 hours; it writes
+// nothing once everyone has a claim.
+var nameClashLogged = {};
+var claimLowercaseNames = function() {
+  var db = firebase.database();
+  db.ref("nameClaim").once("value").then(function(snap) {
+    var claims = snap.val() || {};
+    var pending = {};
+    var named = Object.keys(users).filter(function(uid) {
+      return users[uid] && typeof users[uid].username === "string" && /^[0-9A-Za-z_]{1,22}$/.test(users[uid].username);
+    }).sort(function(a, b) {
+      return (users[a].joined || Infinity) - (users[b].joined || Infinity);
+    });
+    named.forEach(function(uid) {
+      var lower = users[uid].username.toLowerCase();
+      var holder = pending[lower] || claims[lower];
+      if (holder === uid) return;
+      var holderName = holder && users[holder] && users[holder].username;
+      if (typeof holderName === "string" && holderName.toLowerCase() === lower) {
+        if (!nameClashLogged[lower]) {
+          nameClashLogged[lower] = true;
+          console.log("names: " + holderName + " and " + users[uid].username + " differ only in case; " + holderName + " holds the claim.");
+        }
+        return;
+      }
+      pending[lower] = uid;
+    });
+    var names = Object.keys(pending);
+    if (!names.length) return;
+    return Promise.all(names.map(function(lower) {
+      return db.ref("nameClaim/" + lower).set(pending[lower]).then(function() { return 1; }, function(err) {
+        console.log("names: couldn't claim " + lower + ":", err.message);
+        return 0;
+      });
+    })).then(function(done) {
+      console.log("names: added " + done.reduce(function(a, b) { return a + b; }, 0) + " lowercase name claim(s).");
+    });
+  }).catch(function(err) {
+    console.log("names: couldn't read the name claims (are the latest firebase-rules.json published?):", err.message);
+  });
+};
+setInterval(claimLowercaseNames, 6 * 60 * 60 * 1000);
 
 var talk = function(txt, card) {
   var namebo2 = botid;
@@ -369,13 +416,22 @@ var talk = function(txt, card) {
     name: namebo2
   };
   if (card) chooto.card = card;
-  var chatItem = chatData.push(chooto, function() {
-    var feedObj = {
-      chatID: chatItem.key
-    };
-    var feedItem = chatFeed.push(feedObj, function() {
-      chatItem.child("feedID").set(feedItem.key);
+  // The message and its feed entry in one write; the older three steps until
+  // the database rules allow that
+  var chatID = chatData.push().key;
+  var feedID = chatFeed.push().key;
+  var updates = {};
+  updates["chatData/" + chatID] = Object.assign({}, chooto, { feedID: feedID });
+  updates["chatFeed/" + feedID] = { chatID: chatID };
+  firebase.database().ref().update(updates).catch(function(err) {
+    if (!/permission/i.test(err.code || err.message)) throw err;
+    var chatItem = chatData.push(chooto, function() {
+      var feedItem = chatFeed.push({ chatID: chatItem.key }, function() {
+        chatItem.child("feedID").set(feedItem.key);
+      });
     });
+  }).catch(function(err) {
+    console.log("couldn't say \"" + txt + "\":", err.message);
   });
 };
 
@@ -627,6 +683,89 @@ var lookupWorked = function(source) {
   }
 };
 
+// ─── SoundCloud track lookups ───────────────────────────────────────────────
+// Free, and what the room uses: SoundCloud's own web API (api-v2) with a
+// client id (SOUNDCLOUD_KEY). It needs no registered app, but it isn't
+// SoundCloud's public API, so they can change it or stop that client id at any
+// time; the bot then can't check SoundCloud tracks and passes the decks (see
+// "soundcloud" in the README).
+// Optional: with SOUNDCLOUD_CLIENT_ID and SOUNDCLOUD_CLIENT_SECRET (a
+// registered SoundCloud app) set, it uses the official API with an OAuth token
+// instead. Unset, nothing changes.
+var scOfficial = !!(process.env.SOUNDCLOUD_CLIENT_ID && process.env.SOUNDCLOUD_CLIENT_SECRET);
+var scToken = null; // { value, expires }
+
+var scAccessToken = function(forceNew, cb) {
+  if (!forceNew && scToken && scToken.expires > Date.now()) return cb(null, scToken.value);
+  var basic = Buffer.from(process.env.SOUNDCLOUD_CLIENT_ID + ":" + process.env.SOUNDCLOUD_CLIENT_SECRET).toString("base64");
+  request({
+    method: "POST",
+    url: "https://secure.soundcloud.com/oauth/token",
+    timeout: 15000,
+    headers: {
+      Authorization: "Basic " + basic,
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json; charset=utf-8"
+    },
+    body: "grant_type=client_credentials"
+  }, function(err, res, body) {
+    var json = null;
+    try {
+      json = JSON.parse(body);
+    } catch (e) {
+      json = null;
+    }
+    if (err || !res || res.statusCode !== 200 || !json || !json.access_token) {
+      return cb(err || new Error("SoundCloud token request answered HTTP " + (res && res.statusCode)));
+    }
+    // reuse it until a minute before it expires (SoundCloud limits new tokens)
+    scToken = { value: json.access_token, expires: Date.now() + (Math.max(120, Number(json.expires_in) || 3600) - 60) * 1000 };
+    cb(null, scToken.value);
+  });
+};
+
+// cb(error, httpStatus, track): track is SoundCloud's track object when found
+var soundcloudTrack = function(cid, cb) {
+  var parse = function(error, response, body) {
+    var status = response && response.statusCode;
+    var track = null;
+    if (!error && status == 200) {
+      try {
+        track = JSON.parse(body);
+      } catch (e) {
+        track = null;
+      }
+    }
+    return { status: status, track: track };
+  };
+  if (!scOfficial) {
+    return request({
+      url: 'https://api-v2.soundcloud.com/resolve?url=https%3A//api.soundcloud.com/tracks/' + encodeURIComponent(cid) + '&format=json&client_id=' + process.env.SOUNDCLOUD_KEY,
+      timeout: 15000
+    }, function(error, response, body) {
+      var r = parse(error, response, body);
+      cb(error, r.status, r.track);
+    });
+  }
+  var attempt = function(retried) {
+    scAccessToken(retried, function(err, token) {
+      if (err) return cb(err, null, null);
+      request({
+        url: "https://api.soundcloud.com/tracks/" + encodeURIComponent(cid),
+        timeout: 15000,
+        headers: { Authorization: "OAuth " + token, Accept: "application/json; charset=utf-8" }
+      }, function(error, response, body) {
+        var r = parse(error, response, body);
+        if (r.status === 401 && !retried) return attempt(true); // token expired early
+        // the official API says when a track can't be played here
+        if (r.track && r.track.access === "blocked") return cb(null, 404, null);
+        cb(error, r.status, r.track);
+      });
+    });
+  };
+  attempt(false);
+};
+
 // ─── Starting a track ───────────────────────────────────────────────────────
 var songLoading = false; // a track is being looked up (between turns); !skip waits
 var loadingSource = null; // what it's waiting on, for the watchdog's message
@@ -741,6 +880,51 @@ var nextSong = function(noPrevPlay) {
   startSong(noPrevPlay);
 };
 
+// A list the bot keeps to a fixed length: Recent plays (500) and Fresh (100).
+// A listener keeps its keys, so the list downloads once at startup and then
+// only changes, instead of the whole list after every song.
+var trimmedList = function(path, max) {
+  var ref = firebase.database().ref(path);
+  var keys = [];
+  ref.on("child_added", function(snap) {
+    keys.push(snap.key);
+    if (keys.length > 1 && keys[keys.length - 2] > snap.key) keys.sort();
+  });
+  ref.on("child_removed", function(snap) {
+    var i = keys.indexOf(snap.key);
+    if (i !== -1) keys.splice(i, 1);
+  });
+  return {
+    add: function(entry) {
+      ref.push(entry).catch(function(err) {
+        console.log("couldn't save to " + path + ":", err.message);
+      });
+      // oldest first (push keys sort by time)
+      keys.slice(0, Math.max(0, keys.length - max)).forEach(function(key) {
+        ref.child(key).remove();
+      });
+    }
+  };
+};
+var recentPlays = trimmedList("songHistory", 500);
+var freshPlays = trimmedList("newMusic", 100);
+
+// The list a DJ plays from: their chosen playlist, or their default queue.
+var djListRef = function(djid) {
+  var selectedList = (users[djid] || {}).selectedList;
+  if (selectedList && selectedList != "0") {
+    return firebase.database().ref("playlists/" + djid + "/" + selectedList + "/list");
+  }
+  return firebase.database().ref("queues/" + djid);
+};
+
+// The playing song's list. After a restart mid-song the bot hasn't picked a
+// track yet, so it's worked out from the song's DJ.
+var currentListRef = function() {
+  if (!queueRef && song && song.djid && song.cid) queueRef = djListRef(song.djid);
+  return queueRef;
+};
+
 var startSong = function(noPrevPlay) {
   var seq = ++startSeq;
   if (retryTimer) {
@@ -779,46 +963,14 @@ var startSong = function(noPrevPlay) {
       if (song.adamid) newEntry.adamid = song.adamid;
       if (song.playcount) newEntry.playcount = song.playcount;
       newEntry = JSON.parse(JSON.stringify(newEntry)); // Firebase refuses undefined fields
-      var recentz = firebase.database().ref("songHistory");
-      recentz.push(newEntry);
-      recentz.once("value", function(snapshot) {
-        var rdata = snapshot.val();
-        var allRecents = [];
-        for (var okey in rdata) {
-          if (rdata.hasOwnProperty(okey)) {
-            allRecents.push(okey);
-          }
-        }
-        if (allRecents.length > 500) {
-          var shave = allRecents.length - 500;
-          for (var ayy = 0; ayy < shave; ayy++) {
-            recentz.child(allRecents[ayy]).remove();
-          }
-        }
-      });
+      recentPlays.add(newEntry);
       var isNew = newMusicCheck(newEntry);
       if (isNew) {
 
         if (Math.floor(Math.random() * 15) == 5) printCard(newEntry);
 
         // NEW MUSIC
-        var newMusic = firebase.database().ref("newMusic");
-        newMusic.push(newEntry);
-        newMusic.once("value", function(snapshot) {
-          var rdata = snapshot.val();
-          var allNew = [];
-          for (var okey in rdata) {
-            if (rdata.hasOwnProperty(okey)) {
-              allNew.push(okey);
-            }
-          }
-          if (allNew.length > 100) {
-            var shave = allNew.length - 100;
-            for (var ayy = 0; ayy < shave; ayy++) {
-              newMusic.child(allNew[ayy]).remove();
-            }
-          }
-        });
+        freshPlays.add(newEntry);
       }
     }
   }
@@ -868,12 +1020,7 @@ var startSong = function(noPrevPlay) {
     if (seq === startSeq && songLoading) lookupFailed(loadingSource, new Error("no answer in " + LOAD_TIMEOUT / 1000 + " seconds"));
   }, LOAD_TIMEOUT);
   updateThings();
-  var selectedList = (users[theDJ.id] || {}).selectedList;
-  if (selectedList && selectedList != "0") {
-    queueRef = firebase.database().ref("playlists/" + theDJ.id + "/" + selectedList + "/list");
-  } else {
-    queueRef = firebase.database().ref("queues/" + theDJ.id);
-  }
+  queueRef = djListRef(theDJ.id);
 
   var listRef = queueRef; // this DJ's list, even if queueRef moves on meanwhile
   listRef.once("value").then(function(snapshot) {
@@ -951,20 +1098,8 @@ var startSong = function(noPrevPlay) {
 begin sc check
         */
         loadingSource = "SoundCloud";
-        request({
-          url: 'https://api-v2.soundcloud.com/resolve?url=https%3A//api.soundcloud.com/tracks/' + encodeURIComponent(data[nextSongkey].cid) + '&format=json&client_id=' + process.env.SOUNDCLOUD_KEY,
-          timeout: 15000
-        }, guarded(seq, "SoundCloud", function(error, response, body) {
+        soundcloudTrack(data[nextSongkey].cid, guarded(seq, "SoundCloud", function(error, status, scTrack) {
           if (seq !== startSeq) return; // skipped or restarted while SoundCloud answered
-          var status = response && response.statusCode;
-          var scTrack = null;
-          if (!error && status == 200) {
-            try {
-              scTrack = JSON.parse(body);
-            } catch (e) {
-              scTrack = null;
-            }
-          }
           if (status == 404 || status == 410) {
             // SoundCloud answered: the track is gone (deleted or private)
             lookupWorked("SoundCloud");
@@ -1107,9 +1242,12 @@ var giveCard = function(id, name) {
   talk("good job @" + name + " you got the card.", cardid);
 };
 
+var THEME_MAX_LENGTH = 80;
+var THEME_SUGGEST_COOLDOWN = 15 * 60 * 1000;
 var themevote = {
   active: false,
   params: null,
+  lastBy: {}, // uid -> when they last started a vote
   go: function(txt, name) {
     themevote.active = true;
     var requiredVotes = 4;
@@ -1540,12 +1678,44 @@ var flagCodeFor = function(reason) {
 
 // Flag a track in all of a DJ's lists (default queue and every playlist).
 // Resolves with how many copies were flagged.
+// The child keys of a path without their contents (the database's REST
+// "shallow" read, signed in as the bot). Falls back to a full read.
+var shallowKeys = function(path) {
+  var user = firebase.auth().currentUser;
+  var full = function() {
+    return firebase.database().ref(path).once("value").then(function(snap) {
+      var keys = [];
+      snap.forEach(function(child) {
+        keys.push(child.key);
+      });
+      return keys;
+    });
+  };
+  if (!user || !process.env.FIREBASE_DB || typeof fetch !== "function") return full();
+  return user.getIdToken().then(function(token) {
+    var url = new URL(process.env.FIREBASE_DB);
+    url.pathname = url.pathname.replace(/\/?$/, "/") + path + ".json";
+    url.searchParams.set("shallow", "true");
+    url.searchParams.set("auth", token);
+    return fetch(url, { signal: AbortSignal.timeout(15000) });
+  }).then(function(res) {
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }).then(function(data) {
+    return data && typeof data === "object" ? Object.keys(data) : [];
+  }).catch(function(err) {
+    console.log("shallow read of " + path + " failed (" + err.message + "); reading it in full");
+    return full();
+  });
+};
+
 var flagTrackForDJ = function(djid, cid, type, flag) {
   var db = firebase.database();
   var lists = [db.ref("queues/" + djid)];
-  return db.ref("playlists/" + djid).once("value").then(function(snap) {
-    snap.forEach(function(pl) {
-      lists.push(db.ref("playlists/" + djid + "/" + pl.key + "/list"));
+  // just the playlist ids, not every track in them
+  return shallowKeys("playlists/" + djid).then(function(listIds) {
+    listIds.forEach(function(id) {
+      lists.push(db.ref("playlists/" + djid + "/" + id + "/list"));
     });
     return Promise.all(lists.map(function(ref) {
       return ref.orderByChild("cid").equalTo(cid).once("value").then(function(s) {
@@ -1645,17 +1815,23 @@ var fileMentions = function(chatID, chatData, fromName) {
 };
 
 // Mentions are kept for 30 days
+// (only the old ones are read: who has mentions, then each person's mentions
+// older than 30 days through the time index)
 var pruneMentions = function() {
   var cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   var ref = firebase.database().ref("mentions");
-  ref.once("value").then(function(snap) {
-    var updates = {};
-    snap.forEach(function(person) {
-      person.forEach(function(item) {
-        var v = item.val();
-        if (!v || !v.time || v.time < cutoff) updates[person.key + "/" + item.key] = null;
+  shallowKeys("mentions").then(function(people) {
+    return Promise.all(people.map(function(uid) {
+      return ref.child(uid).orderByChild("time").endAt(cutoff).once("value").then(function(snap) {
+        var updates = {};
+        snap.forEach(function(item) {
+          updates[uid + "/" + item.key] = null;
+        });
+        return updates;
       });
-    });
+    }));
+  }).then(function(perPerson) {
+    var updates = Object.assign.apply(null, [{}].concat(perPerson));
     if (Object.keys(updates).length) return ref.update(updates);
   }).catch(function(err) {
     console.log("mention prune error:", err && err.message);
@@ -1754,10 +1930,21 @@ var handleChat = function(chatID) {
             talk("There is no theme at the moment. `!suggest` one if you'd like.")
           }
         } else if (command == "suggest") {
-          if (!themevote.active) {
-            themevote.go(args, namebo);
-          } else {
+          // Each vote pings @everyone, so: a real theme, one vote at a time,
+          // and one suggestion per person every 15 minutes (mods excepted)
+          var idea = String(args || "").replace(/\s+/g, " ").trim();
+          var waitMs = (themevote.lastBy[chatData.id] || 0) + THEME_SUGGEST_COOLDOWN - Date.now();
+          if (themevote.active) {
             talk("We are already voting for " + themevote.params.votingfor + ". Let's wait for that to finish first.");
+          } else if (!idea) {
+            talk("Suggest a theme like `!suggest 90s one-hit wonders`.");
+          } else if (idea.length > THEME_MAX_LENGTH) {
+            talk("Keep the theme under " + THEME_MAX_LENGTH + " characters, " + namebo + ".");
+          } else if (waitMs > 0 && !senderIsMod) {
+            talk(namebo + ", you can suggest another theme in " + Math.ceil(waitMs / 60000) + " minute(s).");
+          } else {
+            themevote.lastBy[chatData.id] = Date.now();
+            themevote.go(idea, namebo);
           }
         } else if (command == "settheme") {
           if (senderIsSupermod) {
@@ -1875,7 +2062,7 @@ var handleChat = function(chatID) {
               code = 10;
             }
 
-            if (song && song.cid && queueRef) {
+            if (song && song.cid && currentListRef()) {
               if (code) {
                 var flag = {
                   date: Date.now(),
@@ -1942,7 +2129,9 @@ var handleChat = function(chatID) {
             }
           }
         } else if (command == "fixtags") {
-          if (!song || !song.cid) {
+          if (!senderIsMod) {
+            talk("Only mods can fix tags, " + namebo + ". Ask a mod to fix this one.");
+          } else if (!song || !song.cid) {
             talk("Nothing's playing.");
           } else if (args) {
             // split on the FIRST " - " only, so "Song - Live" titles stay whole
@@ -2086,6 +2275,8 @@ var markChatReady = function() {
   chatWaiting = [];
   waiting.forEach(handleChat);
   console.log("Listening now.");
+  claimLowercaseNames();
+  pruneMentions();
 };
 
 var chatFeedRef = firebase.database().ref("chatFeed");
@@ -2237,7 +2428,8 @@ var gts = {
 
 
       // update the dj's playlist with updated tags
-      queueRef.orderByChild('cid').equalTo(song.cid).once("value")
+      var listRef = currentListRef();
+      if (listRef) listRef.orderByChild('cid').equalTo(song.cid).once("value")
         .then(function(snapshot) {
           var data = snapshot.val();
           if (data) {
@@ -2245,7 +2437,7 @@ var gts = {
               if (data[key].type == song.type) {
                 newData = data[key];
                 newData.name = song.artist + " - " + song.title;
-                queueRef.child(key).set(newData);
+                listRef.child(key).set(newData);
               }
             }
           }
@@ -2499,6 +2691,7 @@ var lastfm = {
 };
 
 
+console.log("soundcloud: " + (scOfficial ? "official API (SOUNDCLOUD_CLIENT_ID / SOUNDCLOUD_CLIENT_SECRET)" : "web API with SOUNDCLOUD_KEY"));
 if (process.env.LASTFM_APIKEY && !process.env.LASTFM_SECRET) {
   console.log("last.fm: LASTFM_SECRET isn't set in .env, so plays won't be scrobbled.");
 }
