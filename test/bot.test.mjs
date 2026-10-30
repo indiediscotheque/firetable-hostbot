@@ -205,6 +205,25 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async long_list_reads_a_page_at_a_time() {
+    // 45 flagged tracks ahead of the first playable one: the bot pages past them
+    const list = {};
+    for (let i = 0; i < 45; i++) list["k" + String(i).padStart(3, "0")] = Object.assign(yt("f" + i), { flagged: { date: 1, code: 2 } });
+    list.k100 = yt("good1");
+    list.k101 = yt("good2");
+    await put("/", base({ queues: { dj1: list, dj2: { s1: yt("yt2") } } }));
+    const p = startBot("paging");
+    await sleep(3500);
+    const st = await get("/");
+    const keys = Object.keys(st.queues.dj1).sort();
+    check(st.songToPlay.cid === "good1" && st.songToPlay.djid === "dj1", "plays the first unflagged track past several pages of flagged ones");
+    check(keys.length === 47 && st.queues.dj1.k101 && !st.queues.dj1.k100 && flags(st.queues.dj1).length === 45,
+      "played track moves to the bottom, flagged ones untouched");
+    check(st.colors && !st.colors.altColors && Object.values(st.songHistory || {}).every((h) => !h.colors || !h.colors.altColors),
+      "room colours and Recent entries carry only the accent");
+    await healthy(p);
+    return p;
+  },
   async lookup_never_answers() {
     await put("/", base({ queues: { dj1: { k1: yt("hang1") }, dj2: { s1: sc("sc1") } } }));
     const p = startBot("hang");
