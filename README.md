@@ -20,7 +20,7 @@ Needs Node.js 18 or newer (22 recommended).
 | `SOUNDCLOUD_KEY` | SoundCloud client id |
 | `AUTODJ` | autopilot DJ, on unless set to `false` |
 | `TRACKBROKEN_MESSAGES` | `true` to tell a DJ in chat when their song is broken or blocked (off by default) |
-| `LASTFM_APIKEY` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm |
+| `LASTFM_APIKEY` / `LASTFM_SECRET` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm (`LASTFM_SECRET` is the API key's "Shared secret" at last.fm/api/accounts) |
 | `ADAM_URL` | optional: server that's sent each new song |
 | `SITE_URL` | the firetable-user site's address; the bot follows its seasons from there (see [seasons](#seasons)) |
 | `TZ` | time zone for the seasonal months, e.g. `America/Chicago` (default: the server's, usually UTC) |
@@ -100,7 +100,7 @@ Work down the list; stop when it's back.
 | `wrong-password`, `user-not-found` | `nano ~/firetable-hostbot/.env`, fix `FIRETABLE_USER` / `FIRETABLE_PASS`, `pm2 restart hostbot` |
 | `PERMISSION_DENIED` | redeploy `firebase-rules.json` |
 | `Cannot find module` | `cd ~/firetable-hostbot && npm install && pm2 restart hostbot` |
-| `quotaExceeded` (YouTube) | wait; the quota resets at midnight Pacific |
+| `quotaExceeded` (YouTube), `couldn't check the track` | wait; the YouTube quota resets at midnight Pacific. Until then the bot retries, then passes the decks along (SoundCloud tracks still play). It never flags tracks it couldn't check |
 | `ENOSPC` / no space left | `pm2 flush && pm2 restart hostbot` |
 | bot is on old code | `cat ~/firetable-hostbot/auto-update.log` says why (paused, failed check, GitHub unreachable) |
 

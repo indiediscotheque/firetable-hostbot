@@ -19,16 +19,31 @@
       ".read": false,
       "$comment": {
         ".read": "root.child('banned/' + auth.uid).val() != true && (root.child('blocks').child(auth.uid).child(data.child('id').val()).val() != true && root.child('blocks').child(data.child('id').val()).child(auth.uid).val() != true)",
-        ".write": "(auth.uid != null && root.child('banned/' + auth.uid).val() != true && (newData.child('id').val() == auth.uid || data.child('id').val() == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true))",
-        ".validate": "newData.child('txt').isString() && newData.child('txt').val().length > 0 && newData.child('txt').val().length <= 240",
+        ".write": "auth.uid != null && root.child('banned/' + auth.uid).val() != true && (root.child('users/' + auth.uid + '/hostbot').val() == true || (newData.exists() && newData.child('id').val() == auth.uid && (!data.exists() || data.child('id').val() == auth.uid)) || (!newData.exists() && data.child('id').val() == auth.uid))",
+        ".validate": "newData.hasChildren(['id', 'txt', 'time']) && newData.child('txt').isString() && newData.child('txt').val().length > 0 && newData.child('txt').val().length <= 240",
+        "id": {
+          ".validate": "newData.isString() && (!data.exists() || newData.val() == data.val())"
+        },
+        "txt": {
+          ".validate": "newData.isString()"
+        },
+        "time": {
+          ".validate": "newData.val() == now || newData.val() == data.val()"
+        },
         "card": {
-          ".validate": "(root.child('cards/' + newData.val() + '/owner').val() == auth.uid) || (root.child('users/' + auth.uid + '/hostbot').val() == true)",
+          ".validate": "(root.child('cards/' + newData.val() + '/owner').val() == auth.uid) || (root.child('users/' + auth.uid + '/hostbot').val() == true)"
         },
         "name": {
-          ".validate": "(root.child('users/' + auth.uid + '/username').val() == newData.val()) || (auth.uid == newData.val())",
+          ".validate": "(root.child('users/' + auth.uid + '/username').val() == newData.val()) || (auth.uid == newData.val())"
+        },
+        "botCmd": {
+          ".validate": "newData.isBoolean()"
+        },
+        "forSong": {
+          ".validate": "newData.isNumber()"
         },
         "feedID": {
-          ".validate": "root.child('chatFeed/' + newData.val() + '/chatID' ).val() == $comment",
+          ".validate": "root.child('chatFeed/' + newData.val() + '/chatID' ).val() == $comment"
         },
         "reactions": {
           "$emoji": {
@@ -38,6 +53,9 @@
               ".validate": "newData.val() == true && $reactor == auth.uid"
             }
           }
+        },
+        "$other": {
+          ".validate": false
         }
       }
     },
@@ -259,7 +277,7 @@
         },
         "joined": {
           ".write": "auth.uid == $uid",
-          ".validate": "newData.val() == now && !data.exists()",
+          ".validate": "newData.val() == now && !data.exists()"
         },
         "mod": {
           ".write": "root.child('users/' + auth.uid + '/supermod').val() == true"
