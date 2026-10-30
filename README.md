@@ -171,8 +171,21 @@ The site decides the seasonal trading-card avatars and the months the string lig
    SOUNDCLOUD_CLIENT_ID="your client id"
    SOUNDCLOUD_CLIENT_SECRET="your client secret"
    ```
-   The log says `soundcloud: official API` at startup. The bot gets an OAuth token and reuses it until it expires (SoundCloud limits how often new ones can be made). Tracks the official API marks as blocked are flagged like deleted ones.
+   The log says `soundcloud: official API` at startup. The bot gets an OAuth token and reuses it until it expires (SoundCloud limits how often new ones can be made). Tracks the official API marks as blocked are flagged as unavailable.
 4. Keep `SOUNDCLOUD_KEY` in `.env`: removing the two new lines and restarting goes straight back to today's setup.
+
+## tracks that can't play here
+Before a track plays, the bot checks it with the same rules (and flag codes) as the site's playlist checker (`lib/checks.js`). It flags the track, moves it to the bottom of the DJ's list and plays their next one when it is:
+- YouTube: gone or private (2), blocked in the US (3), not allowed to be embedded on other sites (6), age restricted (7), or a premiere that hasn't started (5)
+- SoundCloud: gone (4), blocked, private or not streamable (5), or only a 30-second preview (SoundCloud Go+ snippets; 5). Previews never play.
+
+When YouTube or SoundCloud can't be reached it flags nothing (see the README's soundcloud and troubleshooting notes).
+
+## one copy at a time
+Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.
+
+## last.fm
+With the `LASTFM_*` settings, each song is sent to last.fm as "now playing" and scrobbled when it ends, or when it's skipped after playing long enough by last.fm's rule (longer than 30 seconds, and played for half its length or 4 minutes).
 
 ## timing
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.

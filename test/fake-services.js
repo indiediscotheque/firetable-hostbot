@@ -22,12 +22,21 @@ function png(r, g, b) {
 }
 const ARTWORK = png(200, 30, 40);
 
-const video = (img) => ({ items: [{ contentDetails: { duration: "PT10M" }, snippet: { channelTitle: "Chan", publishedAt: "2020-01-01T00:00:00Z", thumbnails: { medium: { url: img } } } }] });
+const video = (img, extra) => {
+  const item = { contentDetails: { duration: "PT10M" }, status: { embeddable: true, privacyStatus: "public", uploadStatus: "processed" },
+    snippet: { channelTitle: "Chan", publishedAt: "2020-01-01T00:00:00Z", liveBroadcastContent: "none", thumbnails: { medium: { url: img } } } };
+  for (const k of Object.keys(extra || {})) item[k] = Object.assign({}, item[k], extra[k]);
+  return { items: [item] };
+};
 function youtube(id) {
   if (SC === "yt_outage") return json(403, { error: { code: 403, message: "The request cannot be completed because you have exceeded your quota." } }, YT_DELAY);
   if (id === "hang1") return new Promise(() => {});
   if (id === "dead1") return json(200, { items: [] }, YT_DELAY);
   if (id === "badart") return json(200, video("https://img.example/bad.jpg"), YT_DELAY);
+  if (id === "noembed") return json(200, video("https://img.example/x.jpg", { status: { embeddable: false } }), YT_DELAY);
+  if (id === "premiere") return json(200, video("https://img.example/x.jpg", { snippet: { liveBroadcastContent: "upcoming" } }), YT_DELAY);
+  if (id === "private1") return json(200, video("https://img.example/x.jpg", { status: { privacyStatus: "private" } }), YT_DELAY);
+  if (id === "short1") return json(200, video("https://img.example/x.jpg", { contentDetails: { duration: "PT40S" } }), YT_DELAY);
   return json(200, video("https://img.example/x.jpg"), YT_DELAY);
 }
 
@@ -51,6 +60,9 @@ function soundcloud(url, init) {
   const cid = decodeURIComponent(url).match(/tracks\/([^&]+)/)[1];
   if (cid === "sc404") return json(404, {});
   if (cid === "sc503") return json(503, "Service Unavailable");
+  if (cid === "scpreview") return json(200, scTrack({ access: "preview" }));
+  if (cid === "scsnip") return json(200, scTrack({ policy: "SNIP", duration: 30000, full_duration: 200000 }));
+  if (cid === "scshort") return json(200, scTrack({ duration: 30000, full_duration: 200000 }));
   return json(200, scTrack());
 }
 

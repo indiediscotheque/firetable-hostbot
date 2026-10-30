@@ -39,3 +39,50 @@ test("md5 hashes UTF-8 the way Last.fm signs calls", () => {
   assert.equal(md5("Björk"), "7dab4f23a40857b30fdd81370c211680");
   assert.equal(md5("シガー・ロス"), "0f4ceca7d0fff6491974ed6dd9923597");
 });
+
+const { youtubeProblem, soundcloudProblem, problemMessage, scrobbles } = require("../lib/checks.js");
+
+test("youtubeProblem matches the site's playlist checker", () => {
+  const ok = { snippet: {}, contentDetails: { duration: "PT3M" }, status: { embeddable: true, privacyStatus: "public", uploadStatus: "processed" } };
+  assert.equal(youtubeProblem(ok), 0);
+  assert.equal(youtubeProblem(undefined), 2);
+  assert.equal(youtubeProblem({ ...ok, status: { privacyStatus: "private" } }), 2);
+  assert.equal(youtubeProblem({ ...ok, status: { uploadStatus: "deleted" } }), 2);
+  assert.equal(youtubeProblem({ ...ok, status: { embeddable: false } }), 6);
+  assert.equal(youtubeProblem({ ...ok, contentDetails: { regionRestriction: { blocked: ["DE", "US"] } } }), 3);
+  assert.equal(youtubeProblem({ ...ok, contentDetails: { regionRestriction: { allowed: ["GB"] } } }), 3);
+  assert.equal(youtubeProblem({ ...ok, contentDetails: { regionRestriction: { allowed: ["US", "GB"] } } }), 0);
+  assert.equal(youtubeProblem({ ...ok, contentDetails: { contentRating: { ytRating: "ytAgeRestricted" } } }), 7);
+  assert.equal(youtubeProblem({ ...ok, snippet: { liveBroadcastContent: "upcoming" } }), 5);
+  assert.equal(youtubeProblem({ ...ok, snippet: { liveBroadcastContent: "live" } }), 0);
+});
+
+test("soundcloudProblem: blocked, private and 30-second previews never play", () => {
+  const ok = { id: 1, access: "playable", policy: "ALLOW", streamable: true, sharing: "public", duration: 200000, full_duration: 200000 };
+  assert.equal(soundcloudProblem(ok), 0);
+  assert.equal(soundcloudProblem({ id: 1 }), 0); // fields missing: assume it plays
+  assert.equal(soundcloudProblem(null), 4);
+  assert.equal(soundcloudProblem({ ...ok, access: "blocked" }), 5);
+  assert.equal(soundcloudProblem({ ...ok, policy: "BLOCK" }), 5);
+  assert.equal(soundcloudProblem({ ...ok, streamable: false }), 5);
+  assert.equal(soundcloudProblem({ ...ok, sharing: "private" }), 5);
+  assert.equal(soundcloudProblem({ ...ok, access: "preview" }), 5);
+  assert.equal(soundcloudProblem({ ...ok, policy: "SNIP" }), 5);
+  assert.equal(soundcloudProblem({ ...ok, duration: 30000 }), 5); // shorter than the full track
+});
+
+test("problemMessage fits in chat and names the DJ", () => {
+  for (const code of [2, 3, 4, 5, 6, 7]) {
+    const m = problemMessage(code, "x".repeat(22), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    assert.ok(m.includes("@" + "x".repeat(22)) && m.length <= 240, "code " + code + ": " + m.length);
+  }
+});
+
+test("scrobbles follows last.fm's rule", () => {
+  assert.equal(scrobbles(25, 25, true), false); // 30 seconds or shorter: never
+  assert.equal(scrobbles(200, 99), false);
+  assert.equal(scrobbles(200, 100), true); // half of it
+  assert.equal(scrobbles(1200, 239), false);
+  assert.equal(scrobbles(1200, 240), true); // 4 minutes of a long one
+  assert.equal(scrobbles(200, 3, true), true); // ran to its end
+});

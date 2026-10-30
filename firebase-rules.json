@@ -160,6 +160,10 @@
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
+    "botLock": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
     "autodj": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"

@@ -118,7 +118,7 @@ const scenarios = {
     await sleep(4000);
     const st = await get("/");
     check(/soundcloud: official API/.test(p.out), "with client id + secret: the official API");
-    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["sc404:4","scblocked:4"]' && st.songToPlay.cid === "sc1", "blocked and missing tracks flagged, a playable one plays");
+    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["sc404:4","scblocked:5"]' && st.songToPlay.cid === "sc1", "blocked and missing tracks flagged, a playable one plays");
     await healthy(p);
     return p;
   },
@@ -134,6 +134,7 @@ const scenarios = {
     await sleep(3000);
     const st = await get("/");
     check(Object.keys(st.songHistory || {}).length === 1 && st.songToPlay.djid === "dj2", "three quick skips skip one song");
+    check(said(st).filter((t) => /Hang on, boss, the next song is already loading/.test(t)).length === 1, "skips while it loads get one \"hang on\"");
     await healthy(p);
     return p;
   },
@@ -214,6 +215,47 @@ const scenarios = {
     check(!ids.includes("dj2"), "a mod can still remove a member");
     await healthy(p);
     return p;
+  },
+  async tracks_that_cant_play_here() {
+    await put("/", base({ queues: {
+      dj1: { k1: yt("noembed"), k2: yt("premiere"), k3: yt("private1"), k4: sc("scpreview"), k5: sc("scsnip"), k6: sc("scshort"), k7: yt("good1") },
+      dj2: { s1: yt("yt2") }
+    } }));
+    const p = startBot("cant_play");
+    await sleep(5000);
+    const st = await get("/");
+    check(JSON.stringify(flags(st.queues.dj1).sort()) === '["noembed:6","premiere:5","private1:2","scpreview:5","scshort:5","scsnip:5"]',
+      "not embeddable (6), premiere (5), private (2) and SoundCloud previews (5) flagged: " + JSON.stringify(flags(st.queues.dj1).sort()));
+    check(st.songToPlay.cid === "good1", "the first track that can play, plays");
+    const keys = Object.keys(st.queues.dj1).sort();
+    check(keys.length === 7 && !keys.some((k) => k.startsWith("k")), "every checked track moved to the bottom, none lost (" + keys.join(",") + ")");
+    check(said(st).some((t) => /only a preview/.test(t)), "the DJ is told why");
+    await healthy(p);
+    return p;
+  },
+  async scrobbles_and_one_copy() {
+    await put("/", base({ queues: { dj1: { k1: yt("short1", "Art - Short"), k2: yt("yt3", "Art - Skipped") }, dj2: { s1: yt("yt2", "Art - Two") } } }));
+    const lfm = { LASTFM_APIKEY: "key", LASTFM_SECRET: "secret", LASTFM_SESSIONKEY: "sk", LASTFM_USERNAME: "room" };
+    const p = startBot("one_copy", lfm);
+    check(await waitFor(p, "Listening now."), "first copy starts");
+    const p2 = startBot("one_copy", lfm);
+    check(await waitFor(p2, "another copy of the bot is running"), "a second copy waits");
+    await sleep(3500); // the 40-second track runs out (sped up), the next one starts
+    await say("boss", "!skip"); // ...and is skipped right away
+    await say("dj1", "!theme");
+    await sleep(1500);
+    let st = await get("/");
+    check(/track.scrobble signature ok \(Art - Short\)/.test(p.out), "a song that ran to its end is scrobbled");
+    check(!/track.scrobble signature ok \(Art - Two\)/.test(p.out), "a song skipped right away isn't");
+    check(said(st).filter((t) => /no theme/.test(t)).length === 1 && !p2.out.includes("Listening now."), "only one copy answers");
+    p.kill();
+    check(await waitFor(p2, "Listening now.", 15000), "when the first copy stops, the second takes over");
+    await say("dj1", "!theme");
+    await sleep(1500);
+    st = await get("/");
+    check(said(st).filter((t) => /no theme/.test(t)).length === 2, "and answers commands");
+    await healthy(p2);
+    return p2;
   },
   async names() {
     await put("/", base({
