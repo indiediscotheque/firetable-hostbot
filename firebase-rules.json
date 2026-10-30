@@ -8,11 +8,14 @@
         ".read": true,
         ".write": "(auth.uid != null && (newData.child('chatID').exists() || root.child('users/' + auth.uid + '/hostbot').val() == true)&& ((!data.exists() || root.child('users/' + auth.uid + '/hostbot').val() == true || newData.child('hidden').val() == true) && root.child('banned/' + auth.uid).val() != true))",
         "chatID":{
-          ".validate": "root.child('chatData/' + newData.val() ).exists() && !root.child('chatData/' + newData.val()+ '/feedID').exists()"
+          ".validate": "newData.isString() && root.child('chatData/' + newData.val() ).exists() && !root.child('chatData/' + newData.val()+ '/feedID').exists()"
         },
         "hidden":{
-             ".validate": "(auth.uid != null && (root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/mod').val() == true))"
-          }
+             ".validate": "newData.isBoolean() && (auth.uid != null && (root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/mod').val() == true))"
+          },
+        "$other": {
+          ".validate": false
+        }
       }
     },
     "chatData": {
@@ -63,7 +66,16 @@
       ".read": true,
       "$uid": {
         ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
-        ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').val() == root.child('users/' + $uid + '/username').val() && newData.child('at').val() == now"
+        ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').val() == root.child('users/' + $uid + '/username').val() && newData.child('at').val() == now",
+        "name": {
+          ".validate": "newData.isString()"
+        },
+        "at": {
+          ".validate": "newData.isNumber()"
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     },
     "mentions": {
@@ -231,7 +243,7 @@
           ".read": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
           ".write": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
             "$blockedID":{
-              ".validate": "root.child('users/'+ $blockedID + '/mod').val() !== true && root.child('users/'+ $blockedID + '/supermod').val() !== true && root.child('users/'+ $blockedID + '/hostbot').val() !== true"
+              ".validate": "newData.val() == true && root.child('users/'+ $blockedID + '/mod').val() !== true && root.child('users/'+ $blockedID + '/supermod').val() !== true && root.child('users/'+ $blockedID + '/hostbot').val() !== true"
             }
       }
     },
@@ -267,12 +279,23 @@
       ".indexOn": ["status", "username"],
       "$uid": {
         "status": {
-          ".write": "auth.uid == $uid && (root.child('banned/' + auth.uid).val() != true || newData.val() == false)"
+          ".write": "auth.uid == $uid && (root.child('banned/' + auth.uid).val() != true || newData.val() == false)",
+          ".validate": "newData.isBoolean()"
         },
         "idle": {
           ".write": "auth.uid == $uid && (root.child('banned/' + auth.uid).val() != true)",
+            ".validate": "newData.hasChildren(['since'])",
+            "isIdle": {
+                ".validate": "newData.isBoolean()"
+            },
+            "audio": {
+                ".validate": "newData.isNumber() || newData.isBoolean()"
+            },
             "since": {
                 ".validate": "newData.val() == now"
+            },
+            "$other": {
+                ".validate": false
             }
         },
         "joined": {
@@ -280,7 +303,8 @@
           ".validate": "newData.val() == now && !data.exists()"
         },
         "mod": {
-          ".write": "root.child('users/' + auth.uid + '/supermod').val() == true"
+          ".write": "root.child('users/' + auth.uid + '/supermod').val() == true",
+          ".validate": "newData.isBoolean()"
         },
         "supermod": {
           ".write": "false"
@@ -289,7 +313,8 @@
           ".write": "false"
         },
         "selectedList": {
-          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true"
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          ".validate": "(newData.isString() && newData.val().length <= 40) || newData.val() == 0"
         },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
@@ -297,7 +322,7 @@
         },
         "username": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
-          ".validate": "(root.child('nameClaim/' + newData.val() ).val() == auth.uid)"
+          ".validate": "newData.isString() && (root.child('nameClaim/' + newData.val() ).val() == auth.uid)"
         }
       }
     }
