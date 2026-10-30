@@ -22,8 +22,9 @@ Needs Node.js 18 or newer (22 recommended).
 | `TRACKBROKEN_MESSAGES` | `true` to tell a DJ in chat when their song is broken or blocked (off by default) |
 | `LASTFM_APIKEY` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm |
 | `ADAM_URL` | optional: server that's sent each new song |
-| `AVATARSET` | optional: one Robohash set for new trading cards all year |
-| `LIGHTS_MONTHS` | optional: months the string lights are on, e.g. `11,12` (match `config.js` in firetable-user) |
+| `SITE_URL` | the firetable-user site's address; the bot follows its seasons from there (see [seasons](#seasons)) |
+| `TZ` | time zone for the seasonal months, e.g. `America/Chicago` (default: the server's, usually UTC) |
+| `AVATARSET` / `LIGHTS_MONTHS` | optional: force a card avatar set / lights months (e.g. `11,12`) instead of following the site; leave unset |
 
 ## hosting (free, always on)
 The bot is a long-running process with no web server, so it needs a host that never sleeps. Oracle Cloud's Always Free tier works and costs nothing.
@@ -137,6 +138,9 @@ The bot keeps the music going. When no one is DJing it takes the decks and plays
 - The override is saved under `autodj` in the database, so it survives a restart (deploy `firebase-rules.json` for this).
 - Stock the bot's DJ playlist by logging in to the site as the bot. If it's empty, the bot says so and tries again 15 minutes later.
 - On by default. Set `AUTODJ=false` to turn it off.
+
+## seasons
+The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The log shows `site seasons: …` whenever they change. If the site can't be reached the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
 
 ## timing
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.
