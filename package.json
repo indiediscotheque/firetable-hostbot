@@ -7,6 +7,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "acorn": "^8.15.0",
     "dotenv": "^8.6.0",
     "firebase": "^8.10.0",
     "node-soundcloud": "0.0.6",

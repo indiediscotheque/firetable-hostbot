@@ -6,7 +6,7 @@ pairs with a client side front end ([firetable-user](https://github.com/mxew/fir
 ## install
 Needs Node.js 18 or newer (22 recommended).
 - `git clone https://github.com/indiediscotheque/firetable-hostbot.git`
-- `cd firetable-hostbot` and `npm install`
+- `cd firetable-hostbot` and `npm ci` (installs the exact versions in `package-lock.json`)
 - copy `.env.example` to `.env` and fill it in (see below)
 - deploy `firebase-rules.json` (see [database rules](#database-rules))
 - `npm start` to run (or use pm2, below, to keep it running)
@@ -56,7 +56,7 @@ Reconnect after a minute, then:
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
 sudo apt install -y nodejs git
 git clone https://github.com/indiediscotheque/firetable-hostbot.git
-cd firetable-hostbot && npm install
+cd firetable-hostbot && npm ci
 cp .env.example .env && nano .env
 sudo npm install -g pm2
 pm2 install pm2-logrotate
@@ -71,15 +71,16 @@ In nano: Ctrl+O, Enter, Ctrl+X saves and exits. To send a `.env` you already hav
 A healthy start logs the bot's user id, the DJ/waitlist state, then `Listening now.`
 
 ### updates (automatic)
-`bash scripts/auto-update.sh --install` (once) makes the server check GitHub every 5 minutes. When `master` has new commits it pulls them, runs `npm install` if `package.json` changed, checks `app.js` loads, and restarts the bot. If that check or the install fails, it puts the old code back, leaves the bot running, and skips that version until a newer commit lands. Nothing runs when nothing changed.
+`bash scripts/auto-update.sh --install` (once) makes the server check GitHub every 5 minutes. When `master` has new commits it pulls them, runs `npm ci` if `package.json` or `package-lock.json` changed (the exact versions the code was tested with), checks `app.js` and every dependency load, restarts the bot, and watches it for a minute. If a check or the install fails, or the restarted bot keeps crashing, it puts the old code back (restarting the bot on it if needed) and skips that version until a newer commit lands. Nothing runs when nothing changed.
 - what it did: `cat ~/firetable-hostbot/auto-update.log`
 - update right now: `bash ~/firetable-hostbot/scripts/auto-update.sh`
 - turn it off: `bash ~/firetable-hostbot/scripts/auto-update.sh --uninstall`
 - it pauses (and says so in the log) while you're on another branch or a rolled-back version, or if files in the folder were edited by hand. `.env` edits are fine.
+- whatever lands on `master` runs on the server within 5 minutes, so protect the branch on GitHub: Settings → Branches → add a rule for `master` that requires a pull request.
 
 Two things it can't do for you: if `firebase-rules.json` changed, deploy the rules; if a new `.env` setting was added, add it (`.env.example` lists them).
 
-Without auto-update: `cd ~/firetable-hostbot && git pull && npm install && pm2 restart hostbot`
+Without auto-update: `cd ~/firetable-hostbot && git pull && npm ci && pm2 restart hostbot`
 
 ## if the bot goes down
 Work down the list; stop when it's back.
@@ -97,16 +98,16 @@ Work down the list; stop when it's back.
 **3. Read the error.** `pm2 logs hostbot --lines 50` (Ctrl+C to exit)
 | error mentions | fix |
 |---|---|
-| `wrong-password`, `user-not-found` | `nano ~/firetable-hostbot/.env`, fix `FIRETABLE_USER` / `FIRETABLE_PASS`, `pm2 restart hostbot` |
+| `couldn't sign in`, `wrong-password`, `user-not-found` | `nano ~/firetable-hostbot/.env`, fix `FIRETABLE_USER` / `FIRETABLE_PASS`, `pm2 restart hostbot` (until then the bot keeps retrying, up to every 5 minutes) |
 | `PERMISSION_DENIED` | redeploy `firebase-rules.json` |
-| `Cannot find module` | `cd ~/firetable-hostbot && npm install && pm2 restart hostbot` |
+| `Cannot find module` | `cd ~/firetable-hostbot && npm ci && pm2 restart hostbot` |
 | `quotaExceeded` (YouTube), `couldn't check the track` | wait; the YouTube quota resets at midnight Pacific. Until then the bot retries, then passes the decks along (SoundCloud tracks still play). It never flags tracks it couldn't check |
 | `ENOSPC` / no space left | `pm2 flush && pm2 restart hostbot` |
 | bot is on old code | `cat ~/firetable-hostbot/auto-update.log` says why (paused, failed check, GitHub unreachable) |
 
 Broke right after an update? `cat ~/firetable-hostbot/auto-update.log` shows what changed and when. Go back one version (this also pauses auto-update):
-`cd ~/firetable-hostbot && git checkout HEAD~1 && npm install && pm2 restart hostbot`
-Return to the latest (and resume auto-update) with `git checkout master && git pull && npm install && pm2 restart hostbot`.
+`cd ~/firetable-hostbot && git checkout HEAD~1 && npm ci && pm2 restart hostbot`
+Return to the latest (and resume auto-update) with `git checkout master && git pull && npm ci && pm2 restart hostbot`.
 
 **4. Server off or frozen** (works from a phone). cloud.oracle.com → Compute → Instances → the instance. **Stopped** → Start; **Running** → Reboot → Force reboot. pm2 starts the bot on boot, so check the room after ~2 minutes.
 
@@ -117,7 +118,7 @@ pm2 delete hostbot
 mv firetable-hostbot firetable-hostbot-old
 git clone https://github.com/indiediscotheque/firetable-hostbot.git
 cp firetable-hostbot-old/.env firetable-hostbot/
-cd firetable-hostbot && npm install
+cd firetable-hostbot && npm ci
 pm2 start app.js --name hostbot && pm2 save
 ```
 
@@ -128,6 +129,7 @@ pm2 start app.js --name hostbot && pm2 save
 - youtube-node ^1.3.3
 - node-soundcloud 0.0.6
 - node-vibrant ^3.1.5
+- acorn ^8.15.0 (reads the site's season settings without running them)
 - request (loaded through youtube-node)
 
 ## commands added recently
@@ -147,7 +149,7 @@ The bot keeps the music going. When no one is DJing it takes the decks and plays
 - On by default. Set `AUTODJ=false` to turn it off.
 
 ## seasons
-The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The log shows `site seasons: …` at startup and whenever they change. If the site can't be reached the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
+The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The bot parses the settings out of those files and never runs them, so the site can't run code on the bot; values that aren't plain data (an expression or a function call) are skipped. The log shows `site seasons: …` at startup and whenever they change. If the site can't be reached, or a file has a syntax error, the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
 
 ## timing
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.
