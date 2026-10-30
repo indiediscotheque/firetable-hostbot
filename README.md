@@ -63,17 +63,23 @@ pm2 install pm2-logrotate
 pm2 start app.js --name hostbot
 sudo pm2 startup systemd -u ubuntu --hp /home/ubuntu
 pm2 save
+bash scripts/auto-update.sh --install
 ```
 In nano: Ctrl+O, Enter, Ctrl+X saves and exits. To send a `.env` you already have from your PC instead (`exit` back to PowerShell first):
 `scp -i $HOME\.ssh\hostbot.key .env ubuntu@<server-ip>:~/firetable-hostbot/.env`
 
 A healthy start logs the bot's user id, the DJ/waitlist state, then `Listening now.`
 
-### update
-```
-cd ~/firetable-hostbot && git pull && npm install && pm2 restart hostbot
-```
-If `firebase-rules.json` changed, deploy the rules too.
+### updates (automatic)
+`bash scripts/auto-update.sh --install` (once) makes the server check GitHub every 5 minutes. When `master` has new commits it pulls them, runs `npm install` if `package.json` changed, checks `app.js` loads, and restarts the bot. If that check or the install fails, it puts the old code back, leaves the bot running, and skips that version until a newer commit lands. Nothing runs when nothing changed.
+- what it did: `cat ~/firetable-hostbot/auto-update.log`
+- update right now: `bash ~/firetable-hostbot/scripts/auto-update.sh`
+- turn it off: `bash ~/firetable-hostbot/scripts/auto-update.sh --uninstall`
+- it pauses (and says so in the log) while you're on another branch or a rolled-back version, or if files in the folder were edited by hand. `.env` edits are fine.
+
+Two things it can't do for you: if `firebase-rules.json` changed, deploy the rules; if a new `.env` setting was added, add it (`.env.example` lists them).
+
+Without auto-update: `cd ~/firetable-hostbot && git pull && npm install && pm2 restart hostbot`
 
 ## if the bot goes down
 Work down the list; stop when it's back.
@@ -96,10 +102,11 @@ Work down the list; stop when it's back.
 | `Cannot find module` | `cd ~/firetable-hostbot && npm install && pm2 restart hostbot` |
 | `quotaExceeded` (YouTube) | wait; the quota resets at midnight Pacific |
 | `ENOSPC` / no space left | `pm2 flush && pm2 restart hostbot` |
+| bot is on old code | `cat ~/firetable-hostbot/auto-update.log` says why (paused, failed check, GitHub unreachable) |
 
-Broke right after an update? Go back one version:
+Broke right after an update? `cat ~/firetable-hostbot/auto-update.log` shows what changed and when. Go back one version (this also pauses auto-update):
 `cd ~/firetable-hostbot && git checkout HEAD~1 && npm install && pm2 restart hostbot`
-Return to the latest later with `git checkout master && git pull && npm install && pm2 restart hostbot`.
+Return to the latest (and resume auto-update) with `git checkout master && git pull && npm install && pm2 restart hostbot`.
 
 **4. Server off or frozen** (works from a phone). cloud.oracle.com → Compute → Instances → the instance. **Stopped** → Start; **Running** → Reboot → Force reboot. pm2 starts the bot on boot, so check the room after ~2 minutes.
 
