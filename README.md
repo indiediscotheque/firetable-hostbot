@@ -100,7 +100,7 @@ Work down the list; stop when it's back.
 | `wrong-password`, `user-not-found` | `nano ~/firetable-hostbot/.env`, fix `FIRETABLE_USER` / `FIRETABLE_PASS`, `pm2 restart hostbot` |
 | `PERMISSION_DENIED` | redeploy `firebase-rules.json` |
 | `Cannot find module` | `cd ~/firetable-hostbot && npm install && pm2 restart hostbot` |
-| `quotaExceeded` (YouTube) | wait; the quota resets at midnight Pacific |
+| `quotaExceeded` (YouTube), `couldn't check the track` | wait; the YouTube quota resets at midnight Pacific. Until then the bot retries, then passes the decks along (SoundCloud tracks still play). It never flags tracks it couldn't check |
 | `ENOSPC` / no space left | `pm2 flush && pm2 restart hostbot` |
 | bot is on old code | `cat ~/firetable-hostbot/auto-update.log` says why (paused, failed check, GitHub unreachable) |
 

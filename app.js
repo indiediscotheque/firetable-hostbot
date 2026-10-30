@@ -474,7 +474,71 @@ var seatDJ = function(pson) {
   playDex++;
 };
 
+// ─── When the next track can't be played ────────────────────────────────────
+// Broken for good (deleted, private, blocked in the US, age restricted): flag
+// it, move it to the bottom of the DJ's list and play their next track.
+// Couldn't check it (YouTube quota or key trouble, SoundCloud down, network):
+// flag nothing, try again a little later, then pass the decks along. That way
+// an outage never marks good tracks as broken.
+var LOOKUP_RETRY_DELAYS = [5000, 15000, 30000];
+var startSeq = 0; // each startSong() call; older lookups that answer late are ignored
+var retryTimer = null;
+var lookupFailures = 0; // failed checks in a row this turn
+var lookupDown = {}; // source -> true once the room was told it can't be reached
+
+// Play this DJ's next track (or try this one again) after a pause.
+var retrySameDJ = function(delay) {
+  // startSong() counts a play each time it runs; this try played nothing
+  if (theDJ && theDJ.plays > 0) theDJ.plays--;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = setTimeout(function() {
+    retryTimer = null;
+    startSong(true);
+  }, delay);
+};
+
+var flagAndRetry = function(listRef, key, track, code, message) {
+  listRef.child(key).remove()
+    .then(function() {
+      // keep everything saved with the track (artwork, page URL)
+      listRef.push(Object.assign({}, track, {
+        flagged: { date: Date.now(), code: code }
+      }));
+    })
+    .catch(function(error) {
+      console.log("Song Remove failed: " + error.message);
+    });
+  if (theDJ.id !== botid && trackBrokenMessages) talk(message);
+  retrySameDJ(3000);
+};
+
+var lookupFailed = function(source, err) {
+  var detail = (err && (err.message || err.code)) || String(err || "no answer");
+  console.log("couldn't check the track on " + source + " (not flagging it): " + detail);
+  if (lookupFailures < LOOKUP_RETRY_DELAYS.length) {
+    retrySameDJ(LOOKUP_RETRY_DELAYS[lookupFailures++]);
+    return;
+  }
+  // Still nothing: give the decks to the next DJ (their track may be on the
+  // other service). Said once per outage, not every turn.
+  if (!lookupDown[source]) {
+    lookupDown[source] = true;
+    talk("I can't reach " + source + " right now, so I'm passing the decks along. No tracks are being flagged; I'll keep trying.");
+  }
+  if (theDJ && theDJ.plays > 0) theDJ.plays--; // nothing played this turn
+  nextSong(true);
+};
+
+var lookupWorked = function(source) {
+  lookupFailures = 0;
+  if (lookupDown[source]) {
+    lookupDown[source] = false;
+    console.log(source + " is reachable again.");
+  }
+};
+
 var nextSong = function(noPrevPlay) {
+  lookupFailures = 0; // a new turn starts with a full set of retries
   //we need to remove this song that just played to the bottom of dj's queue
   playDex++; //shift the spotlight to the right
   if (theDJ && theDJ.id == botid && theDJ.removeAfter && autoDJ.autoBus) {
@@ -499,6 +563,18 @@ var nextSong = function(noPrevPlay) {
 };
 
 var startSong = function(noPrevPlay) {
+  var seq = ++startSeq;
+  if (retryTimer) {
+    // a skip or a new DJ got here first; that retry isn't needed anymore
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  if (songTimeout != null) {
+    // the last song is over (or was skipped): its end-of-song timer must not
+    // move the decks again while this one is being looked up
+    clearTimeout(songTimeout);
+    songTimeout = null;
+  }
   console.log(table.length);
   firelevel.clear();
   var danceref = firebase.database().ref("dance");
@@ -616,7 +692,9 @@ var startSong = function(noPrevPlay) {
     queueRef = firebase.database().ref("queues/" + theDJ.id);
   }
 
-  queueRef.once("value").then(function(snapshot) {
+  var listRef = queueRef; // this DJ's list, even if queueRef moves on meanwhile
+  listRef.once("value").then(function(snapshot) {
+    if (seq !== startSeq) return; // skipped or restarted meanwhile
     var data = snapshot.val();
     var goodTrack = null;
     for (var key in data) {
@@ -631,83 +709,19 @@ var startSong = function(noPrevPlay) {
       var nextSongkey = goodTrack;
       if (data[nextSongkey].type == 1) {
         youTube.getById(data[nextSongkey].cid, function(error, result) {
-          if (error || !result.items) {
-            console.log(error);
-            //SONG DOES NOT EXIST ON YT
-            var removeThis = queueRef.child(nextSongkey);
-            removeThis.remove()
-              .then(function() {
-                console.log("song remove went great.");
-                // keep everything saved with the track (artwork, page URL)
-                var songBack = Object.assign({}, data[nextSongkey], {
-                  flagged: { date: Date.now(), code: 1 }
-                });
-                queueRef.push(songBack);
-              })
-              .catch(function(error) {
-                console.log("Song Remove failed: " + error.message);
-              });
-            if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
-            setTimeout(function() {
-              startSong(true); //try again with SAME DJ
-            }, 3000);
+          if (seq !== startSeq) return; // skipped or restarted while YouTube answered
+          if (error || !result || !Array.isArray(result.items)) {
+            // quota, API key or network trouble: the track itself may be fine
+            lookupFailed("YouTube", error);
           } else {
-            console.log(result);
+            lookupWorked("YouTube");
             if (!result.items.length) {
-              var removeThis = queueRef.child(nextSongkey);
-              removeThis.remove()
-                .then(function() {
-                  console.log("song remove went great.");
-                  // keep everything saved with the track (artwork, page URL)
-                  var songBack = Object.assign({}, data[nextSongkey], {
-                    flagged: { date: Date.now(), code: 2 }
-                  });
-                  queueRef.push(songBack);
-                })
-                .catch(function(error) {
-                  console.log("Song Remove failed: " + error.message);
-                });
-              if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
-              setTimeout(function() {
-                startSong(true); //try again with SAME DJ
-              }, 3000);
+              // the video is gone (deleted or private)
+              flagAndRetry(listRef, nextSongkey, data[nextSongkey], 2, "@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
             } else if (ytVideoCheck(result)) {
-              var removeThis = queueRef.child(nextSongkey);
-              removeThis.remove()
-                .then(function() {
-                  console.log("song remove went great.");
-                  // keep everything saved with the track (artwork, page URL)
-                  var songBack = Object.assign({}, data[nextSongkey], {
-                    flagged: { date: Date.now(), code: 3 }
-                  });
-                  queueRef.push(songBack);
-                })
-                .catch(function(error) {
-                  console.log("Song Remove failed: " + error.message);
-                });
-              if (theDJ.id !== botid)
-                if ((theDJ.id !== botid) && trackBrokenMessages) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is blocked in the US. Letting you play whatever is next in your queue instead.");
-              setTimeout(function() {
-                startSong(true); //try again with SAME DJ
-              }, 3000);
+              flagAndRetry(listRef, nextSongkey, data[nextSongkey], 3, "Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is blocked in the US. Letting you play whatever is next in your queue instead.");
             } else if (ytAgeRestrictionCheck(result)) {
-              var removeThis = queueRef.child(nextSongkey);
-              removeThis.remove()
-                .then(function() {
-                  console.log("song remove went great.");
-                  // keep everything saved with the track (artwork, page URL)
-                  var songBack = Object.assign({}, data[nextSongkey], {
-                    flagged: { date: Date.now(), code: 7 }
-                  });
-                  queueRef.push(songBack);
-                })
-                .catch(function(error) {
-                  console.log("Song Remove failed: " + error.message);
-                });
-              if ((theDJ.id !== botid) && trackBrokenMessages) talk("Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is age restricted and can't be played outside of Youtube.com. Letting you play whatever is next in your queue instead.");
-              setTimeout(function() {
-                startSong(true); //try again with SAME DJ
-              }, 3000);
+              flagAndRetry(listRef, nextSongkey, data[nextSongkey], 7, "Hey @" + theDJ.name + ", looks like https://www.youtube.com/watch?v=" + data[nextSongkey].cid + " is age restricted and can't be played outside of Youtube.com. Letting you play whatever is next in your queue instead.");
             } else {
 
               var s2p = firebase.database().ref("songToPlay");
@@ -874,213 +888,165 @@ var startSong = function(noPrevPlay) {
 begin sc check
         */
         request('https://api-v2.soundcloud.com/resolve?url=https%3A//api.soundcloud.com/tracks/' + data[nextSongkey].cid + '&format=json&client_id=' + process.env.SOUNDCLOUD_KEY, function cbfunc(error, response, body) {
-          //If call returned correctly, continue
-          if (!error && response.statusCode == 200) {
-            var tracks = [JSON.parse(body)];
-            console.log(tracks);
-            if (tracks) {
-              if (tracks.length) {
-                //exists!
-                console.log(tracks[0]);
-                var totalseconds = Math.floor(tracks[0].duration / 1000);
-                lastfm.duration = totalseconds;
-                lastfm.songStart = Math.floor((new Date()).getTime() / 1000);
-                if (songtimer != null) {
-                  clearTimeout(songtimer);
-                  songtimer = null;
-                }
-                songtimer = setTimeout(function() {
-                  songtimer = null;
-                  if (lastfm.key) lastfm.scrobble();
-                }, (totalseconds * 1000) - 3000);
-                var s2p = firebase.database().ref("songToPlay");
-                var yargo = data[nextSongkey].name.toString().split(" - ");
-                var sartist = yargo[0];
-                var stitle = yargo[1];
-
-                if (sartist == "Unknown" && !stitle) {
-                  var cutetags = tracks[0].title.toString().split(" - ");
-                  var sartist = cutetags[0];
-                  var stitle = cutetags[1];
-                }
-
-                if (!stitle) {
-                  stitle = sartist;
-                  sartist = tracks[0].user.username;
-                }
-                if (sartist == "Unknown") sartist = tracks[0].user.username;
-                var thedate = new Date(tracks[0].created_at);
-                var postedDate = thedate.getTime();
-                var now = serverNow();
-                var songInfo = {
-                  type: data[nextSongkey].type,
-                  cid: data[nextSongkey].cid,
-                  title: stitle,
-                  started: now,
-                  url: tracks[0].permalink_url,
-                  duration: totalseconds,
-                  artist: sartist,
-                  image: tracks[0].artwork_url,
-                  postedDate: postedDate,
-                  djid: theDJ.id,
-                  djname: theDJ.name,
-                  key: nextSongkey
-                };
-                var colref = firebase.database().ref("colors");
-                var clrs = "#fff";
-                var textcol = "#fff";
-                var moreColors = {};
-                var colref = firebase.database().ref("colors");
-                if (!songInfo.image) {
-                  songInfo.image = "img/idlogo.png";
-                  var clrs1 = {
-                    color: clrs,
-                    txt: textcol
-                  };
-                  colref.set(clrs1);
-                  colors = clrs1;
-                } else {
-                  Vibrant.from(songInfo.image).getPalette(function(err, palette) {
-                    console.log(palette);
-                    if (palette.Vibrant) {
-                      clrs = palette.Vibrant.getHex();
-                      textcol = palette.Vibrant.getBodyTextColor();
-                    }
-                    if (palette.LightVibrant) {
-                      moreColors.lightVibrant = {
-                        color: palette.LightVibrant.getHex(),
-                        txt: palette.LightVibrant.getBodyTextColor()
-                      };
-                    }
-                    if (palette.DarkVibrant) {
-                      moreColors.darkVibrant = {
-                        color: palette.DarkVibrant.getHex(),
-                        txt: palette.DarkVibrant.getBodyTextColor()
-                      };
-                    }
-                    if (palette.Muted) {
-                      moreColors.muted = {
-                        color: palette.Muted.getHex(),
-                        txt: palette.Muted.getBodyTextColor()
-                      };
-                    }
-                    if (palette.LightMuted) {
-                      moreColors.lightMuted = {
-                        color: palette.LightMuted.getHex(),
-                        txt: palette.LightMuted.getBodyTextColor()
-                      };
-                    }
-                    if (palette.DarkMuted) {
-                      moreColors.darkMuted = {
-                        color: palette.DarkMuted.getHex(),
-                        txt: palette.DarkMuted.getBodyTextColor()
-                      };
-                    }
-                    var thecolors = {
-                      color: clrs,
-                      txt: textcol,
-                      altColors: moreColors
-                    };
-                    colref.set(thecolors);
-                    colors = thecolors;
-                  });
-                }
-                song = songInfo;
-                s2p.set(songInfo);
-                if (lastfm.key) lastfm.nowPlaying();
-
-                var removeThis = queueRef.child(song.key);
-                removeThis.remove()
-                  .then(function() {
-                    console.log("song remove went great.");
-                    var sname = song.artist + " - " + song.title;
-                    // keep everything saved with the track, and remember SoundCloud
-                      // artwork / page URL learned just now
-                      var songBack = Object.assign({}, data[nextSongkey], {
-                        cid: song.cid,
-                        name: sname,
-                        type: song.type
-                      });
-                      delete songBack.flagged;
-                      if (song.type == 2) {
-                        if (!songBack.img && song.image && song.image !== "img/idlogo.png") songBack.img = song.image;
-                        if (!songBack.url && song.url) songBack.url = song.url;
-                      }
-                    queueRef.push(songBack);
-                    gts.np();
-                  })
-                  .catch(function(error) {
-                    console.log("Song Remove failed: " + error.message);
-                  });
-                // set the timeout to move forward at end of song
-                if (songTimeout != null) {
-                  clearTimeout(songTimeout);
-                  songTimeout = null;
-                }
-                songTimeout = setTimeout(function() {
-                  songTimeout = null;
-                  nextSong(); //NEEEEEEXT
-                }, totalseconds * 1000);
-              } else {
-                //does not exist
-                var removeThis = queueRef.child(nextSongkey);
-                removeThis.remove()
-                  .then(function() {
-                    console.log("song remove went great.");
-                    // keep everything saved with the track (artwork, page URL)
-                    var songBack = Object.assign({}, data[nextSongkey], {
-                      flagged: { date: Date.now(), code: 4 }
-                    });
-                    queueRef.push(songBack);
-                  })
-                  .catch(function(error) {
-                    console.log("Song Remove failed: " + error.message);
-                  });
-                if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
-                setTimeout(function() {
-                  startSong(true); //try again with SAME DJ
-                }, 3000);
-              }
-            } else {
-              //does not exist
-              var removeThis = queueRef.child(nextSongkey);
-              removeThis.remove()
-                .then(function() {
-                  console.log("song remove went great.");
-                  // keep everything saved with the track (artwork, page URL)
-                  var songBack = Object.assign({}, data[nextSongkey], {
-                    flagged: { date: Date.now(), code: 5 }
-                  });
-                  queueRef.push(songBack);
-                })
-                .catch(function(error) {
-                  console.log("Song Remove failed: " + error.message);
-                });
-              if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
-              setTimeout(function() {
-                startSong(true); //try again with SAME DJ
-              }, 3000);
+          if (seq !== startSeq) return; // skipped or restarted while SoundCloud answered
+          var status = response && response.statusCode;
+          var scTrack = null;
+          if (!error && status == 200) {
+            try {
+              scTrack = JSON.parse(body);
+            } catch (e) {
+              scTrack = null;
             }
+          }
+          if (status == 404 || status == 410) {
+            // SoundCloud answered: the track is gone (deleted or private)
+            lookupWorked("SoundCloud");
+            flagAndRetry(listRef, nextSongkey, data[nextSongkey], 4, "@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... Clean up your queue please thanks.");
+          } else if (!scTrack || !scTrack.id) {
+            // down, rate limited or refusing the key: the track itself may be fine
+            lookupFailed("SoundCloud", error || ("HTTP " + status));
           } else {
-            // ERROR
-            //does not exist
-            var removeThis = queueRef.child(nextSongkey);
+            lookupWorked("SoundCloud");
+            var tracks = [scTrack];
+            var totalseconds = Math.floor(tracks[0].duration / 1000);
+            lastfm.duration = totalseconds;
+            lastfm.songStart = Math.floor((new Date()).getTime() / 1000);
+            if (songtimer != null) {
+              clearTimeout(songtimer);
+              songtimer = null;
+            }
+            songtimer = setTimeout(function() {
+              songtimer = null;
+              if (lastfm.key) lastfm.scrobble();
+            }, (totalseconds * 1000) - 3000);
+            var s2p = firebase.database().ref("songToPlay");
+            var yargo = data[nextSongkey].name.toString().split(" - ");
+            var sartist = yargo[0];
+            var stitle = yargo[1];
+
+            if (sartist == "Unknown" && !stitle) {
+              var cutetags = tracks[0].title.toString().split(" - ");
+              var sartist = cutetags[0];
+              var stitle = cutetags[1];
+            }
+
+            if (!stitle) {
+              stitle = sartist;
+              sartist = tracks[0].user.username;
+            }
+            if (sartist == "Unknown") sartist = tracks[0].user.username;
+            var thedate = new Date(tracks[0].created_at);
+            var postedDate = thedate.getTime();
+            var now = serverNow();
+            var songInfo = {
+              type: data[nextSongkey].type,
+              cid: data[nextSongkey].cid,
+              title: stitle,
+              started: now,
+              url: tracks[0].permalink_url,
+              duration: totalseconds,
+              artist: sartist,
+              image: tracks[0].artwork_url,
+              postedDate: postedDate,
+              djid: theDJ.id,
+              djname: theDJ.name,
+              key: nextSongkey
+            };
+            var colref = firebase.database().ref("colors");
+            var clrs = "#fff";
+            var textcol = "#fff";
+            var moreColors = {};
+            var colref = firebase.database().ref("colors");
+            if (!songInfo.image) {
+              songInfo.image = "img/idlogo.png";
+              var clrs1 = {
+                color: clrs,
+                txt: textcol
+              };
+              colref.set(clrs1);
+              colors = clrs1;
+            } else {
+              Vibrant.from(songInfo.image).getPalette(function(err, palette) {
+                console.log(palette);
+                if (palette.Vibrant) {
+                  clrs = palette.Vibrant.getHex();
+                  textcol = palette.Vibrant.getBodyTextColor();
+                }
+                if (palette.LightVibrant) {
+                  moreColors.lightVibrant = {
+                    color: palette.LightVibrant.getHex(),
+                    txt: palette.LightVibrant.getBodyTextColor()
+                  };
+                }
+                if (palette.DarkVibrant) {
+                  moreColors.darkVibrant = {
+                    color: palette.DarkVibrant.getHex(),
+                    txt: palette.DarkVibrant.getBodyTextColor()
+                  };
+                }
+                if (palette.Muted) {
+                  moreColors.muted = {
+                    color: palette.Muted.getHex(),
+                    txt: palette.Muted.getBodyTextColor()
+                  };
+                }
+                if (palette.LightMuted) {
+                  moreColors.lightMuted = {
+                    color: palette.LightMuted.getHex(),
+                    txt: palette.LightMuted.getBodyTextColor()
+                  };
+                }
+                if (palette.DarkMuted) {
+                  moreColors.darkMuted = {
+                    color: palette.DarkMuted.getHex(),
+                    txt: palette.DarkMuted.getBodyTextColor()
+                  };
+                }
+                var thecolors = {
+                  color: clrs,
+                  txt: textcol,
+                  altColors: moreColors
+                };
+                colref.set(thecolors);
+                colors = thecolors;
+              });
+            }
+            song = songInfo;
+            s2p.set(songInfo);
+            if (lastfm.key) lastfm.nowPlaying();
+
+            var removeThis = queueRef.child(song.key);
             removeThis.remove()
               .then(function() {
                 console.log("song remove went great.");
-                // keep everything saved with the track (artwork, page URL)
-                var songBack = Object.assign({}, data[nextSongkey], {
-                  flagged: { date: Date.now(), code: 5 }
-                });
+                var sname = song.artist + " - " + song.title;
+                // keep everything saved with the track, and remember SoundCloud
+                  // artwork / page URL learned just now
+                  var songBack = Object.assign({}, data[nextSongkey], {
+                    cid: song.cid,
+                    name: sname,
+                    type: song.type
+                  });
+                  delete songBack.flagged;
+                  if (song.type == 2) {
+                    if (!songBack.img && song.image && song.image !== "img/idlogo.png") songBack.img = song.image;
+                    if (!songBack.url && song.url) songBack.url = song.url;
+                  }
                 queueRef.push(songBack);
+                gts.np();
               })
               .catch(function(error) {
                 console.log("Song Remove failed: " + error.message);
               });
-            if ((theDJ.id !== botid) && trackBrokenMessages) talk("@" + theDJ.name + " you tried to play a broken song. Letting you play whatever is next in your queue instead... There might also be a Soundcloud api issue right now...");
-            setTimeout(function() {
-              startSong(true); //try again with SAME DJ
-            }, 3000);
+            // set the timeout to move forward at end of song
+            if (songTimeout != null) {
+              clearTimeout(songTimeout);
+              songTimeout = null;
+            }
+            songTimeout = setTimeout(function() {
+              songTimeout = null;
+              nextSong(); //NEEEEEEXT
+            }, totalseconds * 1000);
           }
         });
         /*
