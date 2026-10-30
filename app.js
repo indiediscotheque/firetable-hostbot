@@ -5,6 +5,7 @@ var request = require('request');
 var firebase = require('firebase');
 var YouTube = require('youtube-node');
 var Vibrant = require('node-vibrant');
+var vm = require('vm');
 var youTube = new YouTube();
 
 youTube.setKey(process.env.YOUTUBE_KEY);
@@ -57,17 +58,103 @@ function serverNow() {
   return Date.now() + serverTimeOffset;
 }
 
-// Robohash set stamped on new trading cards. AVATARSET forces one set all
-// year; otherwise cards match the site's seasonal theme (monsters in October).
-function cardAvatarSet() {
-  if (process.env.AVATARSET) return process.env.AVATARSET;
-  return new Date().getMonth() === 9 ? "set2" : "set1";
+// ─── Seasons, from the site ─────────────────────────────────────────────────
+// The site (firetable-user) decides the seasonal trading-card avatars and the
+// string-lights months: js/seasons.js holds the defaults and config.js can
+// override them. With SITE_URL set, the bot reads both files from the live
+// site at startup and every 10 minutes, so a change there reaches the bot on
+// its own. Without SITE_URL (or if the site can't be reached) it uses the
+// last values it read, or these defaults, which match the site's.
+// AVATARSET / LIGHTS_MONTHS in .env still force a value, but leave them unset
+// to follow the site.
+var SITE_SEASONS_REFRESH_MS = 10 * 60 * 1000;
+var SITE_SEASON_DEFAULTS = {
+  avatarset: "",
+  avatarSeasons: [{ months: [10], style: "set2" }], // October: monsters
+  lightsMonths: [12] // December
+};
+var siteSeasons = JSON.parse(JSON.stringify(SITE_SEASON_DEFAULTS));
+
+function fetchSiteFile(path) {
+  var url = new URL(path, process.env.SITE_URL.trim().replace(/\/?$/, "/"));
+  url.searchParams.set("t", Date.now()); // skip any cached copy
+  return fetch(url, { signal: AbortSignal.timeout(15000) }).then(function(res) {
+    if (!res.ok) throw new Error(path + " answered HTTP " + res.status);
+    return res.text();
+  });
 }
 
-// Stage string lights. The site keeps them on all December by itself; the
-// rest of the year supermods switch them with !lights, !lightson, !lightsoff.
-// LIGHTS_MONTHS (e.g. "12" or "11,12") should match config.js lightsMonths.
-var lightsMonths = (process.env.LIGHTS_MONTHS || "12").split(",").map(Number);
+function firstDefined() {
+  for (var i = 0; i < arguments.length; i++) {
+    if (arguments[i] !== undefined) return arguments[i];
+  }
+}
+
+function refreshSiteSeasons() {
+  if (!process.env.SITE_URL) return Promise.resolve();
+  return Promise.all([
+    // An older site without js/seasons.js still works: its defaults are ours.
+    fetchSiteFile("js/seasons.js").catch(function() { return ""; }),
+    fetchSiteFile("config.js")
+  ]).then(function(files) {
+    // Both files are plain data the site's own pages run; evaluate them the
+    // same way, in a context of their own, then copy out just the settings.
+    var context = vm.createContext({});
+    vm.runInContext(files[0], context, { filename: "seasons.js", timeout: 1000 });
+    vm.runInContext(files[1], context, { filename: "config.js", timeout: 1000 });
+    var cfg = context.ftconfigs || {};
+    var next = JSON.parse(JSON.stringify({
+      avatarset: String(cfg.avatarset || "").trim(),
+      avatarSeasons: firstDefined(cfg.avatarSeasons, context.AVATAR_SEASONS, SITE_SEASON_DEFAULTS.avatarSeasons),
+      lightsMonths: firstDefined(cfg.lightsMonths, context.LIGHTS_MONTHS, SITE_SEASON_DEFAULTS.lightsMonths)
+    }));
+    if (JSON.stringify(next) !== JSON.stringify(siteSeasons)) {
+      console.log("site seasons:", JSON.stringify(next));
+    }
+    siteSeasons = next;
+  }).catch(function(err) {
+    console.log("couldn't read seasons from " + process.env.SITE_URL + " (keeping the last ones):", err.message);
+  });
+}
+refreshSiteSeasons();
+setInterval(refreshSiteSeasons, SITE_SEASONS_REFRESH_MS);
+
+function inMonths(months, date) {
+  return Array.isArray(months) && months.map(Number).indexOf(date.getMonth() + 1) !== -1;
+}
+
+// Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2".
+function normalizeAvatarStyle(val) {
+  val = String(val || "").trim();
+  if (!val) return null;
+  return /^(robohash|dicebear):/.test(val) ? val : "robohash:" + val;
+}
+
+// Robohash set stamped on new trading cards: the room's avatar theme, the way
+// the site picks it (config.js avatarset, else the seasonal theme).
+function cardAvatarSet() {
+  if (process.env.AVATARSET) return process.env.AVATARSET;
+  var now = new Date();
+  var style = normalizeAvatarStyle(siteSeasons.avatarset);
+  if (!style && Array.isArray(siteSeasons.avatarSeasons)) {
+    for (var i = 0; i < siteSeasons.avatarSeasons.length; i++) {
+      var season = siteSeasons.avatarSeasons[i];
+      if (season && inMonths(season.months, now)) {
+        style = normalizeAvatarStyle(season.style);
+        break;
+      }
+    }
+  }
+  // Cards draw Robohash sets only; a DiceBear room theme keeps the robots.
+  return style && style.indexOf("robohash:") === 0 ? (style.slice(9) || "set1") : "set1";
+}
+
+// Stage string lights. The site keeps them on by itself in its lights months;
+// the rest of the year supermods switch them with !lights, !lightson, !lightsoff.
+function currentLightsMonths() {
+  if (process.env.LIGHTS_MONTHS) return process.env.LIGHTS_MONTHS.split(",").map(Number);
+  return siteSeasons.lightsMonths;
+}
 
 // Chat notices when a DJ's song is broken/blocked. .env values are strings,
 // so parse "true"/"1"/"on"/"yes" instead of comparing to the boolean true.
@@ -78,7 +165,7 @@ firebase.database().ref("lights").on("value", function(snapshot) {
 });
 
 function isLightsSeason() {
-  return lightsMonths.indexOf(new Date().getMonth() + 1) !== -1;
+  return inMonths(currentLightsMonths(), new Date());
 }
 
 function lightsCommand(command, namebo) {
