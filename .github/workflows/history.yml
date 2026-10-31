@@ -30,8 +30,8 @@ on:
       tidy:
         description: "Tidy tags no mod has fixed (see tidy_preview.csv first): junk = take out Official Video/HD/Visualizer/etc; rsn = also feat. and versions in RSN layout"
         type: choice
-        options: ["none", "junk", "rsn"]
-        default: "none"
+        options: ["rsn", "junk", "none"]
+        default: "rsn"
       retag:
         description: "Also change upload tags to each track's best spelling (see tag_fixes.csv first)"
         type: boolean
@@ -115,7 +115,7 @@ jobs:
           ACCENTS: ${{ github.event_name == 'schedule' || inputs.restore_accents }}
           RETAG: ${{ inputs.retag }}
           FORCE: ${{ inputs.force }}
-          TIDY: ${{ inputs.tidy || vars.HISTORY_TIDY || 'none' }}
+          TIDY: ${{ inputs.tidy || vars.HISTORY_TIDY || 'rsn' }}
         run: |
           args=()
           [ "$TIDY" = "junk" ] || [ "$TIDY" = "rsn" ] && args+=(--tidy "$TIDY")

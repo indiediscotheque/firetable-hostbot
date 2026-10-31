@@ -77,7 +77,7 @@ Tidy never touches:
 - tags a mod fixed: logged in `tagLog`, which covers every fix from now on (`!fixtags` or the site's editor)
 - anything in `tag-exceptions.csv` (in `tools/history/`, or `history-data/`): one artist (`!!!`) or song (`Artist - Title`) per line, for deliberate exceptions to RSN
 
-Fixes made before the tag log existed can't be told apart from the bot's own guesses. Add the ones that break RSN on purpose to the exceptions file. For the Action, set the repository variable `HISTORY_TIDY` to `junk` or `rsn` to make it the weekly default.
+Fixes made before the tag log existed can't be told apart from the bot's own guesses. Add the ones that break RSN on purpose to the exceptions file. The Action tidies in RSN by default (`Steve Angello - Remember (feat. The Presets)` is published as `Steve Angello - Remember feat. The Presets`); pick another level when running it by hand, or set the repository variable `HISTORY_TIDY` to `junk` or `none` to change the weekly default.
 
 ## how songs are matched
 Rohn Standard Notation is the guide for *recognising* a song, never a rule for rewriting one. Tags people chose stay exactly as they are.
