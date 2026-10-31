@@ -157,6 +157,36 @@ await expect("ALLOWED", "mod fixes a play's tags (Recent + global, one write)", 
 }));
 await expect("ALLOWED", "delete a playlist", eve.ref("playlists/eve/pl3").remove());
 
+console.log("-- push notifications");
+const P256 = "B" + "A".repeat(86), AUTH = "c2VjcmV0c2VjcmV0c2VjcmV0", ENDPOINT = "https://fcm.googleapis.com/fcm/send/abc:def";
+const device = (extra) => Object.assign({ endpoint: ENDPOINT, p256dh: P256, auth: AUTH, key: P256, device: "Android", everyone: false, seen: TS }, extra);
+await expect("ALLOWED", "save your phone (as the site does)", eve.ref("pushSubs/eve/dev_eve_1").set(device()));
+await expect("ALLOWED", "save an iPhone (Apple's push service)", eve.ref("pushSubs/eve/dev_eve_2").set(device({ endpoint: "https://web.push.apple.com/QOabc", device: "iPhone" })));
+await expect("ALLOWED", "turn @everyone on (and see it again)", eve.ref("pushSubs/eve/dev_eve_1").update({ everyone: true, seen: TS }));
+await expect("ALLOWED", "read your own devices", eve.ref("pushSubs/eve").once("value"));
+await expect("ALLOWED", "anyone signed in reads the public push key", eve.ref("pushKey").once("value"));
+await expect("ALLOWED", "bot reads every device", db("bot").ref("pushSubs").once("value"));
+await expect("ALLOWED", "bot removes a device that unsubscribed", db("bot").ref("pushSubs/eve/dev_eve_2").remove());
+await expect("ALLOWED", "bot saves its keys and publishes the public one", db("bot").ref("pushVapid").set({ publicKey: P256, privateKey: "k".repeat(43) })
+  .then(() => db("bot").ref("pushKey").set(P256)));
+await expect("ALLOWED", "turn it off (remove your device)", eve.ref("pushSubs/eve/dev_eve_1").remove());
+await expect("DENIED", "save a device for someone else", eve.ref("pushSubs/bob/dev_eve_1").set(device()));
+await expect("DENIED", "read someone else's devices", eve.ref("pushSubs/bob").once("value"));
+await expect("DENIED", "read every device", eve.ref("pushSubs").once("value"));
+await expect("DENIED", "read the bot's private key", eve.ref("pushVapid").once("value"));
+await expect("DENIED", "change the public push key", eve.ref("pushKey").set(P256));
+await expect("DENIED", "device on your own server (not a push service)", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "https://evil.example/push" })));
+await expect("DENIED", "device on a look-alike host", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "https://fcm.googleapis.com.evil.example/x" })));
+await expect("DENIED", "device on plain http", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "http://fcm.googleapis.com/fcm/send/x" })));
+await expect("DENIED", "endpoint of 200 KB", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "https://fcm.googleapis.com/" + big })));
+await expect("DENIED", "extra field of 200 KB", eve.ref("pushSubs/eve/dev_eve_3").set(device({ junk: big })));
+await expect("DENIED", "bad p256dh key", eve.ref("pushSubs/eve/dev_eve_3").set(device({ p256dh: "nope" })));
+await expect("DENIED", "backdated seen", eve.ref("pushSubs/eve/dev_eve_3").set(device({ seen: 1 })));
+await expect("DENIED", "device id with odd characters", eve.ref("pushSubs/eve/has spaces!").set(device()));
+await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("banned/eve").set(true));
+await expect("DENIED", "a banned user saves a device", eve.ref("pushSubs/eve/dev_eve_4").set(device()));
+await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("banned/eve").remove());
+
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
 process.exit(failed ? 1 : 0);

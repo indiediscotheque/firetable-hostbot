@@ -3,8 +3,9 @@
 #   - ESLint on app.js, and unit tests of its small helpers
 #   - the database rules refuse what they should and allow what the site and
 #     bot write (Firebase emulator)
-#   - the bot itself, against the emulators with fake YouTube / SoundCloud
-#     answers: outages, broken tracks, skips, commands, names, restarts
+#   - the bot itself, against the emulators with fake YouTube / SoundCloud /
+#     push-service answers: outages, broken tracks, skips, commands, names,
+#     push notifications, restarts
 #   - the auto-update script: updates, rollbacks and dependency installs
 # Run the same on your computer (needs Java 21 for the emulators):
 #   npm ci && cd test && npm ci && npm test

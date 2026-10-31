@@ -5,6 +5,7 @@
 // Pass a scenario name to run just that one.
 import { spawn } from "child_process";
 import { readFileSync } from "fs";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -379,6 +380,61 @@ const scenarios = {
     check(s.some((t) => /no theme/.test(t)) && s.some((t) => /no card to print/.test(t)), "commands with nobody DJing don't crash the bot");
     await healthy(p);
     return p;
+  },
+  async push_notifications() {
+    // a browser's push keys, as the site saves them
+    const ua = crypto.createECDH("prime256v1");
+    ua.generateKeys();
+    const auth = crypto.randomBytes(16).toString("base64url");
+    const dev = (endpoint, extra) => Object.assign({ endpoint, p256dh: ua.getPublicKey().toString("base64url"), auth, device: "Android", everyone: false, seen: Date.now() }, extra);
+    await put("/", base({
+      users: {
+        [BOT]: { username: "hostbot", hostbot: true, status: true },
+        dj1: { username: "dj1", status: true, idle: { isIdle: true, audio: 1, since: Date.now() } }, // phone in a pocket
+        dj2: { username: "dj2", status: true, idle: { isIdle: false, audio: 1, since: Date.now() } }, // looking at the room
+        boss: { username: "boss", status: true, mod: true, supermod: true },
+        far: { username: "far", status: false }
+      },
+      nameClaim: { hostbot: BOT, dj1: "dj1", dj2: "dj2", boss: "boss", far: "far" },
+      pushSubs: {
+        dj1: { phone_dj1: dev("https://fcm.googleapis.com/fcm/send/dj1-phone", { everyone: true }), ipad_dj1: dev("https://web.push.apple.com/gone", { device: "iPad" }),
+          old_dj1x: dev("https://fcm.googleapis.com/fcm/send/dj1-old", { seen: Date.now() - 90 * 24 * 3600 * 1000 }) },
+        dj2: { phone_dj2: dev("https://fcm.googleapis.com/fcm/send/dj2-phone", { everyone: true }) },
+        far: { phone_far: dev("https://web.push.apple.com/far-iphone") }
+      },
+      blocks: { far: { boss: true } }
+    }));
+    const p = startBot("push", { PUSH_UA_KEY: ua.getPrivateKey().toString("base64url"), PUSH_AUTH: auth, SITE_URL: "https://room.example/" });
+    check(await waitFor(p, "push: on (new keys saved in the database, subject https://room.example)"), "first start: makes a key pair and keeps it in the database");
+    let st = await get("/");
+    check(st.pushKey && st.pushVapid && st.pushKey === st.pushVapid.publicKey, "publishes the public key for the site");
+    check(st.pushSubs.dj1 && !st.pushSubs.dj1.old_dj1x && st.pushSubs.dj1.phone_dj1, "devices not opened in 60 days are dropped");
+    await say("dj2", "hey @dj1 come back");
+    check(await waitFor(p, "fake push /fcm/send/dj1-phone [vapid ok ttl=86400]: dj2 | hey @dj1 come back | badge=1"), "a mention reaches the phone, signed, with the unread count");
+    await sleep(500);
+    st = await get("/");
+    check(!st.pushSubs.dj1.ipad_dj1 && /removed a device of dj1 that unsubscribed \(HTTP 410\)/.test(p.out), "a device the push service says is gone is removed");
+    await say("dj1", "@dj2 I'm here");
+    await say("dj1", "@far you there?");
+    await sleep(1500);
+    check(!/fake push \/fcm\/send\/dj2-phone/.test(p.out), "nobody is pushed while they're looking at the room");
+    check(/fake push \/far-iphone .*: dj1 \| @far you there\?/.test(p.out), "someone offline gets it");
+    await say("boss", "@everyone party time");
+    check(await waitFor(p, "fake push /fcm/send/dj1-phone [vapid ok ttl=3600]: boss → everyone | @everyone party time"), "@everyone from a mod reaches devices that opted in");
+    await sleep(1000);
+    check(!/far-iphone .*everyone/.test(p.out), "@everyone skips devices that didn't opt in and people who blocked the sender");
+    await say("dj2", "!pushtest");
+    check(await waitFor(p, "fake push /fcm/send/dj2-phone [vapid ok ttl=300]: Push notifications are on"), "!pushtest reaches your devices even while you're in the room");
+    await sleep(1000);
+    check(said(await get("/")).some((t) => /dj2, sent a test notification to 1 device\./.test(t)), "and the bot says how many");
+    check(!/VAPID WRONG/.test(p.out), "every push carries a valid VAPID token for its push service");
+    await healthy(p);
+    p.kill();
+    await sleep(400);
+    const again = startBot("push", { PUSH_UA_KEY: ua.getPrivateKey().toString("base64url"), PUSH_AUTH: auth });
+    check(await waitFor(again, "push: on (keys from the database"), "a restart keeps the same keys");
+    check((await get("/pushKey")) === st.pushKey, "the published key stays the same");
+    return again;
   },
   async wrong_password() {
     await put("/", base({}));
