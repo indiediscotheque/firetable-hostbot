@@ -1,6 +1,8 @@
 # Checks every push and pull request:
 #   - app.js, the auto-update script and firebase-rules.json parse
-#   - ESLint on app.js, and unit tests of its small helpers
+#   - ESLint on app.js, lib/ and tools/, and unit tests of its small helpers
+#   - the tag matcher and the play history toolkit (tools/history) on sample
+#     ADAM / Last.fm / Firebase exports
 #   - the database rules refuse what they should and allow what the site and
 #     bot write (Firebase emulator)
 #   - the bot itself, against the emulators with fake YouTube / SoundCloud /
@@ -53,6 +55,9 @@ jobs:
 
       - name: Unit tests
         run: cd test && npm run test:unit
+
+      - name: Tag matching and play history toolkit
+        run: cd test && npm run test:history
 
       # The emulators need Java 21, which the runner has installed
       - name: Database rules

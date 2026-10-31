@@ -1,0 +1,12 @@
+{
+  "globalTracks": {
+    "1eeeeeeeeee": { "artist": "TameImpalaVEVO", "title": "Feels Like We Only Go Backwards (Official Video) HD", "first_play_date": 1700000000000, "first_play_dj": "eve", "type": 1 },
+    "1ccccccccccc": { "artist": "Tame Impala", "title": "The Less I Know The Better", "first_play_date": 1710000000000, "first_play_dj": "eve", "type": 1 },
+    "1fffffffffff": { "artist": "ODESZA", "title": "Say My Name ft. Zyra [RL Grime Edit]", "first_play_date": 1710000000000, "first_play_dj": "eve", "type": 1 },
+    "1ggggggggggg": { "artist": "Daft Punk ft. Pharrell Williams", "title": "Get Lucky | Columbia Records", "first_play_date": 1710000000000, "first_play_dj": "eve", "type": 1 },
+    "1hhhhhhhhhhh": { "artist": "!!!", "title": "One Girl / One Boy (Official Video)", "first_play_date": 1710000000000, "first_play_dj": "eve", "type": 1 }
+  },
+  "tagLog": {
+    "-t1": { "k": "1fffffffffff", "a": "ODESZA", "t": "Say My Name ft. Zyra [RL Grime Edit]", "by": "boss", "at": 1715000000000 }
+  }
+}

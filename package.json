@@ -19,7 +19,8 @@
   },
   "scripts": {
     "start": "node app.js",
-    "test": "cd test && npm test"
+    "test": "cd test && npm test",
+    "history": "node --no-warnings=ExperimentalWarning tools/history/cli.js"
   },
   "repository": {
     "type": "git",

@@ -22,7 +22,6 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `AUTODJ` | autopilot DJ, on unless set to `false` |
 | `TRACKBROKEN_MESSAGES` | `true` to tell a DJ in chat when their song is broken or blocked (off by default) |
 | `LASTFM_APIKEY` / `LASTFM_SECRET` / `LASTFM_SESSIONKEY` / `LASTFM_USERNAME` | optional: scrobble plays to last.fm (`LASTFM_SECRET` is the API key's "Shared secret" at last.fm/api/accounts) |
-| `ADAM_URL` | optional: server that's sent each new song |
 | `SITE_URL` | the firetable-user site's address; the bot follows its seasons from there (see [seasons](#seasons)) |
 | `TZ` | time zone for the seasonal months, e.g. `America/Chicago` (default: the server's, usually UTC) |
 | `AVATARSET` / `LIGHTS_MONTHS` | optional: force a card avatar set / lights months (e.g. `11,12`) instead of following the site; leave unset |
@@ -144,7 +143,21 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!flagplay <play id> <reason>` (mods): flag a play from Recent in the DJ's queue and all of their playlists. Reasons: `broken`, `quality`, `offtheme`.
 - `!bpm`: say the playing song's tempo. The DJ or a mod can set it with `!bpm 128`.
 - `!autodj`: say what the autopilot DJ is doing; mods can add `auto` to end an `!upbot` / `!downbot` override (see below).
+- `!plays` / `!firstplay`: how many times the playing song has been played, every version included, and when and by whom it was first and last played (see [play history](#play-history)).
+- `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
 - `!pushtest`: send a test push notification to your own devices (the site's Settings has a button for it).
+
+## play history
+`tools/history` joins the room's database (with ADAM's history, which was moved into it) and Last.fm into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
+
+Once published (deploy `firebase-rules.json` first), for every song the bot:
+- links each upload to its track by its tags (`globalTracks/<upload>/song` → `globalSongs`), so a new copy of an old song shows its real first play
+- counts the play on the track and on the song, all versions together (`globalWorks`), and shows the room that count instead of Last.fm's per-spelling one
+- logs the play in `playLog` (who, what, when, how long, skipped) and every tag fix in `tagLog`; only the bot can read these
+
+Before a publish, or after `publish --off`, the bot works as it did: per-upload first plays and Last.fm counts. Last.fm scrobbling is unchanged either way.
+
+`!plays` (or `!firstplay`) says what the history knows about the song on the decks. `!review` (mods) asks the next tag question the history couldn't settle; answer with `!same <n>` or `!different <n>`.
 
 ## autopilot DJ
 The bot keeps the music going. When no one is DJing it takes the decks and plays its own DJ playlist; once 3 people are DJing it catches the bus, stepping down after its next song (or after the one it's playing), never mid-song. If the count drops below 3 before it leaves, it stays.
@@ -218,7 +231,7 @@ Usernames are unique whatever their case ("Boss" and "boss" are one name): names
 Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working. The bot acts on each message once, and ignores commands more than 2 minutes old (sent before a long disconnect, or a copy of an old message added to the feed again).
 
 ## tests
-`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js` and `lib/` (it catches undeclared variables), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation), the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation), the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
 ```
 npm ci && cd test && npm ci && npm test
 ```

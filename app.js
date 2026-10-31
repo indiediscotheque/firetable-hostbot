@@ -20,6 +20,7 @@ var acorn = require('acorn');
 var http = require('./lib/http').http;
 var artworkColors = require('./lib/colors').artworkColors;
 var text = require('./lib/text');
+var tags = require('./lib/tags');
 var splitTags = text.splitTags;
 var fitChat = text.fitChat;
 var checks = require('./lib/checks');
@@ -897,6 +898,28 @@ var nextSong = function(noPrevPlay) {
   startSong(noPrevPlay);
 };
 
+// Every play, for good: Recent keeps only the last 500, so this is the room's
+// history of who played what when (read by tools/history; only the bot can
+// read or write it, so nobody's browser ever downloads it).
+var logPlay = function(s, ranOut) {
+  if (!s || !s.cid || !s.started) return;
+  var entry = {
+    k: s.type + "" + s.cid,
+    a: s.artist || null,
+    t: s.title || null,
+    s: s.songId || null,
+    dj: s.djname || null,
+    djid: s.djid || null,
+    w: s.started,
+    d: s.duration || null,
+    p: Math.max(0, Math.round((serverNow() - s.started) / 1000)),
+    sk: !ranOut
+  };
+  firebase.database().ref("playLog").push(JSON.parse(JSON.stringify(entry))).catch(function(err) {
+    console.log("play log error:", err && err.message);
+  });
+};
+
 // A list the bot keeps to a fixed length: Recent plays (500) and Fresh (100).
 // A listener keeps its keys, so the list downloads once at startup and then
 // only changes, instead of the whole list after every song.
@@ -1001,6 +1024,7 @@ var startSong = function(noPrevPlay) {
       if (song.playcount) newEntry.playcount = song.playcount;
       newEntry = JSON.parse(JSON.stringify(newEntry)); // Firebase refuses undefined fields
       recentPlays.add(newEntry);
+      logPlay(song, songRanOut);
       var isNew = newMusicCheck(newEntry);
       if (isNew) {
 
@@ -2436,13 +2460,21 @@ var handleChat = function(chatID, feedKey) {
             } else {
               var newartist = args.slice(0, sep).trim().replace(/&amp;/g, '&');
               var newtitle = args.slice(sep + 3).trim().replace(/&amp;/g, '&');
-              gts.fixTags(song, currentListRef(), newartist, newtitle);
+              gts.fixTags(song, currentListRef(), newartist, newtitle, namebo);
               talk("ok. updating tags to artist: `" + newartist + "` and title: `" + newtitle + "`. thank you.")
             }
 
           } else {
             talk("update current tags with `!fixtags artist - title` and refer to Rohn Standard Notation if unsure. thanks!");
           }
+        } else if (command == "plays" || command == "firstplay") {
+          playsReply();
+        } else if (command == "review") {
+          if (!senderIsMod) talk("Only mods can sort out tags, " + namebo + ".");
+          else tagReview.next();
+        } else if (command == "same" || command == "different") {
+          if (!senderIsMod) talk("Only mods can sort out tags, " + namebo + ".");
+          else tagReview.answer(args, command == "same" ? "merge" : "separate", namebo);
         } else if (command == "lastblipped"){
           if (args){
             var prsn = uidLookup(args);
@@ -2603,83 +2635,260 @@ chatFeedRef.once("value").then(function(snap) {
   console.log("couldn't read the chat feed; commands won't work until a restart:", err);
 });
 
+// !plays: what the room's history knows about the song on the decks.
+var playsReply = function() {
+  if (!song || !song.cid) return talk("Nothing's playing.");
+  var t = song.track;
+  if (!t) {
+    return talk(song.playcount ? "Played " + song.playcount + " times before (Last.fm's count for these exact tags)." : "I don't have a history for this one yet.");
+  }
+  var when = function(ms) { return new Date(ms).toISOString().slice(0, 10); };
+  var msg = t.plays ? "Played " + t.plays + (t.plays == 1 ? " time" : " times") + " before" : "First time in the room";
+  if (t.work_plays > t.plays) msg += " (" + t.work_plays + " counting every version)";
+  if (t.plays && t.first_play_date) msg += ". First played " + when(t.first_play_date) + (t.first_play_dj ? " by " + t.first_play_dj : "");
+  if (t.plays && t.prev_play_date) msg += ", last " + when(t.prev_play_date) + (t.prev_play_dj ? " by " + t.prev_play_dj : "");
+  talk(msg + ".");
+};
+
+// Tag questions the history toolkit couldn't settle on its own (publish puts
+// them in tagReview). Mods answer them in chat a few at a time; the next
+// history refresh uses the answers and never asks again.
+var tagReview = {
+  next: function() {
+    firebase.database().ref("tagReview").orderByChild("n").limitToFirst(200).once("value").then(function(snap) {
+      var open = [];
+      snap.forEach(function(c) { var v = c.val(); if (v && !v.decision) open.push(v); });
+      if (!open.length) return talk("No tag questions waiting. 🎉");
+      var q = open[0];
+      talk("#" + q.n + " (" + open.length + " waiting): same track? `" + q.a + "` vs `" + q.b + "`" + (q.why ? " (" + q.why + ")" : "") + ". Answer `!same " + q.n + "` or `!different " + q.n + "`.");
+    }).catch(function(err) {
+      console.log("tag review error:", err && err.message);
+      talk("I couldn't read the tag questions.");
+    });
+  },
+  answer: function(args, decision, by) {
+    var n = parseInt(String(args || "").replace(/^#/, ""), 10);
+    if (!(n > 0)) return talk("Which one? Like `!" + (decision == "merge" ? "same" : "different") + " 12`.");
+    var ref = firebase.database().ref("tagReview");
+    ref.orderByChild("n").equalTo(n).once("value").then(function(snap) {
+      var key = null;
+      snap.forEach(function(c) { key = c.key; });
+      if (!key) return talk("I can't find question #" + n + ".");
+      return ref.child(key).update({ decision: decision, by: by, at: Date.now() }).then(function() {
+        talk("Got it: #" + n + (decision == "merge" ? " is the same track." : " stays separate.") + " `!review` for the next one.");
+      });
+    }).catch(function(err) {
+      console.log("tag review error:", err && err.message);
+    });
+  }
+};
+
 // GLOBAL TAG SYSTEM
+// globalTracks/<type><cid> keeps each upload's tags. Once the play history has
+// been published (tools/history: globalSongsMeta/ready), every upload is also
+// linked to its track in globalSongs, which every copy, spelling and upload of
+// a recording shares: the room's own play count, the true first play (back to
+// ADAM and Last.fm), and every version of the song in globalWorks. Until then
+// the bot works as before (per-upload first plays, Last.fm counts).
 // Each call works on the song (and the DJ list) it was started for: the
 // lookups below answer later, when another song may be playing, and their
 // answers must not land on that one.
+var songIndex = { ready: false };
+firebase.database().ref("globalSongsMeta/ready").on("value", function(snap) {
+  songIndex.ready = snap.val() === true;
+}, function(err) {
+  console.log("couldn't read globalSongsMeta (deploy firebase-rules.json):", err && err.message);
+});
+
 var gts = {
   np: function(s, listRef) {
     if (!s || !s.cid) return;
-    var globalpeek = firebase.database().ref("globalTracks/" + s.type + "" + s.cid);
+    var upKey = s.type + "" + s.cid;
+    var globalpeek = firebase.database().ref("globalTracks/" + upKey);
     globalpeek.once("value")
       .then(function(snapshot) {
         var thing = snapshot.val();
-        if (thing) {
+        var now = Date.now();
+        var dj = s.djname || null;
+        var upload;
+        var played = !!(thing && thing.artist);
+        if (played) {
           // played before: use its saved tags, then update the last play
-          gts.reportNp(s, listRef, thing);
-          // just the last play: a mod's tag fix at the same moment stays
-          return globalpeek.update({ last_play_date: Date.now(), last_play_dj: s.djname || null });
+          // (just those fields: a mod's tag fix at the same moment stays)
+          upload = globalpeek.update({ last_play_date: now, last_play_dj: dj }).then(function() { return thing; });
+        } else {
+          // first play of this upload (or one the history linked but never played)
+          thing = Object.assign({}, thing || {}, {
+            artist: s.artist, title: s.title, type: s.type,
+            first_play_date: now, first_play_dj: dj, last_play_date: now, last_play_dj: dj
+          });
+          upload = globalpeek.update({
+            artist: s.artist, title: s.title, type: s.type,
+            first_play_date: now, first_play_dj: dj, last_play_date: now, last_play_dj: dj
+          }).then(function() { return thing; });
         }
-        // first play
-        gts.reportNp(s, listRef, {
-          artist: s.artist,
-          title: s.title,
-          type: s.type
-        });
-        return globalpeek.set({
-          artist: s.artist,
-          title: s.title,
-          last_play_date: Date.now(),
-          first_play_date: Date.now(),
-          last_play_dj: s.djname,
-          first_play_dj: s.djname,
-          type: s.type
+        return upload.then(function(up) {
+          // a first play has no earlier play to show
+          if (!songIndex.ready) return gts.reportNp(s, listRef, played ? up : { artist: up.artist, title: up.title, type: up.type });
+          return gts.countPlay(s, upKey, up).then(function(track) {
+            // the history writes this track with accents the upload's tags
+            // lost (the old Last.fm bug): use them, and keep them
+            var fixed = {};
+            if (track.artist && tags.accentsRestored(up.artist, track.artist)) fixed.artist = track.artist;
+            if (track.title && tags.accentsRestored(up.title, track.title)) fixed.title = track.title;
+            if (fixed.artist || fixed.title) {
+              up = Object.assign({}, up, fixed);
+              globalpeek.update(fixed).catch(function(err) { console.log("accent restore error:", err && err.message); });
+            }
+            gts.reportNp(s, listRef, up, track);
+          }, function(err) {
+            console.log("song index error:", err && err.message);
+            gts.reportNp(s, listRef, up);
+          });
         });
       })
       .catch(function(err) {
         console.log("global tags error:", err && err.message);
       });
   },
-  fixTags: function(s, listRef, fixedartist, fixedtitle) {
+  // The track this upload is (linking it the first time, by its tags), with
+  // this play counted. Resolves with {id, plays, first..., prev..., work}.
+  countPlay: function(s, upKey, up) {
+    var db = firebase.database();
+    var dj = s.djname || null;
+    var artist = up.title && up.artist && up.artist !== "Unknown" ? up.artist : s.artist;
+    var title = up.title && up.artist && up.artist !== "Unknown" ? up.title : s.title;
+    return gts.linkTrack(upKey, up, artist, title).then(function(link) {
+      var prev = null;
+      var counted = db.ref("globalSongs/" + link.id).transaction(function(cur) {
+        cur = cur || { artist: artist, title: title, work: link.work, plays: 0 };
+        prev = { plays: cur.plays || 0, date: cur.last_play_date || null, dj: cur.last_play_dj || null };
+        cur.plays = (cur.plays || 0) + 1;
+        if (!cur.first_play_date) {
+          cur.first_play_date = Date.now();
+          cur.first_play_dj = dj;
+        }
+        cur.last_play_date = Date.now();
+        cur.last_play_dj = dj;
+        if (!cur.work && link.work) cur.work = link.work;
+        return cur;
+      });
+      return counted.then(function(res) {
+        var t = res.snapshot.val() || {};
+        var workId = t.work || link.work;
+        s.songId = link.id;
+        var track = {
+          id: link.id, plays: prev ? prev.plays : (t.plays || 1) - 1, artist: t.artist, title: t.title,
+          first_play_date: t.first_play_date, first_play_dj: t.first_play_dj,
+          prev_play_date: prev && prev.date, prev_play_dj: prev && prev.dj
+        };
+        if (!workId) return track;
+        return db.ref("globalWorks/" + workId).transaction(function(w) {
+          w = w || { artist: artist, title: title, plays: 0, versions: 1 };
+          w.plays = (w.plays || 0) + 1;
+          if (!w.first_play_date) {
+            w.first_play_date = t.first_play_date;
+            w.first_play_dj = t.first_play_dj || null;
+          }
+          return w;
+        }).then(function(wr) {
+          var w = wr.snapshot.val() || {};
+          if ((w.versions || 1) > 1) track.work_plays = (w.plays || 1) - 1;
+          return track;
+        }, function() { return track; });
+      });
+    });
+  },
+  linkTrack: function(upKey, up, artist, title) {
+    var db = firebase.database();
+    if (up && up.song) {
+      return db.ref("globalSongs/" + up.song + "/work").once("value").then(function(w) { return { id: up.song, work: w.val() }; });
+    }
+    var p = tags.parse(artist, title);
+    var keys = tags.keysOf(p);
+    // too vague to match ("Unknown - Intro"): this upload is its own track
+    var keyHash = p.weak ? null : tags.hash(keys.track);
+    var workHash = p.weak ? null : tags.hash(keys.song);
+    var found = keyHash ? db.ref("globalSongKeys/" + keyHash).once("value").then(function(snap) { return snap.val(); }) : Promise.resolve(null);
+    return found.then(function(id) {
+      if (id) {
+        return db.ref("globalSongs/" + id + "/work").once("value").then(function(w) { return { id: id, work: w.val(), known: true }; });
+      }
+      id = "t" + tags.hash(p.weak ? "upload:" + upKey : keys.track);
+      var work = workHash ? db.ref("globalWorkKeys/" + workHash).once("value").then(function(snap) { return snap.val() || "s" + workHash; }) : Promise.resolve("s" + tags.hash("track:" + id));
+      return work.then(function(workId) {
+        var updates = {};
+        if (keyHash) updates["globalSongKeys/" + keyHash] = id;
+        if (workHash) updates["globalWorkKeys/" + workHash] = workId;
+        return db.ref().update(updates).then(function() { return { id: id, work: workId }; });
+      });
+    }).then(function(link) {
+      return db.ref("globalTracks/" + upKey + "/song").set(link.id).then(function() { return link; });
+    });
+  },
+  fixTags: function(s, listRef, fixedartist, fixedtitle, by) {
     if (!s || !s.cid) return;
-    var globalpeek = firebase.database().ref("globalTracks/" + s.type + "" + s.cid);
+    var upKey = s.type + "" + s.cid;
+    var globalpeek = firebase.database().ref("globalTracks/" + upKey);
     globalpeek.once("value")
       .then(function(snapshot) {
         var thing = snapshot.val();
-        if (thing) {
+        // every fix is kept: the history toolkit trusts these most
+        firebase.database().ref("tagLog").push({
+          k: upKey, a: fixedartist, t: fixedtitle, by: by || null, at: Date.now(),
+          fa: (thing && thing.artist) || s.artist || null, ft: (thing && thing.title) || s.title || null
+        }).catch(function(err) { console.log("tag log error:", err && err.message); });
+        if (thing && thing.artist) {
           thing.artist = fixedartist;
           thing.title = fixedtitle;
-          gts.reportNp(s, listRef, thing);
-          return globalpeek.update({ artist: fixedartist, title: fixedtitle });
+          return globalpeek.update({ artist: fixedartist, title: fixedtitle }).then(function() {
+            gts.reportNp(s, listRef, thing, gts.lastTrack(s));
+            return gts.learnSpelling(thing.song || s.songId, fixedartist, fixedtitle);
+          });
         }
-        gts.reportNp(s, listRef, {
-          artist: fixedartist,
-          title: fixedtitle,
-          type: s.type
-        });
-        return globalpeek.set({
+        var fresh = {
           artist: fixedartist,
           title: fixedtitle,
           last_play_date: Date.now(),
           first_play_date: Date.now(),
-          last_play_dj: s.djname,
-          first_play_dj: s.djname,
+          last_play_dj: s.djname || null,
+          first_play_dj: s.djname || null,
           type: s.type
+        };
+        return globalpeek.update(fresh).then(function() {
+          gts.reportNp(s, listRef, fresh, gts.lastTrack(s));
+          return gts.learnSpelling(s.songId, fixedartist, fixedtitle);
         });
       })
       .catch(function(err) {
         console.log("fix tags error:", err && err.message);
       });
   },
+  // A mod's fix is how the track is written from now on, and the fixed
+  // spelling finds this track next time it turns up on another upload.
+  learnSpelling: function(trackId, artist, title) {
+    if (!songIndex.ready || !trackId) return;
+    var p = tags.parse(artist, title);
+    var updates = {};
+    updates["globalSongs/" + trackId + "/artist"] = artist;
+    updates["globalSongs/" + trackId + "/title"] = title;
+    if (!p.weak) updates["globalSongKeys/" + tags.hash(tags.keysOf(p).track)] = trackId;
+    return firebase.database().ref().update(updates);
+  },
+  lastTrack: function(s) {
+    return s && s.track || null;
+  },
   // Put the saved tags (adm) on song s, tell the room, and rename the track in
-  // the DJ's list (listRef) to match.
-  reportNp: function(s, listRef, adm) {
+  // the DJ's list (listRef) to match. track: the play history for it (counts
+  // and the true first play), when the history has been published.
+  reportNp: function(s, listRef, adm, track) {
     if (!adm) return;
     // no title, or an "Unknown" artist: keep what the bot worked out
     if (adm.title && adm.artist && adm.artist !== "Unknown") {
       s.artist = adm.artist;
       s.title = adm.title;
     }
+    if (track) s.track = track;
 
     var tagFixData = {
       adamData: {
@@ -2688,12 +2897,24 @@ var gts = {
       },
       cid: s.cid
     };
-    if (adm.last_play_dj) tagFixData.adamData.last_play_dj = adm.last_play_dj;
-    if (adm.last_play_date) tagFixData.adamData.last_play = new Date(adm.last_play_date).toISOString();
-    if (adm.first_play_dj) tagFixData.adamData.first_play_dj = adm.first_play_dj;
-    if (adm.first_play_date) tagFixData.adamData.first_play = new Date(adm.first_play_date).toISOString();
+    // with the history: the track's first play and the play before this one
+    // (nothing for its very first play); without: this upload's
+    var first = track ? (track.plays > 0 ? track : {}) : adm;
+    var lastDate = track ? track.prev_play_date : adm.last_play_date;
+    var lastDj = track ? track.prev_play_dj : adm.last_play_dj;
+    if (lastDate) {
+      tagFixData.adamData.last_play = new Date(lastDate).toISOString();
+      if (lastDj) tagFixData.adamData.last_play_dj = lastDj;
+    }
+    if (first.first_play_date) {
+      tagFixData.adamData.first_play = new Date(first.first_play_date).toISOString();
+      if (first.first_play_dj) tagFixData.adamData.first_play_dj = first.first_play_dj;
+    }
+    if (track && track.work_plays > (track.plays || 0)) tagFixData.adamData.all_versions_playcount = track.work_plays;
 
-    lastfm.playcount(adm.artist, adm.title).then(function(playcount) {
+    // the room's own count when the history is published, else Last.fm's
+    var counted = track ? Promise.resolve(track.plays) : lastfm.playcount(adm.artist, adm.title);
+    counted.then(function(playcount) {
       if (playcount) {
         tagFixData.adamData.playcount = playcount;
         s.playcount = playcount;

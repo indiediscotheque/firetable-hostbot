@@ -11,7 +11,7 @@ const nodeGlobals = Object.fromEntries([
 
 export default [
   {
-    files: ["app.js", "lib/**/*.js"],
+    files: ["app.js", "lib/**/*.js", "tools/**/*.js"],
     languageOptions: { ecmaVersion: 2022, sourceType: "commonjs", globals: nodeGlobals },
     rules: {
       "no-undef": "error",

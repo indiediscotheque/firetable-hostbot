@@ -1,0 +1,18 @@
+{
+  "users": { "uidChris": { "username": "Chris" }, "uidEve": { "username": "eve" } },
+  "globalTracks": {
+    "1aaaaaaaaaaa": { "artist": "Foals", "title": "My Number", "first_play_date": 1700000000000, "first_play_dj": "eve", "last_play_date": 1750000000000, "last_play_dj": "Chris", "type": 1 },
+    "1bbbbbbbbbbb": { "artist": "Foals", "title": "My Number (Official Video)", "first_play_date": 1760000000000, "first_play_dj": "Chris", "last_play_date": 1760000000000, "last_play_dj": "Chris", "type": 1 },
+    "2123456": { "artist": "Sigur Ros", "title": "Hoppipolla", "first_play_date": 1720000000000, "first_play_dj": "Chris", "last_play_date": 1720000000000, "last_play_dj": "Chris", "type": 2 },
+    "1ccccccccccc": { "artist": "Tame Impala", "title": "The Less I Know The Better", "first_play_date": 1710000000000, "first_play_dj": "eve", "last_play_date": 1710000000000, "last_play_dj": "eve", "type": 1 }
+  },
+  "songHistory": {
+    "-h1": { "artist": "Foals", "title": "My Number (Official Video)", "dj": "Chris", "djid": "uidChris", "type": 1, "cid": "bbbbbbbbbbb", "when": 1760000000000 }
+  },
+  "playlists": {
+    "uidEve": { "pl1": { "name": "faves", "list": { "k1": { "name": "Sigur Rós - Hoppípolla", "type": 2, "cid": "123456" } } } }
+  },
+  "queues": {
+    "uidChris": { "q1": { "name": "Calvin Harris - One Kiss ft. Dua Lipa", "type": 1, "cid": "ddddddddddd" } }
+  }
+}

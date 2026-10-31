@@ -7,6 +7,8 @@ import { spawn } from "child_process";
 import { readFileSync } from "fs";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
+const tags = createRequire(import.meta.url)("../lib/tags.js");
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FAKES = fileURLToPath(new URL("./fake-services.js", import.meta.url));
@@ -194,6 +196,67 @@ const scenarios = {
     check(/fake last.fm: track.updateNowPlaying signature ok \(Björk - Jóga\)/.test(p.out), "now playing sent to last.fm, signed correctly for a non-English artist");
     check(st.tagUpdate && st.tagUpdate.cid === "yt1" && st.tagUpdate.adamData.playcount === 7, "the room's last.fm play count reaches the site");
     check(st.colors && /^#[0-9a-f]{6}$/i.test(st.colors.color) && st.colors.color.toLowerCase() !== "#ffffff", "room colours read from the artwork (" + (st.colors && st.colors.color) + ")");
+    await healthy(p);
+    return p;
+  },
+  async play_history() {
+    // the history was published: "Foals - My Number" is track t1, first played
+    // in 2016, 41 plays (60 counting its remix); a DJ brings a new upload of it
+    const key = tags.hash(tags.trackKey("Foals", "My Number"));
+    const workKey = tags.hash(tags.songKey("Foals", "My Number"));
+    const first = Date.UTC(2016, 7, 23, 21, 52);
+    await put("/", base({
+      queues: { dj1: { k1: yt("yt9", "Foals - My Number (Official Video)") }, dj2: { s1: yt("yt2") } },
+      globalSongsMeta: { ready: true },
+      globalSongs: { t1: { artist: "Foals", title: "My Number", work: "s1", plays: 41, first_play_date: first, first_play_dj: "understater", last_play_date: first + 1000, last_play_dj: "eve" } },
+      globalWorks: { s1: { artist: "Foals", title: "My Number", plays: 60, versions: 2, first_play_date: first } },
+      globalSongKeys: { [key]: "t1" },
+      globalWorkKeys: { [workKey]: "s1" },
+      tagReview: { q1: { n: 1, a: "Foals - My Number", b: "Foals - My Numbr", a_key: "foals|mynumber|", b_key: "foals|mynumbr|", why: "similar title" } }
+    }));
+    const p = startBot("history");
+    await waitFor(p, "Listening now.");
+    await sleep(2500);
+    let st = await get("/");
+    check(st.globalTracks && st.globalTracks["1yt9"] && st.globalTracks["1yt9"].song === "t1", "a new upload of a known song is linked to its track by its tags");
+    check(st.globalSongs.t1.plays === 42 && st.globalWorks.s1.plays === 61 && st.globalSongs.t1.last_play_dj === "dj1", "the play is counted on the track and on the song (all versions)");
+    const ad = st.tagUpdate && st.tagUpdate.adamData || {};
+    check(st.tagUpdate && st.tagUpdate.cid === "yt9" && ad.playcount === 41 && ad.all_versions_playcount === 60 && /^2016-08-23/.test(ad.first_play || "") && ad.first_play_dj === "understater" && ad.last_play_dj === "eve",
+      "the room sees the true first play (2016), its own count and the all-versions count");
+    check(Object.values(st.playLog || {}).some((e) => e.k === "1old" && e.dj === "dj2" && e.w), "the song that ended is in the permanent play log");
+    await say("dj2", "!plays");
+    await say("dj2", "!review");
+    await say("boss", "!review");
+    await say("boss", "!same 1");
+    await say("boss", "!fixtags Foals - My Number");
+    await sleep(2500);
+    st = await get("/");
+    const s = said(st);
+    check(s.some((t) => /Played 41 times before \(60 counting every version\)\. First played 2016-08-23 by understater/.test(t)), "!plays tells the room the track's history");
+    check(s.some((t) => /Only mods can sort out tags, dj2/.test(t)) && s.some((t) => /#1 \(1 waiting\): same track\?/.test(t)), "!review: mods only, shows the next question");
+    check(st.tagReview.q1.decision === "merge" && st.tagReview.q1.by === "boss", "!same records a mod's answer for the next history refresh");
+    const log = Object.values(st.tagLog || {});
+    check(log.some((e) => e.k === "1yt9" && e.a === "Foals" && e.t === "My Number" && e.by === "boss" && e.ft === "My Number (Official Video)"), "!fixtags is logged with what it replaced");
+    check(st.globalSongKeys[key] === "t1" && st.globalSongs.t1.title === "My Number", "the fixed spelling points at the same track");
+    await healthy(p);
+    return p;
+  },
+  async accents_restored_live() {
+    // the history writes this track "Björk - Jóga"; a DJ's copy lost its
+    // accents to the old Last.fm bug
+    await put("/", base({
+      queues: { dj1: { k1: yt("ytj", "Bjork - Joga") }, dj2: { s1: yt("yt2") } },
+      globalSongsMeta: { ready: true },
+      globalSongs: { t1: { artist: "Björk", title: "Jóga", plays: 5, first_play_date: Date.UTC(2016, 0, 1) } },
+      globalSongKeys: { [tags.hash(tags.trackKey("Bjork", "Joga"))]: "t1" }
+    }));
+    const p = startBot("accents");
+    await waitFor(p, "Listening now.");
+    await sleep(2500);
+    const st = await get("/");
+    check(st.globalTracks["1ytj"].artist === "Björk" && st.globalTracks["1ytj"].title === "Jóga" && st.globalTracks["1ytj"].song === "t1", "the upload's tags get their accents back");
+    check(st.tagUpdate && st.tagUpdate.adamData.artist === "Björk" && st.tagUpdate.adamData.track_name === "Jóga", "the room sees them");
+    check(Object.values(st.queues.dj1).some((t) => t.name === "Björk - Jóga"), "and so does the DJ's queue");
     await healthy(p);
     return p;
   },
@@ -408,6 +471,9 @@ const scenarios = {
     check(await waitFor(p, "push: on (new keys saved in the database, subject https://room.example)"), "first start: makes a key pair and keeps it in the database");
     let st = await get("/");
     check(st.pushKey && st.pushVapid && st.pushKey === st.pushVapid.publicKey, "publishes the public key for the site");
+    // the bot drops old devices just after it says push is on: wait for it
+    await waitFor(p, "push: dropping 1 device(s) not seen in 60 days");
+    for (let i = 0; i < 30 && st.pushSubs.dj1 && st.pushSubs.dj1.old_dj1x; i++) { await sleep(100); st = await get("/"); }
     check(st.pushSubs.dj1 && !st.pushSubs.dj1.old_dj1x && st.pushSubs.dj1.phone_dj1, "devices not opened in 60 days are dropped");
     await say("dj2", "hey @dj1 come back");
     check(await waitFor(p, "fake push /fcm/send/dj1-phone [vapid ok ttl=86400]: dj2 | hey @dj1 come back | badge=1"), "a mention reaches the phone, signed, with the unread count");
