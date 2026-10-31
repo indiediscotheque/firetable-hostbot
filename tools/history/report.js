@@ -5,6 +5,7 @@ var fs = require("fs");
 var path = require("path");
 var csv = require("./csv");
 var store = require("./store");
+var tags = require("../../lib/tags");
 
 function iso(ms) { return ms == null ? "" : new Date(ms).toISOString().replace("T", " ").slice(0, 16); }
 
@@ -50,8 +51,9 @@ function report(db, dir, log) {
     }));
 
   // what --tidy junk / --tidy rsn would show for each track
+  var titleCased = 0;
   files["tidy_preview.csv"] = csv.writeCsv(path.join(dir, "tidy_preview.csv"),
-    ["track_id", "plays", "now", "tidy_junk", "tidy_rsn", "left_alone"],
+    ["track_id", "plays", "now", "tidy_junk", "tidy_rsn", "left_alone", "title_case"],
     (function* () {
       for (var t of db.prepare("SELECT id, artist, title, plays, tidy_junk, tidy_rsn, protected FROM tracks WHERE confidence > 0 ORDER BY plays DESC").iterate()) {
         var j = t.tidy_junk ? JSON.parse(t.tidy_junk) : null;
@@ -60,7 +62,11 @@ function report(db, dir, log) {
         var js = j ? j.a + " - " + j.t : now;
         var rs = r ? r.a + " - " + r.t : now;
         if (js === now && rs === now) continue;
-        yield [t.id, t.plays, now, js === now ? "" : js, rs === now ? "" : rs, t.protected ? "yes (a mod's fix or tag-exceptions.csv)" : ""];
+        // what AP title case changed in the rsn version (English titles only)
+        var plainRsn = tags.tidy(t.artist, t.title, "rsn", { titleCase: false }).title;
+        var tc = r && r.t !== plainRsn ? plainRsn + " → " + r.t : "";
+        if (tc && !t.protected) titleCased++;
+        yield [t.id, t.plays, now, js === now ? "" : js, rs === now ? "" : rs, t.protected ? "yes (a mod's fix or tag-exceptions.csv)" : "", tc];
       }
     })());
 
@@ -127,6 +133,7 @@ function report(db, dir, log) {
   if (tz[1] || !tz[2]) add("| ADAM clock (its exports) | " + clock(zones[1], tz[1]) + " |");
   if (tz[2]) add("| ADAM clock (moved into globalTracks) | " + clock(zones[2], tz[2]) + " |");
   add("| accents restored | " + n(st.accentFixes) + " (restore_accents.csv) |");
+  add("| RSN title case | " + n(titleCased) + " English titles (tidy_preview.csv, title_case) |");
   var by = function(re) { return artistAccents.filter(function(a) { return re.test(a.outcome); }).length; };
   if (artistAccents.length) add("| artist names (artist_accents.csv) | " + n(by(/^accents from YouTube/)) + " accented as YouTube Music writes them; " + n(by(/YouTube Music writes it/)) + " left plain as YouTube Music writes them; " + n(by(/until YouTube Music is checked|not found/)) + " left as they are until YouTube Music confirms |");
   add("| waiting for you | " + n(totals.review) + " (review.csv) |");

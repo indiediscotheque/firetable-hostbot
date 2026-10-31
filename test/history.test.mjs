@@ -159,7 +159,7 @@ test("toolkit: YouTube/SoundCloud answers add evidence, catch dead uploads and l
 });
 
 test("tidy never loses what a tag says about the song: only upload junk goes, RSN only moves feat. and brackets", () => {
-  const rsn = (a, t) => { const r = tags.tidy(a, t, "rsn"); return r.artist + " - " + r.title; };
+  const rsn = (a, t) => { const r = tags.tidy(a, t, "rsn", { titleCase: false }); return r.artist + " - " + r.title; };
   const junk = (a, t) => { const r = tags.tidy(a, t, "junk"); return r.artist + " - " + r.title; };
   // laid out
   assert.equal(rsn("Steve Angello", "Remember (feat. The Presets)"), "Steve Angello - Remember feat. The Presets");
@@ -180,6 +180,15 @@ test("tidy never loses what a tag says about the song: only upload junk goes, RS
     ["Black Gold", "C'mon Stop (1983)"], ["Breakbot", "Peanuts (Bonus Track)"], ["SebastiAn", "Embody"], ["A R I Z O N A", "Electric Touch"],
     ["Late Nite Tuff Guy", "Bless The Rains [LNTG Epic Journey]"]
   ]) assert.equal(rsn(a, t), a + " - " + t, a + " - " + t);
+  // AP title case (on by default at rsn): English titles only, slips only
+  const ap = tags.apTitleCase;
+  assert.equal(ap("The Less I Know The Better"), "The Less I Know the Better");
+  assert.equal(ap("walking on a dream"), "Walking on a Dream");
+  assert.equal(ap("Waiting For You feat. Black Hills (Oliver Remix)"), "Waiting for You feat. Black Hills (Oliver Remix)");
+  assert.equal(ap("Hollywood feat. Penguin Prison (felix da housecat remix)"), "Hollywood feat. Penguin Prison (felix da housecat Remix)", "names in parentheses as typed");
+  for (const keep of ["Comme des enfants", "Je ne regrette rien", "ISLANDS", "iPhone Love", "Where Are Ü Now", "Mr. Brightside", "Dancing in the Moonlight", "2 Hearts"]) assert.equal(ap(keep), keep, keep);
+  assert.equal(tags.tidy("Tame Impala", "The Less I Know The Better", "rsn").title, "The Less I Know the Better");
+  assert.equal(tags.tidy("Tame Impala", "The Less I Know The Better", "junk").title, "The Less I Know The Better", "junk never changes capitals");
 });
 
 test("a mod's fix sets an artist's capitals everywhere, never their accents (those follow YouTube Music)", () => {
