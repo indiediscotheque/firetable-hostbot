@@ -504,6 +504,42 @@ const scenarios = {
     check((await get("/pushKey")) === st.pushKey, "the published key stays the same");
     return again;
   },
+  async swap_suggestions() {
+    const flagged = (cid, name, code) => ({ type: 1, cid, name, flagged: { date: 1, code } });
+    await put("/", base({
+      queues: { dj1: { k1: yt("dead1", "Radiohead - Karma Police (HD)"), k2: yt("yt1") }, dj2: { s1: yt("yt2") } },
+      playlists: { dj2: { pl1: { name: "Faves", list: {
+        a: flagged("gone0000001", "Daft Punk - One More Time [Official Video]", 2),
+        b: flagged("offtheme001", "Daft Punk - One More Time", 10),
+        c: flagged("nomatch0001", "Nobody - Nothing At All", 2)
+      } } } }
+    }));
+    const p = startBot("swaps");
+    // the bot flags dead1 while playing and looks it up straight away
+    check(await waitFor(p, 'fake youtube music: search "Radiohead Karma Police" (songs)'), "a track flagged while playing is searched on YouTube Music right away");
+    await sleep(1500);
+    let st = await get("/");
+    const k = Object.values(st.queues.dj1).find((t) => t.cid === "dead1");
+    check(k && k.flagged && k.swap && k.swap.cid === "kpstudio001" && k.swap.album === "OK Computer",
+      "its swap is the audio track that can play (not the video, not the one that can't be embedded)");
+    // a mod starts the nightly run by hand
+    await say("boss", "!swapscan");
+    check(await waitFor(p, "swaps: "), "!swapscan runs the search");
+    await sleep(800);
+    st = await get("/");
+    const list = st.playlists.dj2.pl1.list;
+    check(list.a.swap && list.a.swap.cid === "omtstudio01", "a broken track in a playlist gets its swap");
+    check(!list.b.swap && !list.c.swap, "off-theme tracks and songs with no match get none");
+    check(!/search "Radiohead Karma Police"[^\n]*\n[\s\S]*search "Radiohead Karma Police"/.test(p.out), "a track that already has a swap isn't searched again");
+    check(Object.keys(st.swapCache || {}).length >= 2, "searches are remembered in swapCache");
+    const told = Object.values((st.notices || {}).dj2 || {});
+    check(told.length === 1 && told[0].kind === "swap" && /working copy on YouTube Music/.test(told[0].txt), "the playlist's owner gets one notice");
+    await say("dj1", "!swaps");
+    await sleep(800);
+    check(said(await get("/")).some((t) => /^Swaps \(nightly at 4:00\): .*new swap/.test(t)), "!swaps says how the last run went");
+    await healthy(p);
+    return p;
+  },
   async wrong_password() {
     await put("/", base({}));
     const p = startBot("login", { FIRETABLE_PASS: "wrong" });

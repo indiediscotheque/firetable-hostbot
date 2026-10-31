@@ -66,13 +66,44 @@ function soundcloud(url, init) {
   return json(200, scTrack());
 }
 
+// YouTube's videos.list for many ids at once (the swap checks): one item per
+// known id, with its id. "nogo" ids are unknown (gone), "noembed" ones can't
+// be embedded.
+function youtubeBatch(ids) {
+  if (SC === "yt_outage") return youtube("x");
+  return json(200, { items: ids.filter((id) => !/nogo/.test(id)).map((id) =>
+    Object.assign(video("https://img.example/x.jpg", /noembed/.test(id) ? { status: { embeddable: false } } : {}).items[0], { id })) });
+}
+
+// YouTube Music search: audio tracks (ATV) next to videos (OMV), in the
+// shape music.youtube.com answers. Logs each search.
+const ytm = require("./fixtures/ytmusic.js");
+const YTM_CATALOG = [
+  { cid: "kpvideo0001", title: "Karma Police (Official Video)", artists: ["Radiohead"], kind: "OMV" },
+  { cid: "kpnoembed01", title: "Karma Police", artists: ["Radiohead"], album: "OK Computer", dur: 262 },
+  { cid: "kpstudio001", title: "Karma Police", artists: ["Radiohead"], album: "OK Computer", dur: 262 },
+  { cid: "omtstudio01", title: "One More Time", artists: ["Daft Punk"], album: "Discovery", dur: 320 },
+  { cid: "omtofficial", title: "One More Time (Official Audio)", artists: ["Daft Punk"], kind: "OMV" }
+];
+function ytmusic(init) {
+  const body = JSON.parse(init.body);
+  console.log("fake youtube music: search \"" + body.query + "\"" + (body.params ? " (songs)" : ""));
+  if (SC === "ytm_down") return json(503, "");
+  const words = body.query.toLowerCase();
+  return json(200, ytm.answer(YTM_CATALOG.filter((r) => words.includes(r.title.toLowerCase().replace(/ \(.*$/, "")))));
+}
+
 const realFetch = global.fetch;
 global.fetch = function (input, init) {
   const url = String(input);
   init = init || {};
   const host = new URL(url).hostname;
   if (host === "127.0.0.1" || host === "localhost") return realFetch(input, init);
-  if (host === "www.googleapis.com") return youtube(new URL(url).searchParams.get("id"));
+  if (host === "www.googleapis.com") {
+    const params = new URL(url).searchParams;
+    return params.get("maxResults") ? youtubeBatch(params.get("id").split(",")) : youtube(params.get("id"));
+  }
+  if (host === "music.youtube.com") return ytmusic(init);
   if (/soundcloud\.com$/.test(host)) return soundcloud(url, init);
   if (host === "img.example") {
     return Promise.resolve(/bad/.test(url)

@@ -136,6 +136,24 @@ await expect("ALLOWED", "add a SoundCloud track (number id, no artwork)", eve.re
 await expect("ALLOWED", "create a playlist", eve.ref("playlists/eve/pl3").set({ name: "new list", list: { a: track("x") } }));
 await expect("ALLOWED", "rename a playlist", eve.ref("playlists/eve/pl3/name").set("renamed"));
 await expect("ALLOWED", "flag and unflag a track", eve.ref("queues/eve/old1/flagged").set({ date: Date.now(), code: 8 }).then(() => eve.ref("queues/eve/old1/flagged").remove()));
+// swap suggestions (lib/swaps.js) and the site's swap / "not this one"
+const swapPick = { cid: "kpstudio001", artist: "Radiohead", title: "Karma Police", album: "OK Computer", dur: 262, explicit: false, date: 1 };
+await expect("ALLOWED", "bot saves a swap suggestion on a track", db("bot").ref("queues/eve/old4/swap").set(swapPick));
+await expect("ALLOWED", "bot saves a swap in a playlist", db("bot").ref("playlists/eve/pl3/list/a/swap").set(swapPick));
+await expect("DENIED", "swap with a video id that isn't one", db("bot").ref("queues/eve/old4/swap").set(Object.assign({}, swapPick, { cid: "x".repeat(300) })));
+await expect("DENIED", "swap with extra fields", db("bot").ref("queues/eve/old4/swap").set(Object.assign({}, swapPick, { junk: big })));
+await expect("DENIED", "swap without a date", db("bot").ref("queues/eve/old4/swap").set({ cid: "kpstudio001" }));
+await expect("DENIED", "someone else's swap", db("bob").ref("queues/eve/old4/swap").set(swapPick));
+await expect("ALLOWED", "say \"not this one\" to a swap", eve.ref("queues/eve/old4/swap").set({ dismissed: "kpstudio001", date: Date.now() }));
+await expect("ALLOWED", "swap a track in, keeping where it came from", eve.ref("queues/eve/old4").set({ type: 1, cid: "kpstudio001", name: "Flagged - Track", url: "https://www.youtube.com/watch?v=kpstudio001",
+  swappedFrom: { type: 1, cid: "def", date: Date.now() } }));
+await expect("DENIED", "swappedFrom with extra fields", eve.ref("queues/eve/old4/swappedFrom/junk").set(big));
+await expect("ALLOWED", "bot remembers a search", db("bot").ref("swapCache/abcDEF123_-xyz").set({ q: "Radiohead Karma Police", date: 1, picks: [swapPick] }));
+await expect("DENIED", "people read the search cache", eve.ref("swapCache").once("value"));
+await expect("DENIED", "people write the search cache", eve.ref("swapCache/abc").set({ date: 1 }));
+await expect("ALLOWED", "bot marks people as scanned", db("bot").ref("swapScans").update({ eve: Date.now(), bob: Date.now() }));
+await expect("DENIED", "scan marks that aren't times", db("bot").ref("swapScans/eve").set("yesterday"));
+await expect("DENIED", "people read or change scan marks", eve.ref("swapScans/eve").set(0));
 await expect("ALLOWED", "rename a track (bot's tag fix)", db("bot").ref("queues/eve/old2/name").set("Fixed - Name"));
 await expect("ALLOWED", "bot moves a played track to the bottom in one write",
   db("bot").ref("playlists/bot/big/list").update({ k000001: null, zzz: track("v1") }));
