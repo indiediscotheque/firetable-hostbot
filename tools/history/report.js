@@ -6,6 +6,7 @@ var path = require("path");
 var csv = require("./csv");
 var store = require("./store");
 var tags = require("../../lib/tags");
+var genresLib = require("./genres");
 
 function iso(ms) { return ms == null ? "" : new Date(ms).toISOString().replace("T", " ").slice(0, 16); }
 
@@ -87,6 +88,22 @@ function report(db, dir, log) {
     ["artist", "logs_suggest", "youtube_music", "outcome", "shown_as"],
     artistAccents.map(function(a) { return [a.name, a.logs_suggest, a.youtube_music, a.outcome, a.shown_as]; }));
 
+  // genres (tools/history/genres.js): each played track's, and every raw tag
+  var genreRows = db.prepare("SELECT name FROM sqlite_master WHERE name = 'track_genres'").get() ?
+    db.prepare("SELECT t.id, t.plays, t.artist, t.title, g.genres, g.why FROM track_genres g JOIN tracks t ON t.id = g.track_id ORDER BY t.plays DESC").all() : [];
+  var genreCount = new Map();
+  if (genreRows.length) {
+    files["genres.csv"] = csv.writeCsv(path.join(dir, "genres.csv"), ["track_id", "plays", "track", "genres", "from"],
+      genreRows.map(function(g) {
+        var gs = JSON.parse(g.genres);
+        gs.forEach(function(x) { genreCount.set(x, (genreCount.get(x) || 0) + g.plays); });
+        return [g.id, g.plays, g.artist + " - " + g.title, gs.join(" | "), g.why];
+      }));
+    var gmap = genresLib.readGenreMap(dir);
+    files["genre_tags.csv"] = csv.writeCsv(path.join(dir, "genre_tags.csv"), ["tag", "weight", "top_artists", "genre"],
+      genresLib.tagWeights(db).map(function(t) { return [t.tag, t.weight, t.artists, gmap.has(t.tag) ? (gmap.get(t.tag) || "(ignored)") : ""]; }));
+  }
+
   files["djs.csv"] = csv.writeCsv(path.join(dir, "djs.csv"),
     ["dj", "spellings_of_name", "plays", "first_plays", "tracks", "first_seen", "last_seen"],
     db.prepare("SELECT * FROM djs ORDER BY plays DESC").iterate().map(function(d) {
@@ -133,6 +150,13 @@ function report(db, dir, log) {
   if (tz[1] || !tz[2]) add("| ADAM clock (its exports) | " + clock(zones[1], tz[1]) + " |");
   if (tz[2]) add("| ADAM clock (moved into globalTracks) | " + clock(zones[2], tz[2]) + " |");
   add("| accents restored | " + n(st.accentFixes) + " (restore_accents.csv) |");
+  if (genreRows.length) {
+    var withG = genreRows.filter(function(g) { return g.genres !== "[]"; });
+    var playsAll = genreRows.reduce(function(a, g) { return a + g.plays; }, 0);
+    var playsG = withG.reduce(function(a, g) { return a + g.plays; }, 0);
+    add("| genres | " + n(withG.length) + " of " + n(genreRows.length) + " played tracks (" + Math.round(100 * playsG / Math.max(1, playsAll)) + "% of plays); most played: " +
+      Array.from(genreCount.entries()).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 6).map(function(e) { return e[0]; }).join(", ") + " (genres.csv, genre_tags.csv) |");
+  }
   add("| RSN title case | " + n(titleCased) + " English titles (tidy_preview.csv, title_case) |");
   var by = function(re) { return artistAccents.filter(function(a) { return re.test(a.outcome); }).length; };
   if (artistAccents.length) add("| artist names (artist_accents.csv) | " + n(by(/^accents from YouTube/)) + " accented as YouTube Music writes them; " + n(by(/YouTube Music writes it/)) + " left plain as YouTube Music writes them; " + n(by(/until YouTube Music is checked|not found/)) + " left as they are until YouTube Music confirms |");

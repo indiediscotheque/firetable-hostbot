@@ -1,0 +1,363 @@
+tag,genre
+# Raw tags (Last.fm, Discogs styles, SoundCloud genres) -> the room's genres.
+# One tag per line, lower case. An empty genre ignores the tag. A genre
+# starting with ~ is a fallback: used only when a track has nothing more
+# specific. A tag not listed here counts for nothing and shows up in
+# history-data/genre_tags.csv, to add. history-data/genre-map.csv wins.
+
+# --- Indie Dance
+indie dance,Indie Dance
+indietronica,Indie Dance
+indie electronic,Indie Dance
+dance punk,Indie Dance
+new rave,Indie Dance
+indie disco,Indie Dance
+electro rock,Indie Dance
+crank wave,Indie Dance
+dfa,Indie Dance
+kitsune,Indie Dance
+# --- Nu-Disco
+nu disco,Nu-Disco
+nu-disco,Nu-Disco
+disco house,Nu-Disco
+space disco,Nu-Disco
+tropical disco,Nu-Disco
+electronic lounge,Nu-Disco
+balearic,Nu-Disco
+# --- Disco
+disco,Disco
+post disco,Disco
+italo disco,Disco
+italo,Disco
+boogie,Disco
+# --- French House
+french house,French House
+french touch,French House
+french electro,French House
+ed banger,French House
+filter house,French House
+funky french filtered disco house,French House
+# --- House
+house,House
+chicago house,House
+funky house,House
+club,House
+garage house,House
+acid house,House
+uk funky,House
+tropical house,House
+# --- Deep House
+deep house,Deep House
+# --- Tech House / Techno
+tech house,Tech House
+minimal,Tech House
+techno,Techno
+minimal techno,Techno
+detroit techno,Techno
+# --- Electro
+electro,Electro
+electro house,Electro
+electroclash,Electro
+fidget house,Electro
+electrofunk,Electro
+dirty electro,Electro
+complextro,Electro
+# --- Synthpop
+synthpop,Synthpop
+synth pop,Synthpop
+electropop,Synthpop
+electro pop,Synthpop
+futurepop,Synthpop
+synth,Synthpop
+# --- Synthwave
+synthwave,Synthwave
+retrowave,Synthwave
+dreamwave,Synthwave
+retro electro,Synthwave
+outrun,Synthwave
+darksynth,Synthwave
+8 bit,Synthwave
+8bit,Synthwave
+# --- Chillwave
+chillwave,Chillwave
+glo fi,Chillwave
+lo fi,Chillwave
+dreamy,Chillwave
+# --- Indie Pop / Dream Pop
+indie pop,Indie Pop
+twee,Indie Pop
+bedroom pop,Indie Pop
+dream pop,Dream Pop
+shoegaze,Dream Pop
+# --- Indie Rock / Rock
+indie rock,Indie Rock
+garage rock,Indie Rock
+britpop,Indie Rock
+alternative rock,Indie Rock
+math rock,Indie Rock
+art rock,Indie Rock
+alternative,Indie Rock
+rock,Rock
+hard rock,Rock
+classic rock,Rock
+punk,Rock
+punk rock,Rock
+glam rock,Rock
+blues rock,Rock
+glam,Rock
+pop rock,Rock
+power pop,Rock
+# --- New Wave / Post-Punk & Darkwave
+new wave,New Wave
+post punk,Post-Punk & Darkwave
+darkwave,Post-Punk & Darkwave
+coldwave,Post-Punk & Darkwave
+minimal synth,Post-Punk & Darkwave
+gothic rock,Post-Punk & Darkwave
+ebm,Post-Punk & Darkwave
+industrial,Post-Punk & Darkwave
+witch house,Post-Punk & Darkwave
+# --- Funk / Future Funk
+funk,Funk
+funky,Funk
+groove,Funk
+future funk,Future Funk
+vaporwave,Future Funk
+# --- Soul & R&B
+soul,Soul & R&B
+rnb,Soul & R&B
+neo soul,Soul & R&B
+alternative rnb,Soul & R&B
+# --- Hip Hop
+hip hop,Hip Hop
+rap,Hip Hop
+instrumental hip hop,Hip Hop
+grime,Hip Hop
+beats,Hip Hop
+turntablism,Hip Hop
+# --- Downtempo / Ambient
+downtempo,Downtempo
+chillout,Downtempo
+trip hop,Downtempo
+lounge,Downtempo
+chill,Downtempo
+chillstep,Downtempo
+ambient,Ambient
+drone,Ambient
+post rock,Ambient
+# --- Electronica
+idm,Electronica
+glitch,Electronica
+wonky,Electronica
+glitch hop,Electronica
+chiptune,Electronica
+experimental,Electronica
+electronica,Electronica
+# --- UK Garage / Breaks & Bass (future bass too)
+uk garage,UK Garage
+future garage,UK Garage
+2 step,UK Garage
+speed garage,UK Garage
+future bass,Breaks & Bass
+trap,Breaks & Bass
+drum n bass,Breaks & Bass
+jungle,Breaks & Bass
+dubstep,Breaks & Bass
+drum and bass,Breaks & Bass
+breakbeat,Breaks & Bass
+big beat,Breaks & Bass
+neurofunk,Breaks & Bass
+breaks,Breaks & Bass
+# --- EDM
+edm,EDM
+progressive house,EDM
+future house,EDM
+trance,EDM
+moombahton,EDM
+progressive trance,EDM
+# --- Pop
+pop,Pop
+dance pop,Pop
+eurodance,Pop
+j pop,Pop
+k pop,Pop
+art pop,Pop
+# --- Psych
+psychedelic,Psych
+psychedelic rock,Psych
+psychedelic pop,Psych
+space rock,Psych
+krautrock,Psych
+# --- Jazz & Swing
+jazz,Jazz & Swing
+electro swing,Jazz & Swing
+smooth jazz,Jazz & Swing
+nu jazz,Jazz & Swing
+acid jazz,Jazz & Swing
+fusion,Jazz & Swing
+hard bop,Jazz & Swing
+bebop,Jazz & Swing
+saxophone,Jazz & Swing
+# --- Folk
+folk,Folk
+indie folk,Folk
+freak folk,Folk
+acoustic,Folk
+singer songwriter,Folk
+# --- Reggae & Dancehall
+reggae,Reggae & Dancehall
+dancehall,Reggae & Dancehall
+dub,Reggae & Dancehall
+# --- where a track comes from, not how it sounds: ignored
+soundtrack,
+video game music,
+mashup,
+plunderphonics,
+stage and screen,
+score,
+# --- Discogs' own style and genre names (styles count most, genres little)
+italo disco,Disco
+hi nrg,Disco
+euro disco,Disco
+euro house,House
+hip house,House
+acid,House
+leftfield,Electronica
+abstract,Electronica
+dub techno,Techno
+electro funk,Electro
+jazz funk,Funk
+funk soul,Funk
+rhythm and blues,Soul & R&B
+contemporary r&b,Soul & R&B
+contemporary randb,Soul & R&B
+pop rap,Hip Hop
+conscious,Hip Hop
+contemporary jazz,Jazz & Swing
+latin jazz,Jazz & Swing
+folk world and country,
+non music,
+latin,
+children's,
+brass and military,
+
+# --- fallbacks: only when nothing more specific
+electronic,~Electronic
+dance,~Electronic
+indie,~Indie
+
+# --- ignored: places, decades, people, and tags that mostly come from other
+# artists with the same name (Last.fm merges them)
+female vocalists,
+female vocalist,
+male vocalists,
+seen live,
+all,
+good,
+remixer,
+spotify,
+under 2000 listeners,
+3 stars,
+sxsw 2010,
+valerie,
+twin turbo,
+nu bluz,
+future indie,
+instrumental,
+piano,
+noise,
+noise rock,
+oldies,
+doo wop,
+blues,
+60s,
+70s,
+80s,
+80ies,
+remix,
+dj,
+tropical,
+english,
+swiss,
+mexican,
+portland,
+youth crew,
+straight edge,
+power metal,
+swedish death metal,
+90s,
+50s,
+avant garde,
+spoken word,
+vocaloid,
+disney,
+zouk,
+progressive,
+progressive rock,
+heavy metal,
+metal,
+black metal,
+death metal,
+doom metal,
+death doom metal,
+thrash metal,
+progressive metal,
+alternative metal,
+metalcore,
+post hardcore,
+hardcore,
+screamo,
+emo,
+stoner rock,
+oi,
+street punk,
+pop punk,
+industrial rock,
+aor,
+french,
+france,
+paris,
+british,
+uk,
+united kingdom,
+australian,
+australia,
+swedish,
+sweden,
+canadian,
+canada,
+german,
+germany,
+norwegian,
+norway,
+usa,
+united states,
+american,
+japanese,
+japan,
+korean,
+russian,
+dutch,
+netherlands,
+danish,
+finnish,
+polish,
+icelandic,
+brazilian,
+brazil,
+mexico,
+spanish,
+spain,
+italian,
+italy,
+greek,
+belgian,
+belgium,
+portugal,
+romanian,
+new zealand,
+minnesota,
+chicago,
+detroit,
+los angeles,
+new york,

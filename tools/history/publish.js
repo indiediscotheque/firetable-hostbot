@@ -7,7 +7,9 @@
 //   globalSongKeys/<key>     any known spelling's key -> track (lib/tags.js)
 //   globalWorkKeys/<key>     song key -> song
 //   globalTracks/<upload>/song   which track each upload is
-//   globalSongsMeta          ready: true switches the bot over (--off undoes it)
+//   globalSongsMeta          ready: true switches the bot over (--off undoes it);
+//                            genres/<genre> {name, tracks, plays} and
+//                            byGenre/<genre>/<track> = plays, for browsing
 //
 // Without --write nothing is sent: it says what it would do and saves the
 // list to publish-preview.json.
@@ -56,6 +58,15 @@ async function publish(db, env, opts, log) {
     return best;
   }
 
+  // genres (tools/history/genres.js), when they've been worked out
+  var genresOf = new Map();
+  if (db.prepare("SELECT name FROM sqlite_master WHERE name = 'track_genres'").get()) {
+    db.prepare("SELECT track_id, genres FROM track_genres").all().forEach(function(r) { genresOf.set(r.track_id, JSON.parse(r.genres)); });
+  }
+  var genreIndex = new Map(); // slug -> {name, tracks: {id: plays}, plays, n}
+  var songGenres = new Map(); // song id -> Map(genre -> weight)
+  var genreSlug = function(g) { return String(g).toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); };
+
   db.prepare("SELECT id FROM songs").all().forEach(function(s) {
     workIdMap.set(s.id, stableId(workKeysOf.get(s.id), existingWorkKeys, s.id));
   });
@@ -88,6 +99,21 @@ async function publish(db, env, opts, log) {
     set(updates, base + "last_play_date", t.last_play_at);
     set(updates, base + "last_play_dj", t.last_play_dj);
     set(updates, base + "uploads", t.uploads || 0);
+    var gs = genresOf.get(t.id) || [];
+    set(updates, base + "genres", gs.length ? gs : null);
+    gs.forEach(function(g, i) {
+      var sl = genreSlug(g);
+      if (!genreIndex.has(sl)) genreIndex.set(sl, { name: g, tracks: {}, plays: 0, n: 0 });
+      var gi = genreIndex.get(sl);
+      gi.tracks[id] = t.plays || 0;
+      gi.plays += t.plays || 0;
+      gi.n++;
+      // a song's genres: its versions' genres, by plays
+      if (!songGenres.has(t.song_id)) songGenres.set(t.song_id, new Map());
+      var sg = songGenres.get(t.song_id);
+      sg.set(g, (sg.get(g) || 0) + (t.plays || 0) * (3 - i));
+    });
+    if (gs.length) counts.withGenres = (counts.withGenres || 0) + 1;
     counts.tracks++;
     keys.forEach(function(k) { updates["globalSongKeys/" + tags.hash(k)] = id; counts.keys++; });
   }
@@ -101,9 +127,25 @@ async function publish(db, env, opts, log) {
     set(updates, base + "versions", s.versions || 1);
     set(updates, base + "first_play_date", s.first_play_at);
     set(updates, base + "first_play_dj", s.first_play_dj);
+    var sgm = songGenres.get(s.id);
+    set(updates, base + "genres", sgm ? Array.from(sgm.entries()).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 3).map(function(e) { return e[0]; }) : null);
     workKeysOf.get(s.id).forEach(function(k) { updates["globalWorkKeys/" + tags.hash(k)] = wid; });
     counts.songs++;
   });
+
+  // the genre index; a genre gone since the last publish leaves it
+  genreIndex.forEach(function(gi, sl) {
+    updates["globalSongsMeta/genres/" + sl] = { name: gi.name, tracks: gi.n, plays: gi.plays };
+    updates["globalSongsMeta/byGenre/" + sl] = gi.tracks;
+  });
+  counts.genres = genreIndex.size;
+  if (opts.write) {
+    Object.keys((await c.get("globalSongsMeta/genres", { shallow: "true" })) || {}).forEach(function(sl) {
+      if (genreIndex.has(sl)) return;
+      updates["globalSongsMeta/genres/" + sl] = null;
+      updates["globalSongsMeta/byGenre/" + sl] = null;
+    });
+  }
 
   var preview = [];
   var tagBackup = {}; // upload -> its tags before and after, to undo with undo-tags
@@ -201,7 +243,7 @@ async function publish(db, env, opts, log) {
 
   // ready goes last, so the bot only switches over once everything is there
   var ready = { "globalSongsMeta/ready": true, "globalSongsMeta/published_at": { ".sv": "timestamp" }, "globalSongsMeta/tracks": counts.tracks, "globalSongsMeta/songs": counts.songs, "globalSongsMeta/plays": counts.plays };
-  paths = paths.filter(function(p) { return p.indexOf("globalSongsMeta/") !== 0; });
+  paths = paths.filter(function(p) { return !(p in ready); });
   var rest = {};
   paths.forEach(function(p) { rest[p] = updates[p]; });
   var skipped = await writeAll(c, rest, log, true);

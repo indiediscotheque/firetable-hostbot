@@ -11,6 +11,7 @@ var reconcile = require("./reconcile");
 var report = require("./report");
 var publish = require("./publish");
 var verify = require("./verify");
+var genres = require("./genres");
 var archive = require("./archive");
 var tags = require("../../lib/tags");
 
@@ -28,6 +29,9 @@ getting the data in
         moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs)
   undo-tags [--run <id>] [--write]    put back the upload tags the latest publish (or that run) changed;
         uploads retagged since are left alone. With publish --off, the room is back as it was
+  genres [--artists 5000] [--tracks 3000] [--discogs 1200]   each played track's genres: Last.fm tags of
+        its artists and itself, Discogs styles (DISCOGS_TOKEN), SoundCloud's genre; most played first,
+        each asked once. genre-map.csv turns tags into the room's genres (refresh does this too)
   check-artists [--max-quota 3000]    look up on YouTube Music the artists whose accents the logs
         disagree on (100 quota units each, most played first; refresh does this too). reconcile after
   probe [path ...]                    how each path is laid out (fields and kinds of values, no data)
@@ -145,6 +149,11 @@ async function main() {
     case "undo-tags":
       await publish.undoTags(env, { run: args.run, write: !!args.write }, log);
       break;
+    case "genres":
+      await genres.fetchLastfmTags(db, env.LASTFM_APIKEY, { artists: args.artists, tracks: args.tracks }, log);
+      await genres.fetchDiscogs(db, env.DISCOGS_TOKEN, { discogs: args.discogs }, log);
+      genres.assignGenres(db, dir, log);
+      break;
     case "check-artists":
       await verify.checkArtists(db, env, { maxQuota: args.maxQuota }, log);
       break;
@@ -190,6 +199,10 @@ async function main() {
       // with the quota left; when any were, reconcile again with the answers
       var artists = await verify.checkArtists(db, env, { maxQuota: args.maxQuota, quotaUsed: checked && checked.quotaUsed }, log);
       if (artists.checked) { log("== reconcile (with YouTube Music's answers)"); reconcile.reconcile(db, rec); }
+      log("== genres");
+      await genres.fetchLastfmTags(db, env.LASTFM_APIKEY, {}, log);
+      await genres.fetchDiscogs(db, env.DISCOGS_TOKEN, {}, log);
+      genres.assignGenres(db, dir, log);
       report.report(db, dir, log);
       if (args.publish) {
         log("== publish");
@@ -212,6 +225,8 @@ async function main() {
       log("  " + t.plays + " plays (" + t.scrobbles + " on Last.fm), " + t.djs + " DJs, " + t.uploads + " uploads, " + t.spellings + " spellings");
       log("  first: " + iso(t.first_play_at) + " by " + (t.first_play_dj || "unknown") + (t.first_dj && t.first_dj !== t.first_play_dj ? " (first known DJ: " + t.first_dj + ", " + iso(t.first_dj_at) + ")" : ""));
       log("  last:  " + iso(t.last_play_at) + " by " + (t.last_play_dj || "unknown"));
+      var gRow = db.prepare("SELECT name FROM sqlite_master WHERE name = 'track_genres'").get() && db.prepare("SELECT genres, why FROM track_genres WHERE track_id = ?").get(t.id);
+      if (gRow && JSON.parse(gRow.genres).length) log("  genres: " + JSON.parse(gRow.genres).join(", ") + "  (" + gRow.why + ")");
       db.prepare("SELECT artist, title, seen, scrobbles, sources FROM variants WHERE track_id = ? ORDER BY seen DESC LIMIT 25").all(t.id).forEach(function(r) {
         log("    " + String(r.seen).padStart(6) + "×  " + r.artist + " - " + r.title + "  [" + r.sources + "]");
       });

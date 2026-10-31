@@ -695,6 +695,7 @@ module.exports = {
   fetchLastfm: fetchLastfm,
   importLastfmCsv: importLastfmCsv,
   enrichArtists: enrichArtists,
+  lastfmCall: lastfmCall,
   parseNaive: parseNaive,
   cidOf: cidOf,
   FIREBASE_PATHS: FIREBASE_PATHS

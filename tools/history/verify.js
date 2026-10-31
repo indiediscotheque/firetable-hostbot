@@ -25,7 +25,10 @@ async function verifyUploads(db, env, opts, log) {
   uploads.forEach(function(u) {
     var kind = u.type === 1 ? "yt" : "sc";
     var k = known.get(kind + ":" + u.cid);
-    if (k && !(k.result && k.result.dead && Date.now() - k.at > recheck)) return;
+    // asked again: dead ones after --recheck-days, and SoundCloud answers kept
+    // before their genre was (once)
+    var again = k && k.result && ((k.result.dead && Date.now() - k.at > recheck) || (kind === "sc" && !k.result.dead && !("genre" in k.result)));
+    if (k && !again) return;
     if (kind === "yt" && !/^[A-Za-z0-9_-]{11}$/.test(u.cid)) return;
     if (kind === "sc" && !/^\d+$/.test(u.cid)) return;
     todo[kind].push(u.cid);
@@ -102,7 +105,8 @@ async function verifyUploads(db, env, opts, log) {
           var pm = t && t.publisher_metadata || {};
           var r = dead ? { dead: true } : {
             title: t.title, user: t.user && t.user.username, artist: pm.artist || null, release: pm.release_title || null,
-            isrc: pm.isrc || null, dur: t.duration ? Math.round(t.duration / 1000) : null, preview: t.policy === "SNIP"
+            isrc: pm.isrc || null, dur: t.duration ? Math.round(t.duration / 1000) : null, preview: t.policy === "SNIP",
+            genre: t.genre || null
           };
           if (dead) counts.dead++;
           save.run("sc", id, JSON.stringify(r), Date.now());

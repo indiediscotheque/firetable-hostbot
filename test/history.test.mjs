@@ -345,6 +345,50 @@ test("undo: a publish backs up the tags it changes; a refused value is left out;
   }
 });
 
+test("genres: Last.fm tags, Discogs styles and SoundCloud's genre, in the room's own genres; a remix leans on its remixer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
+  try {
+    const t = (artist, title, type) => ({ artist, title, type: type || 1, first_play_date: 1600000000000, first_play_dj: "ana" });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: {
+      "1mynumber001": t("Foals", "My Number"), "1mynumber002": t("Foals", "My Number (Lemaitre Remix)"),
+      "2555000111": t("Kerri Chandler", "Rain", 2), "1cherokee001": t("Cherokee", "Take Care of You"),
+      "1cherokee002": t("Foals", "Spanish Sahara (Cherokee Remix)"), "1cherokee003": t("Cherokee", "Lust (Lemaitre Remix)")
+    } }));
+    writeFileSync(join(dir, "genre-map.csv"), "tag,genre\nindie rock,Indie Rock\nindie,Indie Rock\nseen live,\nnu disco,Nu-Disco\nnu-disco,Nu-Disco\ndeep house,Deep House\nhouse,House\nfrench house,French House\n");
+    writeFileSync(join(dir, "genre-overrides.csv"), "Cherokee,French House\n");
+    run("import-firebase", join(dir, "fb.json"));
+    run("reconcile");
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const save = db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES (?, ?, ?, 1)");
+    save.run("lfm-artist", "foals", JSON.stringify({ name: "Foals", tags: [["indie rock", 100], ["seen live", 90], ["glimmerwave", 40]] }));
+    save.run("lfm-artist", "lemaitre", JSON.stringify({ name: "Lemaitre", tags: [["nu disco", 100], ["electronic", 60]] }));
+    save.run("sc", "555000111", JSON.stringify({ title: "Rain", user: "kerri", genre: "Deep House" }));
+    const rain = db.prepare("SELECT id FROM tracks WHERE title = 'Rain'").get().id;
+    save.run("discogs", rain, JSON.stringify({ n: 2, styles: [["Deep House", 2], ["House", 1]], genres: [["Electronic", 2]] }));
+    db.close();
+    run("genres");
+    run("report");
+    const look = (q) => run("lookup", q).split("\n").find((l) => /^  genres:/.test(l)) || "";
+    assert.match(look("Foals - My Number"), /genres: Indie Rock /, "the artist's tags, in the room's genres; 'seen live' is ignored");
+    assert.match(look("Foals - My Number (Lemaitre Remix)"), /genres: Nu-Disco /, "a remix sounds like its remixer (the original artist counts for less)");
+    assert.match(look("Kerri Chandler - Rain"), /genres: Deep House  \(Deep House: discogs\+soundcloud\)/, "Discogs styles and SoundCloud's genre; a weak second genre is left out");
+    assert.match(look("Cherokee - Take Care of You"), /genres: French House .*genre-overrides\.csv/, "set by hand");
+    assert.match(look("Foals - Spanish Sahara (Cherokee Remix)"), /genres: French House .*genre-overrides\.csv/, "an artist's remixes of others follow them");
+    assert.match(look("Cherokee - Lust (Lemaitre Remix)"), /genres: Nu-Disco .*lastfm remixer/, "someone else's remix of theirs follows the remixer");
+    const tagsCsv = readFileSync(join(dir, "genre_tags.csv"), "utf8");
+    assert.match(tagsCsv, /glimmerwave,\d+,Foals,\n/, "a tag not in the list yet shows up, to add");
+    assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /\| genres \| 6 of 6 played tracks/);
+    run("publish");
+    const preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
+    assert.equal(preview.counts.genres, 4, "four genres in the index (Indie Rock, Nu-Disco, Deep House, French House)");
+    assert.equal(preview.counts.withGenres, 6);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and exceptions left alone", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });

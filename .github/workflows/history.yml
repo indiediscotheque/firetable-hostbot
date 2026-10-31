@@ -10,7 +10,8 @@
 # artists stop it (tick "force" to send it anyway).
 # Needs these repository secrets (Settings → Secrets and variables → Actions),
 # the same values as the bot's .env: FIREBASE_KEY, FIREBASE_DB, FIRETABLE_USER,
-# FIRETABLE_PASS, LASTFM_APIKEY, LASTFM_USERNAME, YOUTUBE_KEY, SOUNDCLOUD_KEY.
+# FIRETABLE_PASS, LASTFM_APIKEY, LASTFM_USERNAME, YOUTUBE_KEY, SOUNDCLOUD_KEY;
+# and DISCOGS_TOKEN (optional) for genres.
 
 name: Play history
 
@@ -73,6 +74,7 @@ jobs:
       LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
       YOUTUBE_KEY: ${{ secrets.YOUTUBE_KEY }}
       SOUNDCLOUD_KEY: ${{ secrets.SOUNDCLOUD_KEY }}
+      DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -90,7 +92,7 @@ jobs:
             echo "::error::Add these repository secrets (the bot's .env values):$missing"
             exit 1
           fi
-          for v in LASTFM_APIKEY LASTFM_USERNAME YOUTUBE_KEY SOUNDCLOUD_KEY; do
+          for v in LASTFM_APIKEY LASTFM_USERNAME YOUTUBE_KEY SOUNDCLOUD_KEY DISCOGS_TOKEN; do
             [ -n "${!v}" ] || echo "::warning::$v isn't set, so that part of the history is skipped"
           done
 
