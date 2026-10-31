@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -135,6 +135,40 @@ test("toolkit: YouTube/SoundCloud answers add evidence, catch dead uploads and l
     assert.match(dead, /https:\/\/youtu\.be\/bbbbbbbbbbb,Foals - My Number,\d+,https:\/\/youtu\.be\/aaaaaaaaaaa/, "a dead upload comes with a working copy of the same track");
     assert.match(run("lookup", "Foals - My Number"), /yt:topic/, "YouTube's Topic channel counts as a spelling");
     assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /Sigur Rós - Hoppípolla/, "SoundCloud's own artist/title restores accents too");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and exceptions left alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    writeFileSync(join(dir, "tag-exceptions.csv"), "!!!\n");
+    run("import-firebase", FIX + "firebase-tidy.json");
+    run("reconcile");
+    run("report");
+    const csvText = readFileSync(join(dir, "tidy_preview.csv"), "utf8");
+    assert.match(csvText, /TameImpalaVEVO - Feels Like We Only Go Backwards \(Official Video\) HD,Tame Impala - Feels Like We Only Go Backwards,/,
+      "junk out, and the artist written the way the room writes it");
+    assert.match(csvText, /Daft Punk ft\. Pharrell Williams - Get Lucky \| Columbia Records,Daft Punk ft\. Pharrell Williams - Get Lucky,Daft Punk - Get Lucky feat\. Pharrell Williams,/,
+      "junk keeps 'ft.' as typed; rsn lays it out");
+    assert.match(csvText, /ODESZA - Say My Name ft\. Zyra \[RL Grime Edit\],.*yes \(a mod's fix/, "a logged mod fix is left alone");
+    assert.match(csvText, /!!! - One Girl \/ One Boy \(Official Video\),.*yes/, "tag-exceptions.csv is respected");
+
+    run("publish", "--tidy", "junk");
+    let preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
+    const changed = (p) => preview.tagChanges.find((c) => c.upload === p);
+    assert.equal(changed("1eeeeeeeeee").to, "Tame Impala - Feels Like We Only Go Backwards");
+    assert.equal(changed("1ggggggggggg").to, "Daft Punk ft. Pharrell Williams - Get Lucky");
+    assert.ok(!changed("1fffffffffff") && !changed("1hhhhhhhhhhh") && !changed("1ccccccccccc"), "fixed, excepted and clean tags untouched");
+    run("publish", "--tidy", "rsn");
+    preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
+    assert.equal(changed("1ggggggggggg").to, "Daft Punk - Get Lucky feat. Pharrell Williams");
+    assert.ok(!changed("1fffffffffff"), "a mod's fix stays even with rsn");
+    run("publish");
+    preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
+    assert.equal(preview.tagChanges.length, 0, "without --tidy nothing is tidied");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

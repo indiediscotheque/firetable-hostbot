@@ -60,6 +60,19 @@ Tick **force** to send it anyway. A preview never writes anything. `publish --of
    ```
    Deploy `firebase-rules.json` first. The bot switches over on its own: true first plays, its own counts, and `!plays`. `publish --off` switches it back.
 
+## tidying tags
+Matching ignores upload junk, but by default the room's tags are only changed to put accents back (`--restore-accents`). To clean them too, publish with `--tidy` (or pick **tidy** when running the Action). Check `tidy_preview.csv` first; it shows both levels for every track:
+- `--tidy junk` takes out what only describes the upload: `(Official Video)`, `[Official Audio]`, `HD`, `(Visualizer)`, `[Monstercat Release]`, `| uploader text`, hashtags, `- Topic`, `VEVO`. Everything else stays exactly as typed, `ft.` and `[brackets]` included.
+- `--tidy rsn` also lays tags out in Rohn Standard Notation: `feat.` after the title, versions in parentheses. Notes like `Radio Edit` or `2011 Remaster` stay.
+
+Both also write each artist one way everywhere: the spelling a mod chose, otherwise the one the room uses most, with accents restored. That's how a fix to one song's artist reaches that artist's other songs.
+
+Tidy never touches:
+- tags a mod fixed: logged in `tagLog`, which covers every fix from now on (`!fixtags` or the site's editor)
+- anything in `history-data/tag-exceptions.csv`: one artist (`!!!`) or song (`Artist - Title`) per line, for deliberate exceptions to RSN
+
+Fixes made before the tag log existed can't be told apart from the bot's own guesses. Add the ones that break RSN on purpose to the exceptions file. For the Action, set the repository variable `HISTORY_TIDY` to `junk` or `rsn` to make it the weekly default.
+
 ## how songs are matched
 Rohn Standard Notation is the guide for *recognising* a song, never a rule for rewriting one. Tags people chose stay exactly as they are.
 - **Same upload** (YouTube/SoundCloud id) = same track. If its tags disagree completely, it goes to review.
@@ -71,7 +84,7 @@ Rohn Standard Notation is the guide for *recognising* a song, never a rule for r
 - **Typos**: swapped letters and very close titles are merged; anything less certain goes to review. Numbers never count as typos (`Part 1` ≠ `Part 2`).
 - **Vague tags** (`Unknown - Intro`, `Track 3`) are never matched across uploads.
 
-**The best spelling** for each track is chosen in this order: a mod's fix (`tagLog`, then the room's saved tags), then the most-used spelling, then cleanliness, with accents restored. `rsn_suggestions.csv` lists RSN versions to look at; nothing applies them.
+**The best spelling** for each track is chosen in this order: a mod's fix (`tagLog`, then the room's saved tags), then the most-used spelling, then cleanliness, with accents restored. YouTube and SoundCloud's own data is just one source: their trusted fields (Topic channels, SoundCloud's artist/title) count about as much as an ADAM tag, plain video titles hardly at all, and channel names never decide how an artist is written.
 
 **Plays** from different sources within 10 minutes of each other count once (`--window`). ADAM's clock had no time zone, so it's lined up against Last.fm automatically (or set it: `--adam-tz America/Chicago`). A track's first play is its earliest play in any source. When only Last.fm has that play, the date is known but the DJ isn't; `first_known_dj` gives the earliest play with a DJ.
 
@@ -114,6 +127,7 @@ To run it every Monday at 4:10 on the server (`crontab -e`):
 | `djs.csv` | every DJ: plays, first plays, years active |
 | `merges.csv` | why each pair of spellings was joined |
 | `review.csv` | questions waiting for an answer |
-| `rsn_suggestions.csv` | RSN versions to look at (never applied) |
+| `tidy_preview.csv` | what `--tidy junk` and `--tidy rsn` would show for each track, and which are left alone |
+| `rsn_suggestions.csv` | RSN versions, by RSN's strictest reading (drops notes like "Radio Edit"); for a look only |
 
 `history-data/` is ignored by git; back up `history.db` if you've saved review answers in it.

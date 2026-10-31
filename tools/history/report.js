@@ -49,6 +49,21 @@ function report(db, dir, log) {
       return [uploadUrl(r.type, r.cid), r.ua + " - " + r.ut, r.artist + " - " + r.title, r.id, r.plays];
     }));
 
+  // what --tidy junk / --tidy rsn would show for each track
+  files["tidy_preview.csv"] = csv.writeCsv(path.join(dir, "tidy_preview.csv"),
+    ["track_id", "plays", "now", "tidy_junk", "tidy_rsn", "left_alone"],
+    (function* () {
+      for (var t of db.prepare("SELECT id, artist, title, plays, tidy_junk, tidy_rsn, protected FROM tracks WHERE confidence > 0 ORDER BY plays DESC").iterate()) {
+        var j = t.tidy_junk ? JSON.parse(t.tidy_junk) : null;
+        var r = t.tidy_rsn ? JSON.parse(t.tidy_rsn) : null;
+        var now = t.artist + " - " + t.title;
+        var js = j ? j.a + " - " + j.t : now;
+        var rs = r ? r.a + " - " + r.t : now;
+        if (js === now && rs === now) continue;
+        yield [t.id, t.plays, now, js === now ? "" : js, rs === now ? "" : rs, t.protected ? "yes (a mod's fix or tag-exceptions.csv)" : ""];
+      }
+    })());
+
   // Rohn Standard Notation suggestions: never applied, just for a look
   var tagsLib = require("../../lib/tags");
   files["rsn_suggestions.csv"] = csv.writeCsv(path.join(dir, "rsn_suggestions.csv"),

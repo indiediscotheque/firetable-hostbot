@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   plays INTEGER, scrobbles INTEGER, djs INTEGER,
   first_play_at INTEGER, first_play_dj TEXT, first_dj TEXT, first_dj_at INTEGER,
   last_play_at INTEGER, last_play_dj TEXT,
-  uploads INTEGER, spellings INTEGER, confidence REAL, keys TEXT
+  uploads INTEGER, spellings INTEGER, confidence REAL, keys TEXT,
+  tidy_junk TEXT, tidy_rsn TEXT, protected INTEGER -- tidied tags (JSON {a, t}); 1 = a person chose these tags
 );
 CREATE TABLE IF NOT EXISTS songs (
   id TEXT PRIMARY KEY, artist TEXT, title TEXT, versions INTEGER, plays INTEGER,
@@ -73,6 +74,10 @@ function open(dir) {
   var db = new DatabaseSync(path.join(dir, "history.db"));
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -200000;");
   db.exec(SCHEMA);
+  // columns added after a database was first made
+  [["tracks", "tidy_junk TEXT"], ["tracks", "tidy_rsn TEXT"], ["tracks", "protected INTEGER"]].forEach(function(c) {
+    try { db.exec("ALTER TABLE " + c[0] + " ADD COLUMN " + c[1]); } catch (e) { /* already there */ }
+  });
   return db;
 }
 

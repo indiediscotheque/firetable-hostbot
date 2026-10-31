@@ -203,7 +203,9 @@ function reconcile(db, opts) {
       artistSeen.set(k, (artistSeen.get(k) || 0) + sp.seen);
       if (!artistDisplay.has(k)) artistDisplay.set(k, new Map());
       var d = artistDisplay.get(k);
-      d.set(a, (d.get(a) || 0) + sp.seen + sp.maxWeight * 3);
+      // a YouTube channel name ("ArtistVEVO", "Artist - Topic") isn't how the room writes the artist
+      var channel = /vevo$|\s-\stopic$/i.test(sp.artist) || onlyFrom(sp, WEAK_PLATFORM);
+      d.set(a, (d.get(a) || 0) + (channel ? 0.1 : sp.seen + sp.maxWeight * 3));
     });
   });
   var aliasReasons = [];
@@ -489,7 +491,8 @@ function reconcile(db, opts) {
     var c = artistMap.get(k) || k;
     var cur = bestArtistName.get(c);
     displays.forEach(function(n, name) {
-      var score = Math.log2(1 + n) + nonAsciiCount(name) * 0.01;
+      // ties go to the spelling with its spaces ("Tame Impala", not "TameImpala")
+      var score = Math.log2(1 + n) + nonAsciiCount(name) * 0.01 + (name.split(" ").length - 1) * 0.001;
       if (!cur || score > cur.score) cur = { name: name, score: score };
     });
     bestArtistName.set(c, cur);
@@ -505,6 +508,25 @@ function reconcile(db, opts) {
     });
     bestArtistName.set(c, cur);
   });
+
+  // tag-exceptions.csv: artists ("Artist") or songs ("Artist - Title") never to tidy
+  var exceptions = { artists: new Set(), tracks: new Set() };
+  var exFile = path.join(opts.dir, "tag-exceptions.csv");
+  if (fs.existsSync(exFile)) {
+    fs.readFileSync(exFile, "utf8").split(/\r?\n/).forEach(function(line) {
+      line = line.replace(/^"|"$/g, "").trim();
+      if (!line || /^#/.test(line) || /^(artist|exception|tag)s?$/i.test(line)) return;
+      if (line.indexOf(" - ") > 0) {
+        var k = tags.keysOf(tags.parse(line, null));
+        exceptions.tracks.add(k.track);
+        exceptions.tracks.add(tags.keysOf(tags.parse(line, null), artistMap).track);
+      } else {
+        var ak = tags.artistKeyOf(line);
+        exceptions.artists.add(ak);
+        exceptions.artists.add(artistMap.get(ak) || ak);
+      }
+    });
+  }
 
   var accentFixes = [];
   clusters.forEach(function(members, root) {
@@ -547,11 +569,22 @@ function reconcile(db, opts) {
     var sk = Array.from(songKeys);
     for (var q = 1; q < sk.length; q++) songUnion.union(sk[0], sk[q]);
     var conf = 1;
+    // a person chose these tags (logged fix) or you listed them as an exception: never tidied
+    var isProtected = members.some(function(si) { return spellings[si].sources.has("fb:tagLog"); }) ||
+      exceptions.artists.has(chosen.keys.artist) || exceptions.artists.has(chosen.raw.artist) ||
+      exceptions.tracks.has(chosen.keys.track) || exceptions.tracks.has(chosen.raw.track);
+    var tidyJunk = tags.tidy(artist, title, "junk");
+    var tidyRsn = tags.tidy(artist, title, "rsn");
+    // one way of writing each artist everywhere: a mod's fix first, then the most used
+    if (aBest && chosen.parsed.artists.length === 1 && !chosen.parsed.featured.length) {
+      if (tags.artistKeyOf(tidyJunk.artist) === tags.artistKeyOf(aBest.name) || artistMap.get(tags.artistKeyOf(tidyJunk.artist)) === chosen.keys.artist) tidyJunk.artist = aBest.name;
+      if (tags.artistKeyOf(tidyRsn.artist) === tags.artistKeyOf(aBest.name) || artistMap.get(tags.artistKeyOf(tidyRsn.artist)) === chosen.keys.artist) tidyRsn.artist = aBest.name;
+    }
     trackRows.push({
       id: id, root: root, artist: artist, title: title,
       version: chosen.parsed.versions.filter(function(v) { return v.kind; }).map(function(v) { return v.text; }).join(", "),
       spellings: members.length, keys: Array.from(keys), weak: !nonWeak.length, conf: conf,
-      rsn: tags.format(tags.parse(artist, title))
+      tidyJunk: tidyJunk, tidyRsn: tidyRsn, protected: isProtected
     });
   });
   var rootToTrack = new Map(trackRows.map(function(t) { return [t.root, t]; }));
@@ -655,11 +688,12 @@ function reconcile(db, opts) {
       insV.run(sp.artist, sp.title, sp.raw.track, sp.keys.song, spellingTrack[i], sp.seen, sp.plays, sp.scrobbles, Array.from(sp.sources).sort().join(","), sp.weak ? 1 : 0, sp.parsed.suspect);
     });
     var insT = db.prepare(`INSERT INTO tracks (id, song_id, artist, title, version, plays, scrobbles, djs, first_play_at, first_play_dj, first_dj, first_dj_at,
-      last_play_at, last_play_dj, uploads, spellings, confidence, keys) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      last_play_at, last_play_dj, uploads, spellings, confidence, keys, tidy_junk, tidy_rsn, protected) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     trackRows.forEach(function(t) {
       insT.run(t.id, songOfTrack.get(t.id), t.artist, t.title, t.version || null, t.plays || 0, t.scrobbles || 0, t.djs || 0,
         t.firstAt == null ? null : t.firstAt, djName(t.firstDj), djName(t.firstKnownDj), t.firstKnownDjAt == null ? null : t.firstKnownDjAt,
-        t.lastAt == null ? null : t.lastAt, djName(t.lastDj), uploadsPerTrack.get(t.id) || 0, t.spellings, t.weak ? 0 : t.conf, JSON.stringify(t.keys));
+        t.lastAt == null ? null : t.lastAt, djName(t.lastDj), uploadsPerTrack.get(t.id) || 0, t.spellings, t.weak ? 0 : t.conf, JSON.stringify(t.keys),
+        JSON.stringify({ a: t.tidyJunk.artist, t: t.tidyJunk.title }), JSON.stringify({ a: t.tidyRsn.artist, t: t.tidyRsn.title }), t.protected ? 1 : 0);
     });
     var insS = db.prepare("INSERT INTO songs (id, artist, title, versions, plays, first_play_at, first_play_dj, last_play_at, last_play_dj, keys) VALUES (?,?,?,?,?,?,?,?,?,?)");
     songMembers.forEach(function(list, sid) {

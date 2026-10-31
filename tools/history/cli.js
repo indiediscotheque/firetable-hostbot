@@ -41,7 +41,10 @@ making sense of it
   status                              what's been imported
 
 using it
-  publish [--write] [--restore-accents] [--retag] [--min-confidence 0.9] [--review-limit 300]
+  publish [--write] [--restore-accents] [--retag] [--tidy junk|rsn] [--min-confidence 0.9] [--review-limit 300]
+        --tidy junk: take out upload junk (Official Video, HD, Visualizer, | text, - Topic...)
+        --tidy rsn:  also lay tags out in Rohn Standard Notation (feat., versions in parentheses)
+        both write each artist one way everywhere, and skip tags a mod fixed or tag-exceptions.csv lists
         refuses when the history got worse (fewer tracks or plays than last time, mass retags,
         tracks joining many artists); --force sends it anyway
   publish --off                       switch the bot back to the old counts
@@ -151,7 +154,7 @@ async function main() {
     case "publish":
       await publish.publish(db, env, {
         dir: dir, write: !!args.write, off: !!args.off, retag: !!args.retag, restoreAccents: !!args.restoreAccents,
-        minConfidence: args.minConfidence, existing: args.existing, reviewLimit: args.reviewLimit, force: !!args.force
+        minConfidence: args.minConfidence, existing: args.existing, reviewLimit: args.reviewLimit, force: !!args.force, tidy: args.tidy
       }, log);
       break;
     case "refresh": {
@@ -168,7 +171,7 @@ async function main() {
       report.report(db, dir, log);
       if (args.publish) {
         log("== publish");
-        await publish.publish(db, env, { dir: dir, write: true, restoreAccents: !!args.restoreAccents, retag: !!args.retag, minConfidence: args.minConfidence, reviewLimit: args.reviewLimit, force: !!args.force }, log);
+        await publish.publish(db, env, { dir: dir, write: true, restoreAccents: !!args.restoreAccents, retag: !!args.retag, minConfidence: args.minConfidence, reviewLimit: args.reviewLimit, force: !!args.force, tidy: args.tidy }, log);
       }
       break;
     }

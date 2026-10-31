@@ -60,15 +60,26 @@ async function publish(db, env, opts, log) {
     workIdMap.set(s.id, stableId(workKeysOf.get(s.id), existingWorkKeys, s.id));
   });
 
+  // --tidy junk|rsn: the tags each track is shown with (never for tags a
+  // person chose, or ones in tag-exceptions.csv)
+  var shown = new Map();
+  var level = opts.tidy === "junk" || opts.tidy === "rsn" ? opts.tidy : null;
+  if (opts.tidy && !level) throw new Error("--tidy is junk or rsn");
   for (var t of db.prepare("SELECT * FROM tracks WHERE confidence > 0").iterate()) {
     if (t.confidence < minConf) { counts.skippedUnsure++; continue; }
     var keys = JSON.parse(t.keys || "[]");
     var id = stableId(keys, existingSongKeys, t.id);
     trackIdMap.set(t.id, id);
     var work = workIdMap.get(t.song_id) || t.song_id;
+    var show = { a: t.artist, t: t.title };
+    if (level && !t.protected && t["tidy_" + level]) {
+      var td = JSON.parse(t["tidy_" + level]);
+      if (td.a && td.t && (td.a !== t.artist || td.t !== t.title)) { show = td; counts.tidied = (counts.tidied || 0) + 1; }
+    }
+    shown.set(t.id, show);
     var base = "globalSongs/" + id + "/";
-    set(updates, base + "artist", t.artist);
-    set(updates, base + "title", t.title);
+    set(updates, base + "artist", show.a);
+    set(updates, base + "title", show.t);
     set(updates, base + "version", t.version || null);
     set(updates, base + "work", work);
     set(updates, base + "plays", t.plays || 0);
@@ -102,15 +113,18 @@ async function publish(db, env, opts, log) {
     updates[up + "song"] = tid;
     counts.links++;
     if (u.artist == null) continue; // never played: no room tags to change
+    var sh = shown.get(u.track_id);
+    var tidied = sh.a !== u.ta || sh.t !== u.tt;
     var current = u.artist + " - " + u.title;
-    var wanted = u.ta + " - " + u.tt;
+    var wanted = sh.a + " - " + sh.t;
     if (current === wanted) continue;
     var accentOnly = tags.fold(current) === tags.fold(wanted) || skeletonOf(wanted) === tags.squash(current);
-    if (opts.retag || (opts.restoreAccents && accentOnly)) {
-      updates[up + "artist"] = u.ta;
-      updates[up + "title"] = u.tt;
-      counts[accentOnly ? "accents" : "retags"]++;
-      preview.push({ upload: u.type + u.cid, from: current, to: wanted, accentsOnly: accentOnly });
+    if (opts.retag || tidied || (opts.restoreAccents && accentOnly)) {
+      updates[up + "artist"] = sh.a;
+      updates[up + "title"] = sh.t;
+      var kind = accentOnly ? "accents" : tidied && !opts.retag ? "tidiedUploads" : "retags";
+      counts[kind] = (counts[kind] || 0) + 1;
+      preview.push({ upload: u.type + u.cid, from: current, to: wanted, why: accentOnly ? "accents" : tidied ? "tidy " + level : "best spelling" });
     }
   }
   // questions for the mods (!review in chat), most useful first; answered ones
