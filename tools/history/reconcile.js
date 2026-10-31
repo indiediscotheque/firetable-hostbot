@@ -473,39 +473,53 @@ function reconcile(db, opts) {
   log("lining up plays...");
   var djNames = new Map();
   db.prepare("SELECT source, id, name FROM dj_names").all().forEach(function(r) { djNames.set(r.source + ":" + r.id, r.name); });
-  // Who is who. One DJ is an account: its username now, every name it ever
-  // claimed (nameClaim keeps them all) and its id. dj-aliases.csv joins
-  // names, and so accounts, that are one person. A DJ shows as the name they
-  // played under most, unless the list pins one: "Noumenon,=Andrew".
-  var djUnion = new KeyUnion();
-  var djPinned = new Map(); // root -> name
+  // Who is who. One DJ is an account: its username now, the names it
+  // claimed (nameClaim keeps them after a rename) and its id. Each name has
+  // at most one account: the one using it now or that claimed it, as
+  // written, else the only one either way whatever the case. Old
+  // claims kept their case, and people claimed each other's names in jest
+  // ("ANDREW", "AnDrEw"), so a name more than one account claimed belongs to
+  // none. dj-aliases.csv joins names, and so accounts, that are one person. A
+  // DJ shows as the name they played under most, unless the list pins one:
+  // "Noumenon,=Andrew".
+  var usersExact = new Map(); // username -> uid
+  var users = new Map();    // lower-case username -> uid (null: more than one)
+  var claimed = new Map();  // name as claimed -> uid
+  var claimedCi = new Map(); // lower case -> uid (null: more than one)
+  var claimOwners = new Set();
+  var oneOwner = function(m, k, uid) { m.set(k, m.has(k) && m.get(k) !== uid ? null : uid); };
   djNames.forEach(function(name, key) {
     var i = key.indexOf(":");
     var src = key.slice(0, i);
     var id = key.slice(i + 1);
-    var uid = src === "fb" ? id : src === "claim" ? String(name) : null;
-    if (!uid) return;
-    // a play saved under the bare id (an account since deleted) is that account too
-    djUnion.union("u:" + uid, "n:" + uid.toLowerCase());
-    djUnion.union("u:" + uid, "n:" + (src === "fb" ? String(name) : id).toLowerCase());
+    if (src === "fb") { usersExact.set(String(name), id); oneOwner(users, String(name).toLowerCase(), id); }
+    else if (src === "claim") { claimed.set(id, String(name)); oneOwner(claimedCi, id.toLowerCase(), String(name)); claimOwners.add(String(name)); }
   });
+  function djKey(name) {
+    var l = name.toLowerCase();
+    var uid = (djNames.has("fb:" + name) || claimOwners.has(name) ? name : null) || usersExact.get(name) || claimed.get(name) ||
+      users.get(l) || claimedCi.get(l);
+    return uid ? "u:" + uid : "n:" + l;
+  }
+  var djUnion = new KeyUnion();
   var pins = [];
   listFiles(opts.dir, "dj-aliases.csv").forEach(function(f) {
     readAliasCsv(f).forEach(function(p) {
       var pin = p[1].charAt(0) === "=";
       var to = pin ? p[1].slice(1).trim() : p[1];
-      djUnion.union("n:" + p[0].toLowerCase(), "n:" + to.toLowerCase());
+      djUnion.union(djKey(p[0]), djKey(to));
       if (pin) pins.push(to);
     });
   });
-  pins.forEach(function(n) { djPinned.set(djUnion.find("n:" + n.toLowerCase()), n); });
+  var djPinned = new Map(); // root -> name
+  pins.forEach(function(n) { djPinned.set(djUnion.find(djKey(n)), n); });
   var djDisplay = new Map(); // root -> Map(display -> n)
   function djOf(raw, src) {
     if (!raw) return null;
     raw = String(raw).trim();
     var name = djNames.get((src.indexOf("fb:") === 0 ? "fb" : src) + ":" + raw) || djNames.get("fb:" + raw) || raw;
     if (src === "adam" && /^\d+$/.test(raw)) name = djNames.get("adam:" + raw) || name;
-    var k = djUnion.find("n:" + name.toLowerCase());
+    var k = djUnion.find(djNames.has("fb:" + raw) ? "u:" + raw : djKey(name));
     if (!djDisplay.has(k)) djDisplay.set(k, new Map());
     djDisplay.get(k).set(name, (djDisplay.get(k).get(name) || 0) + 1);
     return k;

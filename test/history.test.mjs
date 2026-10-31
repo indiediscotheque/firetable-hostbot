@@ -262,10 +262,12 @@ test("who is who: an account's claimed names are one DJ, shown as the name playe
   try {
     const t = (n, first, last) => ({ artist: "Act " + n, title: "Song " + n, type: 1, first_play_date: 1500000000000 + n * 1e9, first_play_dj: first, last_play_date: 1600000000000 + n * 1e9, last_play_dj: last });
     writeFileSync(join(dir, "fb.json"), JSON.stringify({
-      users: { uidRob00000000000000000001: { username: "rob" }, uidSnips000000000000000001: { username: "pinksnips" }, uidMatt0000000000000000001: { username: "matt" } },
-      // every name an account took, kept after a rename (lower case)
+      users: { uidRob00000000000000000001: { username: "rob" }, uidSnips000000000000000001: { username: "pinksnips" }, uidMatt0000000000000000001: { username: "matt" },
+        uidEve0000000000000000001: { username: "eve" } },
+      // every name an account took, kept after a rename (lower case now; older claims kept their case)
       nameClaim: { rob: "uidRob00000000000000000001", robsgreenclone: "uidRob00000000000000000001", citizensnips: "uidSnips000000000000000001",
-        pinksnips: "uidSnips000000000000000001", citizensips: "uidMatt0000000000000000001", matt: "uidMatt0000000000000000001" },
+        pinksnips: "uidSnips000000000000000001", citizensips: "uidMatt0000000000000000001", matt: "uidMatt0000000000000000001",
+        EVE: "uidRob00000000000000000001", ZED: "uidMatt0000000000000000001", Zed: "uidSnips000000000000000001" },
       globalTracks: {
         "1aaaaaaaaaa1": t(1, "robsgreenclone", "uidRob00000000000000000001"),
         "1aaaaaaaaaa2": t(2, "rob", "rob"),
@@ -274,7 +276,9 @@ test("who is who: an account's claimed names are one DJ, shown as the name playe
         "1aaaaaaaaaa5": t(5, "CJ-", "CJ"),
         "1aaaaaaaaaa6": t(6, "CJ", "rocka2"),
         "1aaaaaaaaaa7": t(7, "citizensips", "matt"),
-        "1aaaaaaaaaa8": t(8, "matt", "matt")
+        "1aaaaaaaaaa8": t(8, "matt", "matt"),
+        "1aaaaaaaaaa9": t(9, "eve", "EVE"),
+        "1aaaaaaaa010": t(10, "ZED", "Zed")
       }
     }));
     run("import-firebase", join(dir, "fb.json"));
@@ -285,6 +289,8 @@ test("who is who: an account's claimed names are one DJ, shown as the name playe
     assert.match(look(4), /last: .* by citizensnips\n/, "shown as the name played most, not the account's name now");
     assert.match(look(3), /last: .* by citizensnips\n/, "case doesn't matter, the usual spelling shows");
     assert.match(look(7), /first: .* by matt\n/, "a name that looks like someone else's belongs to the account that claimed it");
+    assert.match(look(9), /first: .* by eve\n[^]*last: .* by rob\n/, "a name in use is its account's; another account's claim of it in other capitals is theirs");
+    assert.match(look(10), /first: .* by matt\n[^]*last: .* by citizensnips\n/, "claims as written: 'ZED' and 'Zed' are two accounts");
     assert.match(look(5), /first: .* by CJ\n/, "tools/history/dj-aliases.csv: 'CJ-' is CJ");
     assert.match(look(6), /last: .* by Rocka\n/, "the data folder's list is read too, and '=' pins the name shown");
   } finally {

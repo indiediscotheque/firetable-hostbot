@@ -385,12 +385,13 @@ var reviewAnswers = function(db, node) {
   return n;
 };
 
-// Every name an account ever took: nameClaim/<name in lower case> = its id.
-// Claims are kept after a rename, so old names still lead to their account.
+// Every name an account ever took: nameClaim/<name> = its id (lower case
+// now; older claims kept their case). Claims stay after a rename, so old
+// names still lead to their account.
 function claimsToNames(db, node) {
   var ins = db.prepare("INSERT INTO dj_names (source, id, name) VALUES ('claim', ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name");
   var n = 0;
-  each(node, function(name, uid) { if (typeof uid === "string" && uid) { ins.run(String(name).toLowerCase(), uid); n++; } });
+  each(node, function(name, uid) { if (typeof uid === "string" && uid) { ins.run(String(name), uid); n++; } });
   return n;
 }
 
