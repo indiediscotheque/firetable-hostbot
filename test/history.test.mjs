@@ -352,7 +352,8 @@ test("genres: Last.fm tags, Discogs styles and SoundCloud's genre, in the room's
     const t = (artist, title, type) => ({ artist, title, type: type || 1, first_play_date: 1600000000000, first_play_dj: "ana" });
     writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: {
       "1mynumber001": t("Foals", "My Number"), "1mynumber002": t("Foals", "My Number (Lemaitre Remix)"),
-      "2555000111": t("Kerri Chandler", "Rain", 2), "1cherokee001": t("Cherokee", "Take Care of You")
+      "2555000111": t("Kerri Chandler", "Rain", 2), "1cherokee001": t("Cherokee", "Take Care of You"),
+      "1cherokee002": t("Foals", "Spanish Sahara (Cherokee Remix)"), "1cherokee003": t("Cherokee", "Lust (Lemaitre Remix)")
     } }));
     writeFileSync(join(dir, "genre-map.csv"), "tag,genre\nindie rock,Indie Rock\nindie,Indie Rock\nseen live,\nnu disco,Nu-Disco\nnu-disco,Nu-Disco\ndeep house,Deep House\nhouse,House\nfrench house,French House\n");
     writeFileSync(join(dir, "genre-overrides.csv"), "Cherokee,French House\n");
@@ -374,13 +375,15 @@ test("genres: Last.fm tags, Discogs styles and SoundCloud's genre, in the room's
     assert.match(look("Foals - My Number (Lemaitre Remix)"), /genres: Nu-Disco /, "a remix sounds like its remixer (the original artist counts for less)");
     assert.match(look("Kerri Chandler - Rain"), /genres: Deep House  \(Deep House: discogs\+soundcloud\)/, "Discogs styles and SoundCloud's genre; a weak second genre is left out");
     assert.match(look("Cherokee - Take Care of You"), /genres: French House .*genre-overrides\.csv/, "set by hand");
+    assert.match(look("Foals - Spanish Sahara (Cherokee Remix)"), /genres: French House .*genre-overrides\.csv/, "an artist's remixes of others follow them");
+    assert.match(look("Cherokee - Lust (Lemaitre Remix)"), /genres: Nu-Disco .*lastfm remixer/, "someone else's remix of theirs follows the remixer");
     const tagsCsv = readFileSync(join(dir, "genre_tags.csv"), "utf8");
     assert.match(tagsCsv, /glimmerwave,\d+,Foals,\n/, "a tag not in the list yet shows up, to add");
-    assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /\| genres \| 4 of 4 played tracks/);
+    assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /\| genres \| 6 of 6 played tracks/);
     run("publish");
     const preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
     assert.equal(preview.counts.genres, 4, "four genres in the index (Indie Rock, Nu-Disco, Deep House, French House)");
-    assert.equal(preview.counts.withGenres, 4);
+    assert.equal(preview.counts.withGenres, 6);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

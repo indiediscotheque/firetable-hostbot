@@ -1,0 +1,32 @@
+# Genres set by hand: "Artist,Genre|Genre" (their tracks, and their remixes of
+# others' tracks) or "Artist - Title,Genre|Genre" (one track). The names come
+# from genre-map.csv. history-data/genre-overrides.csv adds to this file.
+#
+# French house: Last.fm files most of it under "electro" and "house"
+Daft Punk,French House|House|Disco
+Thomas Bangalter,French House|House
+Stardust,French House|Disco
+Modjo,French House|Disco
+Cassius,French House|House
+Alan Braxe,French House|Nu-Disco
+Fred Falke,French House|Nu-Disco
+DJ Falcon,French House|House
+Together,French House|House
+Roulé,French House|House
+Superfunk,French House|House
+Alex Gopher,French House|House
+Etienne de Crécy,French House|House
+Bob Sinclar - Gym Tonic,French House|House
+Breakbot,French House|Nu-Disco|Funk
+Justice,French House|Electro
+SebastiAn,Electro|French House
+Busy P,French House|Electro
+DJ Mehdi,French House|Electro
+Uffie,Electro|French House
+Mr. Oizo,Electro
+Yuksek,French House|Electro|Synthpop
+Lifelike,French House|Nu-Disco
+Kris Menace,French House|Nu-Disco
+Louis La Roche,French House|Nu-Disco
+Jean Tonique,French House|Nu-Disco
+Kavinsky,Synthwave|French House

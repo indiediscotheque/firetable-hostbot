@@ -153,12 +153,15 @@ glitch hop,Electronica
 chiptune,Electronica
 experimental,Electronica
 electronica,Electronica
-# --- Future Bass / UK Garage / Breaks & Bass
-future bass,Future Bass
-trap,Future Bass
+# --- UK Garage / Breaks & Bass (future bass too)
 uk garage,UK Garage
 future garage,UK Garage
 2 step,UK Garage
+speed garage,UK Garage
+future bass,Breaks & Bass
+trap,Breaks & Bass
+drum n bass,Breaks & Bass
+jungle,Breaks & Bass
 dubstep,Breaks & Bass
 drum and bass,Breaks & Bass
 breakbeat,Breaks & Bass
@@ -205,11 +208,39 @@ singer songwriter,Folk
 reggae,Reggae & Dancehall
 dancehall,Reggae & Dancehall
 dub,Reggae & Dancehall
-# --- Soundtrack / Mashups
-soundtrack,Soundtrack
-video game music,Soundtrack
-mashup,Mashups
-plunderphonics,Mashups
+# --- where a track comes from, not how it sounds: ignored
+soundtrack,
+video game music,
+mashup,
+plunderphonics,
+stage and screen,
+score,
+# --- Discogs' own style and genre names (styles count most, genres little)
+italo disco,Disco
+hi nrg,Disco
+euro disco,Disco
+euro house,House
+hip house,House
+acid,House
+leftfield,Electronica
+abstract,Electronica
+dub techno,Techno
+electro funk,Electro
+jazz funk,Funk
+funk soul,Funk
+rhythm and blues,Soul & R&B
+contemporary r&b,Soul & R&B
+contemporary randb,Soul & R&B
+pop rap,Hip Hop
+conscious,Hip Hop
+contemporary jazz,Jazz & Swing
+latin jazz,Jazz & Swing
+folk world and country,
+non music,
+latin,
+children's,
+brass and military,
+
 # --- fallbacks: only when nothing more specific
 electronic,~Electronic
 dance,~Electronic

@@ -229,7 +229,10 @@ function assignGenres(db, dir, log) {
     var top = list.length ? list[0][1] : 0;
     var genres = list.filter(function(e) { return e[1] >= top * 0.4; }).slice(0, 3).map(function(e) { return e[0]; });
     var by = "";
-    var o = over.tracks.get(tags.keysOf(tags.parse(t.artist, t.title)).track) || over.artists.get(tags.artistKeyOf(t.artists[0] || t.artist));
+    // set by hand: the track; else its remixer (a remix sounds like them);
+    // else its artist, unless someone else remixed it
+    var o = over.tracks.get(tags.keysOf(tags.parse(t.artist, t.title)).track) ||
+      (t.remixers.length ? over.artists.get(tags.artistKeyOf(t.remixers[0])) : over.artists.get(tags.artistKeyOf(t.artists[0] || t.artist)));
     if (o) { genres = o; by = "genre-overrides.csv"; }
     if (genres.length) withGenres++;
     rows.push([t.id, JSON.stringify(genres), by || genres.map(function(g) { return g + ": " + Array.from(why.get(g) || []).join("+"); }).join("; ")]);
