@@ -1,6 +1,6 @@
 # play history
 
-Joins every play the room has ever had into one history: ADAM (2016–2022), Last.fm scrobbles (back to the room's first), and the room's database (2023 on, plus every DJ's playlists). Every spelling, re-upload and platform of a recording becomes one **track**; every version of a song (remix, live, acoustic) is grouped into one **song**. The result is true first plays, the room's own play counts, DJ history, tag fixes, and accents restored. Publishing it switches the bot over, and from then on the bot keeps it up to date live.
+Joins every play the room has ever had into one history: the room's database (including ADAM's 2016–2022 history, which was moved into it, and every DJ's playlists) and Last.fm scrobbles (back to the room's first). Every spelling, re-upload and platform of a recording becomes one **track**; every version of a song (remix, live, acoustic) is grouped into one **song**. The result is true first plays, the room's own play counts, DJ history, tag fixes, and accents restored. Publishing it switches the bot over, and from then on the bot keeps it up to date live.
 
 Runs on Node 22 with nothing to install (SQLite is built in). Run it on the bot server or any computer with the bot's `.env`. A million plays take about a minute and ~2 GB of memory, so on a 1 GB server, run it on your own computer instead.
 
@@ -12,7 +12,7 @@ npm run history -- help
 `.github/workflows/history.yml` runs it all on GitHub: every Monday, or by hand from Actions → **Play history** → Run workflow.
 1. Add the bot's `.env` values as repository secrets (Settings → Secrets and variables → Actions): `FIREBASE_KEY`, `FIREBASE_DB`, `FIRETABLE_USER`, `FIRETABLE_PASS`, `LASTFM_APIKEY`, `LASTFM_USERNAME`, `YOUTUBE_KEY`, `SOUNDCLOUD_KEY`.
 2. Deploy `firebase-rules.json`.
-3. **ADAM, once.** In the "ADAM DATA" sheet: File → Make a copy, then share the copy as "Anyone with the link". Open the TRAX tab and copy its address. Run the workflow with that link in **ADAM sheet tab**, leaving **publish** unticked. The import is kept in the room's database (`historyArchive`, readable only by the bot), so unshare the copy afterwards; every later run has it. Repeat for any other tab.
+3. Run the workflow with **publish** unticked. ADAM's history was moved into the room's database years ago (`globalTracks`, `globalTrackRaws`, `globalArtists`, `globalDjs`), so it comes in with everything else. The run's log describes how each of those paths is laid out (fields and kinds of values, no data); if something there isn't read yet, that log line is what to send. The **ADAM sheet tab** field is only for a separate ADAM export, if one ever turns up.
 4. Read the run's summary page and its reports (downloadable in a private repository). When it looks right, run it again with **publish** ticked.
 5. From then on the Monday runs refresh everything and show a preview. To have them publish too, add the repository variable `HISTORY_AUTO_PUBLISH` = `true` (Settings → Secrets and variables → Actions → Variables).
 
@@ -26,12 +26,8 @@ Each run starts from the last run's data, so a refresh takes minutes. The first 
 Tick **force** to send it anyway. A preview never writes anything. `publish --off` (or removing `globalSongsMeta/ready`) puts the bot back on the old counts.
 
 ## first run (on a computer or the bot server)
-1. **ADAM.** Open the "ADAM DATA" sheet → File → Download → CSV, once per tab (TRAX and any others). Then:
-   ```bash
-   npm run history -- import-adam ~/Downloads/ADAM\ DATA\ -\ TRAX.csv
-   ```
-   It works out what each tab is from its columns. Google Sheets turned some titles into times and numbers (`2:00` became `2:00 AM`); these are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`. An export straight from ADAM's own database avoids that damage and may include every play: ask for one if it still exists.
-2. **The room's database**, read as the bot (global tags, Recent, Fresh, every DJ's playlists and queues, the play and tag logs, mods' review answers):
+1. **ADAM** is already in the room's database (moved there years ago) and comes in with step 2. Only if you have a separate ADAM export (CSV, one per sheet): `npm run history -- import-adam file.csv`. Google Sheets turns some titles into times and numbers (`2:00` becomes `2:00 AM`); those are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`.
+2. **The room's database**, read as the bot: global tags and ADAM's moved history, Recent, Fresh, every DJ's playlists and queues, the play and tag logs, mods' review answers. `npm run history -- probe` shows how each path is laid out first, without its data.
    ```bash
    npm run history -- fetch-firebase
    ```

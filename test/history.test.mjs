@@ -233,3 +233,22 @@ test("'The X' and 'X': different artists, but the same track when the title matc
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ADAM's history as moved into Firebase: ids, text dates and raw tags are read, and joined to the bot's uploads", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const out = run("import-firebase", FIX + "firebase-adam.json");
+    assert.match(out, /globalTracks: 4 entries; keys: .*number×2.*; fields: .*first_play_date:date-text/, "the layout is described");
+    run("reconcile", "--adam-tz", "0");
+    const lem = run("lookup", "Lemaitre - 1:18");
+    assert.match(lem, /first: 2016-12-11 00:45 by robsclone/, "ADAM's first play, its DJ found by id");
+    assert.match(lem, /last: {2}2023-11-14 .* by eve/, "the bot's later play is the last one");
+    assert.match(lem, /1 uploads/, "ADAM's raw tag linked the track to the bot's upload by its link");
+    const bear = run("lookup", "Bear Hands - 2AM");
+    assert.match(bear, /first: 2016-08-23 21:52 by understater/, "artist and DJ ids resolved, the Sheets-style '2:00 AM' joined");
+    assert.match(bear, /1 uploads/, "'2123456789' is a SoundCloud upload, '8817' is an ADAM id");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

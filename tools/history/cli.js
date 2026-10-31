@@ -20,11 +20,13 @@ var HELP = `play history: join ADAM, Last.fm and the room's database into one hi
   npm run history -- <command> [options]
 
 getting the data in
-  import-adam <file.csv|link> [more]  the ADAM export, one CSV per sheet (TRAX, plays, ...); a Google
+  import-adam <file.csv|link> [more]  optional: an ADAM CSV export, one per sheet (TRAX, plays, ...); a Google
         Sheets link to a tab works if it's shared as "anyone with the link"
         [--kind tracks|plays|raws|artists|djs]   if it can't tell from the columns
         [--archive]   keep a copy in the room's database, so any rebuild (e.g. the GitHub Action) has it
-  fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot
+  fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot, ADAM's
+        moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs)
+  probe [path ...]                    how each path is laid out (fields and kinds of values, no data)
   import-firebase <export.json>       or a Firebase console export instead
   fetch-lastfm [--user a,b]           every scrobble (default LASTFM_USERNAME); later runs fetch only new ones
   import-lastfm <file.csv> [--user name]   or a CSV export of scrobbles
@@ -115,6 +117,9 @@ async function main() {
       log(JSON.stringify(sources.importFirebaseFile(db, args._[0], log)));
       break;
     }
+    case "probe":
+      await sources.probeFirebase(env, args._.length ? args._ : ["globalTracks", "globalTrackRaws", "globalArtists", "globalDjs", "songHistory", "playLog", "tagLog"], log);
+      break;
     case "fetch-firebase":
       log(JSON.stringify(await sources.fetchFirebase(db, env, { only: args.only, dir: dir }, log)));
       break;

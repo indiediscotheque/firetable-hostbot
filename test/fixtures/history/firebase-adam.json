@@ -1,0 +1,13 @@
+{
+  "globalArtists": { "402": { "name": "Lemaitre" }, "5980": "Bear Hands" },
+  "globalDjs": { "8": { "name": "robsclone" }, "125": "understater", "563": { "username": "jarvis" } },
+  "globalTracks": {
+    "1536": { "artist_id": 402, "name": "1:18", "first_play_dj": 8, "first_play_date": "2016-12-11 00:45:34", "last_play_dj": 563, "last_play_date": "2022-09-28 01:35:29" },
+    "8817": { "artist_id": "5980", "name": "2:00 AM", "first_play_dj": "125", "first_play_date": "2016-08-23 21:52:15" },
+    "1abcdefghijk": { "artist": "Lemaitre", "title": "1:18", "type": 1, "first_play_date": 1700000000000, "first_play_dj": "eve" },
+    "2123456789": { "artist": "Bear Hands", "title": "2AM", "type": 2, "first_play_date": 1710000000000, "first_play_dj": "eve" }
+  },
+  "globalTrackRaws": {
+    "r1": { "song_name": "Lemaitre - 1:18 (Official Audio)", "track_id": 1536, "link": "https://www.youtube.com/watch?v=abcdefghijk", "source": "youtube", "dj": 8, "date": "2016-12-11 00:45:34" }
+  }
+}

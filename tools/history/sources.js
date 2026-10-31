@@ -162,19 +162,14 @@ function cidOf(link) {
 // --------------------------------------------------------------- Firebase
 
 // What each part of the room's database tells us. `node` is that path's
-// whole value (from an export file or a live read).
+// whole value (from an export file or a live read); `ctx` holds the artist
+// and DJ names by id (globalArtists, globalDjs, users), read first, for
+// entries that only give ids.
 var FIREBASE_PATHS = {
-  globalTracks: function(node, w) {
-    each(node, function(key, v) {
-      if (!v || typeof v !== "object") return;
-      var type = /^[12]/.test(key) ? Number(key[0]) : null;
-      var cid = type ? key.slice(1) : null;
-      // the room's current tags for this upload: chosen by the bot or fixed by a mod
-      w.add({ source: "fb:globalTracks", ref: key, artist: v.artist, title: v.title, type: type, cid: cid, role: "tag", weight: 4, extra: v.song ? { song: v.song } : null });
-      if (v.first_play_date) w.add({ source: "fb:globalTracks", ref: key + ":first", artist: v.artist, title: v.title, type: type, cid: cid, role: "first", at: Number(v.first_play_date), dj: v.first_play_dj });
-      if (v.last_play_date && v.last_play_date !== v.first_play_date) w.add({ source: "fb:globalTracks", ref: key + ":last", artist: v.artist, title: v.title, type: type, cid: cid, role: "last", at: Number(v.last_play_date), dj: v.last_play_dj });
-    });
-  },
+  // Each upload's tags and first/last play. ADAM's history was moved into the
+  // database years ago, so some entries may be ADAM tracks (keyed by ADAM's
+  // id, dates as text, artists or DJs as ids): all of that is read too.
+  globalTracks: function(node, w, log, ctx) { trackEntries(node, w, "fb:globalTracks", ctx, 4); },
   songHistory: function(node, w) { plays(node, w, "fb:songHistory"); },
   newMusic: function(node, w) { plays(node, w, "fb:newMusic"); },
   playLog: function(node, w) {
@@ -205,11 +200,11 @@ var FIREBASE_PATHS = {
       each(q, function(k, t) { listEntry(w, "fb:queues", uid + "/" + k, uid, t); });
     });
   },
-  // Paths with no code behind them (an ADAM import that may or may not have
-  // happened). Anything that looks like a tag is read; the shapes are logged.
-  globalTrackRaws: function(node, w, log) { generic(node, w, "fb:globalTrackRaws", log); },
-  globalArtists: function(node, w, log) { generic(node, w, "fb:globalArtists", log); },
-  globalDjs: function(node, w, log) { generic(node, w, "fb:globalDjs", log); }
+  // ADAM's raw tags (every way a song was ever written) and its tracks, if
+  // they were moved here; artists and DJs are names for the ids above
+  globalTrackRaws: function(node, w, log, ctx) { trackEntries(node, w, "fb:globalTrackRaws", ctx, 1); },
+  globalArtists: function(node, w, log, ctx) { trackEntries(node, w, "fb:globalArtists", ctx, 1.5); },
+  globalDjs: function(node, w, log, ctx) { trackEntries(node, w, "fb:globalDjs", ctx, 1.5); }
 };
 
 function each(obj, fn) {
@@ -228,27 +223,131 @@ function listEntry(w, source, ref, uid, t) {
   var sep = String(t.name).indexOf(" - ");
   w.add({ source: source, ref: ref, artist: sep > 0 ? t.name.slice(0, sep) : t.name, title: sep > 0 ? t.name.slice(sep + 3) : "", type: t.type, cid: t.cid, role: "tag", weight: 0.5, dj: uid });
 }
-function generic(node, w, source, log) {
-  var shapes = {};
-  var n = 0;
+
+// ---- reading entries whatever their layout
+
+function first(v, names) {
+  for (var i = 0; i < names.length; i++) if (v[names[i]] != null && v[names[i]] !== "") return v[names[i]];
+  return null;
+}
+// a time: ms or seconds since 1970, or text (with a zone, or local "2018-09-22 9:06:57")
+function timeOf(x) {
+  if (x == null || x === "") return null;
+  if (typeof x === "number" || /^\d{9,13}$/.test(String(x))) {
+    var n = Number(x);
+    return { at: n < 1e11 ? n * 1000 : n, naive: false };
+  }
+  var s = String(x).trim();
+  if (/[zZ]$|[+-]\d\d:?\d\d$|GMT|UTC/.test(s)) {
+    var t = Date.parse(s);
+    return Number.isFinite(t) ? { at: t, naive: false } : null;
+  }
+  var local = parseNaive(s);
+  return local == null ? null : { at: local, naive: true };
+}
+// which upload an entry is: from its fields, or a key the bot makes ("1" + a
+// YouTube id, "2" + a SoundCloud id); ADAM's own ids ("27255") are not uploads
+function uploadOf(key, v) {
+  var type = sourceType(first(v, ["type", "source", "platform"]));
+  var cid = first(v, ["cid", "video_id", "vid"]);
+  var link = first(v, ["link", "url", "permalink"]);
+  if (!cid && link) cid = cidOf(link);
+  if (!type && link) type = /soundcloud/i.test(link) ? 2 : /youtu/i.test(link) ? 1 : null;
+  if (type && cid) return { type: type, cid: String(cid) };
+  if (/^1[A-Za-z0-9_-]{11}$/.test(key)) return { type: 1, cid: key.slice(1) };
+  if (/^2\d{6,}$/.test(key) && (!type || type === 2)) return { type: 2, cid: key.slice(1) };
+  if (type && /^[12]/.test(key) && Number(key[0]) === type && key.length > 6) return { type: type, cid: key.slice(1) };
+  return { type: null, cid: null };
+}
+function nameOf(v) {
+  if (v == null) return null;
+  if (typeof v !== "object") return String(v);
+  return first(v, ["name", "username", "artist_name", "artistName", "dj_name", "djName", "display"]);
+}
+function djOf(x, ctx) {
+  if (x == null || x === "") return null;
+  return (ctx && ctx.djs.get(String(x))) || String(x);
+}
+
+function trackEntries(node, w, source, ctx, weight) {
+  ctx = ctx || { artists: new Map(), djs: new Map() };
   each(node, function(key, v) {
-    var shape = v && typeof v === "object" ? Object.keys(v).sort().join(",") : typeof v;
-    shapes[shape] = (shapes[shape] || 0) + 1;
     if (!v || typeof v !== "object") return;
-    var artist = v.artist || v.artist_name || v.artistName;
-    var title = v.title || v.track_name || v.trackName || v.track || (artist ? v.name : null);
-    var raw = v.song_name || v.raw;
-    if (!artist && raw) { var p = splitRaw(raw); artist = p[0]; title = p[1]; }
-    if (!artist || !title) return;
-    n++;
-    w.add({ source: source, ref: key, artist: artist, title: title, role: "tag", weight: 1.5,
-      type: /^[12]/.test(key) && key.length > 6 ? Number(key[0]) : null, cid: /^[12]/.test(key) && key.length > 6 ? key.slice(1) : null,
-      extra: { id: key } });
-    var f = v.first_play_date || v.first_play;
-    if (f) w.add({ source: source, ref: key + ":first", artist: artist, title: title, role: "first", at: Number(f) || Date.parse(f), dj: v.first_play_dj });
+    if (trackEntry(key, v, w, source, ctx, weight)) return;
+    // one level of nesting (e.g. raws grouped under their track)
+    each(v, function(k2, v2) { if (v2 && typeof v2 === "object") trackEntry(key + "/" + k2, v2, w, source, ctx, weight, key); });
   });
-  log && log("  " + source + ": " + Object.keys(node || {}).length + " entries, " + n + " used as tags; shapes: " +
-    Object.entries(shapes).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 5).map(function(e) { return "{" + e[0] + "}×" + e[1]; }).join("  "));
+}
+function trackEntry(key, v, w, source, ctx, weight, parent) {
+  var artistId = first(v, ["artist_id", "artistId", "artist_key"]);
+  var artist = first(v, ["artist", "artist_name", "artistName"]) || (artistId != null ? ctx.artists.get(String(artistId)) : null);
+  var title = first(v, ["title", "track_name", "trackName", "track", "song", "song_title"]);
+  if (!title && artist) title = first(v, ["name"]);
+  var raw = first(v, ["song_name", "raw", "raw_name", "tag", "string"]) || (!artist && !title && typeof v.name === "string" && v.name.indexOf(" - ") > 0 ? v.name : null);
+  if ((!artist || !title) && raw) {
+    var sep = String(raw).indexOf(" - ");
+    artist = sep > 0 ? String(raw).slice(0, sep) : String(raw);
+    title = sep > 0 ? String(raw).slice(sep + 3) : "";
+  }
+  if (!artist && !title) return false;
+  var up = uploadOf(key.split("/").pop(), v);
+  var extra = { id: key };
+  var adamId = first(v, ["track_id", "trackId", "adam_id", "adamid"]) || (parent && /^\d+$/.test(parent) ? parent : null) || (!up.type && /^\d+$/.test(key) ? key : null);
+  if (adamId != null) extra.adam = String(adamId);
+  if (artistId != null) extra.adam_artist = String(artistId);
+  var count = first(v, ["playcount", "play_count", "plays"]);
+  if (count != null && Number(count)) extra.playcount = Number(count);
+  if (v.song) extra.song = v.song;
+  w.add({ source: source, ref: key, artist: artist, title: title, type: up.type, cid: up.cid, role: "tag", weight: weight, extra: extra });
+  var f = timeOf(first(v, ["first_play_date", "first_play", "first_played", "first_played_at", "created_at", "created"]));
+  var l = timeOf(first(v, ["last_play_date", "last_play", "last_played", "last_played_at"]));
+  var anchor = { adam: extra.adam };
+  if (f) w.add({ source: source, ref: key + ":first", artist: artist, title: title, type: up.type, cid: up.cid, role: "first", at: f.at, naive: f.naive, dj: djOf(first(v, ["first_play_dj", "first_dj", "first_dj_name", "first_play_dj_name"]), ctx), extra: anchor });
+  if (l && (!f || l.at !== f.at)) w.add({ source: source, ref: key + ":last", artist: artist, title: title, type: up.type, cid: up.cid, role: "last", at: l.at, naive: l.naive, dj: djOf(first(v, ["last_play_dj", "last_dj", "last_dj_name", "last_play_dj_name"]), ctx), extra: anchor });
+  // a single play (raws logged per play: song, DJ, when)
+  var p = timeOf(first(v, ["date", "played_at", "play_date", "time", "timestamp", "when"]));
+  if (p) w.add({ source: source, ref: key + ":play", artist: artist, title: title, type: up.type, cid: up.cid, role: "play", at: p.at, naive: p.naive, dj: djOf(first(v, ["dj", "dj_name", "dj_id", "djid", "user"]), ctx), extra: anchor });
+  return true;
+}
+
+// Names by id, from globalArtists, globalDjs and users, for entries that only give ids
+function namesContext(db, nodes) {
+  var ctx = { artists: new Map(), djs: new Map() };
+  var insDj = db.prepare("INSERT INTO dj_names (source, id, name) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name");
+  each(nodes.globalArtists, function(id, v) { var n = nameOf(v); if (n && !(v && v.title)) ctx.artists.set(id, n); });
+  each(nodes.globalDjs, function(id, v) { var n = nameOf(v); if (n) { ctx.djs.set(id, n); insDj.run("adam", id, n); } });
+  each(nodes.users, function(id, v) { if (v && v.username) ctx.djs.set(id, String(v.username)); });
+  return ctx;
+}
+
+// What a path holds, without its data: how many entries, their fields and
+// what kind of values those are. Printed by fetch-firebase and `probe`.
+function describe(node) {
+  var keys = Object.keys(node || {});
+  var fields = {};
+  var keyKinds = {};
+  var sample = keys.slice(0, 500);
+  sample.forEach(function(k) {
+    var kind = /^1[A-Za-z0-9_-]{11}$/.test(k) ? "1+YouTube id" : /^2\d{6,}$/.test(k) ? "2+SoundCloud id" : /^-[A-Za-z0-9_-]{19}$/.test(k) ? "push id" : /^\d+$/.test(k) ? "number" : "text";
+    keyKinds[kind] = (keyKinds[kind] || 0) + 1;
+    var v = node[k];
+    if (!v || typeof v !== "object") { fields["(value)"] = kindOf(v); return; }
+    Object.keys(v).forEach(function(f) { if (!fields[f]) fields[f] = kindOf(v[f]); });
+  });
+  return keys.length + " entries; keys: " + Object.entries(keyKinds).map(function(e) { return e[0] + "×" + e[1]; }).join(", ") +
+    (sample.length < keys.length ? " (of the first " + sample.length + ")" : "") + "; fields: " +
+    Object.entries(fields).slice(0, 25).map(function(e) { return e[0] + ":" + e[1]; }).join(", ");
+}
+function kindOf(x) {
+  if (x == null) return "empty";
+  if (typeof x === "number") return x > 1e11 ? "ms-time" : x > 1e8 ? "s-time?" : "number";
+  if (typeof x === "boolean") return "yes/no";
+  if (typeof x === "object") return "{" + Object.keys(x).slice(0, 4).join(",") + (Object.keys(x).length > 4 ? ",…" : "") + "}";
+  var s = String(x);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return "date-text";
+  if (/^https?:/.test(s)) return "link";
+  if (/^\d+$/.test(s)) return "number-text";
+  return "text";
 }
 
 // Mods' answers to the tag questions in chat (!same / !different)
@@ -277,10 +376,12 @@ function importFirebaseFile(db, file, log) {
   var counts = {};
   store.tx(db, function() {
     var w = store.obsWriter(db);
+    var ctx = namesContext(db, root);
     Object.keys(FIREBASE_PATHS).forEach(function(p) {
       if (root[p] == null) return;
+      log && log("  " + p + ": " + describe(root[p]));
       var before = w.count();
-      FIREBASE_PATHS[p](root[p], w, log);
+      FIREBASE_PATHS[p](root[p], w, log, ctx);
       counts[p] = w.count() - before;
     });
     if (root.users) usersToNames(db, root.users);
@@ -301,16 +402,24 @@ async function fetchFirebase(db, env, opts, log) {
   store.tx(db, function() { usersToNames(db, users); });
   log("  " + Object.keys(users || {}).length + " users");
 
+  // names by id first, for entries that only give ids
+  var named = { users: users };
+  for (var np of ["globalArtists", "globalDjs"]) {
+    try { named[np] = (await c.get(np)) || {}; } catch (e) { named[np] = {}; }
+  }
+  var ctx = store.tx(db, function() { return namesContext(db, named); });
   for (var p of ["globalTracks", "songHistory", "newMusic", "playLog", "tagLog", "globalTrackRaws", "globalArtists", "globalDjs"]) {
     if (!want(p)) continue;
     try {
       var node = {};
-      if (p === "globalTracks" || p === "playLog") {
+      if (named[p]) node = named[p];
+      else if (p === "globalTracks" || p === "playLog" || p === "globalTrackRaws") {
         await c.getPaged(p, 20000, function(page) { Object.assign(node, page); log("  " + p + ": " + Object.keys(node).length + "..."); });
       } else {
         node = await c.get(p);
       }
-      counts[p] = writeNode(db, p, node, log);
+      log("  " + p + ": " + describe(node));
+      counts[p] = writeNode(db, p, node, log, ctx);
       log("  " + p + ": " + counts[p] + " observations");
     } catch (e) {
       log("  " + p + ": skipped (" + e.message + ")");
@@ -353,12 +462,27 @@ async function fetchFirebase(db, env, opts, log) {
   return counts;
 }
 
-function writeNode(db, p, node, log) {
+function writeNode(db, p, node, log, ctx) {
   return store.tx(db, function() {
     var w = store.obsWriter(db);
-    FIREBASE_PATHS[p](node, w, log);
+    FIREBASE_PATHS[p](node, w, log, ctx);
     return w.count();
   });
+}
+
+// `probe`: what each path holds (fields and kinds of values, no data), to
+// check how the moved ADAM history is laid out
+async function probeFirebase(env, paths, log) {
+  var c = fb.client(env);
+  for (var p of paths) {
+    try {
+      var n = (await c.keys(p)).length;
+      var sample = (await c.get(p, { orderBy: '"$key"', limitToFirst: "300" })) || {};
+      log(p + ": " + n + " entries in all. " + describe(sample));
+    } catch (e) {
+      log(p + ": " + e.message);
+    }
+  }
 }
 
 // ---------------------------------------------------------------- Last.fm
@@ -518,6 +642,8 @@ module.exports = {
   importAdam: importAdam,
   importFirebaseFile: importFirebaseFile,
   fetchFirebase: fetchFirebase,
+  probeFirebase: probeFirebase,
+  describe: describe,
   fetchLastfm: fetchLastfm,
   importLastfmCsv: importLastfmCsv,
   enrichArtists: enrichArtists,

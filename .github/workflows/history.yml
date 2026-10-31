@@ -41,7 +41,7 @@ on:
         type: boolean
         default: false
       adam_csv:
-        description: "Once: link to an ADAM sheet tab (shared as 'anyone with the link') to import and keep"
+        description: "Rarely needed (ADAM's history is already in the database): link to a separate ADAM export to import and keep"
         type: string
         default: ""
       rebuild:
