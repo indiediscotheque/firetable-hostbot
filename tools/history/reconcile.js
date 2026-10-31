@@ -902,12 +902,15 @@ function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;
   return false;
 }
+var DECORATION = /(?![\x00-\x7F])[\p{S}\p{C}]/u;
 function accentBook(min) {
   var book = new Map(); // scope|base -> Map(word -> {n, trusted})
   function baseOf(w) { return tags.fold(w).replace(/\s+/g, " ").trim(); }
   return {
     note: function(scope, key, word, n, isTrusted) {
       if (!word || !NON_ASCII_LETTER.test(word)) return;
+      // decoration ("♫ Artist", "█▬█ █ ▀█▀ Artist", emoji) is not an accent
+      if (DECORATION.test(word)) return;
       [baseOf(word), "~" + skeleton(word)].forEach(function(b, i) {
         if (i === 1 && !usableSkeleton(word, skeleton(word))) return;
         var k = scope + "|" + (key == null ? "" : key + "|") + b;

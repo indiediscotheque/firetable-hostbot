@@ -177,6 +177,27 @@ test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and ex
   }
 });
 
+test("accents: decoration (♫, block letters, emoji) is never put back as if it were an accent", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const t = (artist, cid) => ({ artist, title: "Someday", type: 1, first_play_date: 1600000000000 });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: {
+      "1someday0001": t("Two Door Cinema Club"), "1someday0002": t("Two Door Cinema Club"), "1someday0003": t("Two Door Cinema Club"),
+      "1someday0004": t("♫ Two Door Cinema Club"), "1someday0005": t("♫ Two Door Cinema Club"),
+      "1someday0006": t("█▬█ █ ▀█▀ Two Door Cinema Club"), "1someday0007": t("█▬█ █ ▀█▀ Two Door Cinema Club"),
+      "1sigurros001": { artist: "Sigur Ros", title: "Hoppipolla", type: 1 }, "1sigurros002": { artist: "Sigur Rós", title: "Hoppipolla", type: 1 },
+      "1sigurros003": { artist: "Sigur Rós", title: "Hoppipolla", type: 1 }
+    } }));
+    run("import-firebase", join(dir, "fb.json"));
+    run("reconcile");
+    assert.match(run("lookup", "Two Door Cinema Club - Someday"), /track \S+: Two Door Cinema Club - Someday\n/, "the plain name stays");
+    assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppipolla\n/, "a real accent is still put back");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("accents: restored when enough logs (or a trusted source) have them, word by word across an artist's songs", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
