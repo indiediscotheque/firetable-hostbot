@@ -256,6 +256,42 @@ test("ADAM's history as moved into Firebase: ids, text dates and raw tags are re
 // How the live database holds it: the 2023 "global tag system" folded ADAM's
 // first and last plays into the bot's own globalTracks entries ("type + upload
 // id" keys, times in ms, DJs by name or now and then by uid).
+test("who is who: an account's claimed names are one DJ, shown as the name played most; aliases join, '=' pins", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const t = (n, first, last) => ({ artist: "Act " + n, title: "Song " + n, type: 1, first_play_date: 1500000000000 + n * 1e9, first_play_dj: first, last_play_date: 1600000000000 + n * 1e9, last_play_dj: last });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({
+      users: { uidRob00000000000000000001: { username: "rob" }, uidSnips000000000000000001: { username: "pinksnips" }, uidMatt0000000000000000001: { username: "matt" } },
+      // every name an account took, kept after a rename (lower case)
+      nameClaim: { rob: "uidRob00000000000000000001", robsgreenclone: "uidRob00000000000000000001", citizensnips: "uidSnips000000000000000001",
+        pinksnips: "uidSnips000000000000000001", citizensips: "uidMatt0000000000000000001", matt: "uidMatt0000000000000000001" },
+      globalTracks: {
+        "1aaaaaaaaaa1": t(1, "robsgreenclone", "uidRob00000000000000000001"),
+        "1aaaaaaaaaa2": t(2, "rob", "rob"),
+        "1aaaaaaaaaa3": t(3, "citizensnips", "CitizenSnips"),
+        "1aaaaaaaaaa4": t(4, "citizensnips", "pinksnips"),
+        "1aaaaaaaaaa5": t(5, "CJ-", "CJ"),
+        "1aaaaaaaaaa6": t(6, "CJ", "rocka2"),
+        "1aaaaaaaaaa7": t(7, "citizensips", "matt"),
+        "1aaaaaaaaaa8": t(8, "matt", "matt")
+      }
+    }));
+    run("import-firebase", join(dir, "fb.json"));
+    writeFileSync(join(dir, "dj-aliases.csv"), "alias,canonical\nrocka2,=Rocka\n");
+    run("reconcile");
+    const look = (n) => run("lookup", "Act " + n + " - Song " + n);
+    assert.match(look(1), /first: .* by rob\n[^]*last: .* by rob\n/, "a claimed name and the bare account id are the account's DJ");
+    assert.match(look(4), /last: .* by citizensnips\n/, "shown as the name played most, not the account's name now");
+    assert.match(look(3), /last: .* by citizensnips\n/, "case doesn't matter, the usual spelling shows");
+    assert.match(look(7), /first: .* by matt\n/, "a name that looks like someone else's belongs to the account that claimed it");
+    assert.match(look(5), /first: .* by CJ\n/, "tools/history/dj-aliases.csv: 'CJ-' is CJ");
+    assert.match(look(6), /last: .* by Rocka\n/, "the data folder's list is read too, and '=' pins the name shown");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined' keys, uid DJs, first after last", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
@@ -271,9 +307,7 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
         // DJ saved as a uid; the first play logged after the last one; type as text
         "1qwertyuiopa": { artist: "Uid Band", title: "Who", type: "1", first_play_date: 1600000000000, first_play_dj: "uidDjRob000000000000000001", last_play_date: 1500000000000, last_play_dj: "wendee" },
         // only a last play (most entries ADAM had no first play for)
-        "1lastonly000": { artist: "Last Only", title: "Once", type: 1, last_play_date: 1480000000000, last_play_dj: "eve" },
-        // one DJ, two names: tools/history/dj-aliases.csv, and one only in this data folder
-        "1cjplayed000": { artist: "Alias Act", title: "Names", type: 1, first_play_date: 1500000000000, first_play_dj: "CJ-", last_play_date: 1600000000000, last_play_dj: "rocka2" }
+        "1lastonly000": { artist: "Last Only", title: "Once", type: 1, last_play_date: 1480000000000, last_play_dj: "eve" }
       },
       songHistory: {
         "-Nplay000000000000001": { artist: "Early Act", title: "Fool (Free Download)", type: 2, cid: "17819", dj: "eve", when: 1710000000000 }
@@ -289,11 +323,7 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
     assert.equal(up("undefinedundefined").cid, null, "a key with no id stays without an upload");
     db.close();
 
-    writeFileSync(join(dir, "dj-aliases.csv"), "alias,canonical\nrocka2,Rocka\n");
     run("reconcile");
-    const names = run("lookup", "Alias Act - Names");
-    assert.match(names, /first: 2017-07-14 .* by CJ\n/, "the repo's dj-aliases.csv: 'CJ-' is CJ");
-    assert.match(names, /last: {2}2020-09-13 .* by Rocka\n/, "and the data folder's own list is read too");
     const fool = run("lookup", "Early Act - Fool");
     assert.match(fool, /first: 2018-12-17 .* by Wendee/, "ADAM's first play and DJ");
     assert.match(fool, /last: {2}2024-03-09 .* by eve/, "the room's later play is the last one");

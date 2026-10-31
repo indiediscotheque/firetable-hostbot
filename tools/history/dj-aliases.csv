@@ -1,7 +1,11 @@
 alias,canonical
-# DJs who played under more than one name: one alias per line, then the name
-# to show. Case doesn't matter ("chris" and "Chris" are already one DJ).
-# A dj-aliases.csv in history-data/ is read after this one and wins.
+# Names that are one DJ: a name, then another name of the same DJ. Names an
+# account claimed are joined to it already (nameClaim), so this list is for
+# names from before claims, and for one person's several accounts.
+# A DJ shows as the name they played under most; "=Name" pins one instead.
+# Case never matters. A dj-aliases.csv in history-data/ is read too.
+# An account id saved with one letter missing (the real one has "tt"):
+GR3anWnwcgNdMMoUCjKp3t1wv53,GR3anWnwcgNdMMoUCjKp3tt1wv53
 CJ-,CJ
 -CJ-,CJ
 CJY,CJ
@@ -28,9 +32,6 @@ _chris_,Chris
 chrisrohn,Chris
 Chris_Rohn,Chris
 ctznCHRISps,citizensnips
-citizensips,citizensnips
-citizensnlps,citizensnips
-citizinsnips,citizensnips
 citizensnipsaaaaa,citizensnips
 Pinksnips,citizensnips
 babybluesnips,citizensnips
@@ -80,13 +81,12 @@ bSODEd,sodashop
 Josh,sodashop
 joshsclone,sodashop
 SodaJosh,sodashop
-Noumenon,Andrew
+Noumenon,=Andrew
 BOOmenon,Andrew
 Andrewmenon,Andrew
 Andrew_voted,Andrew
 Andrewshop,Andrew
 TheProphetBradd,Bradd
-Sodashop,sodashop
 _Scytheria_,scytheria
 Skytheria,scytheria
 scytheria_voted,scytheria
@@ -101,7 +101,6 @@ Madcat9000,MadCat
 LUCTOR_et_emerGO,Luctoretemergo
 MagentaLuctoretemergo,Luctoretemergo
 Pink__Luctoretemergo,Luctoretemergo
-TylERDuRDEN,TylerDurden
 TylerDurdengeminae,TylerDurden
 The_Mongoose,themongoose
 Alex.Go,AlexGo
@@ -129,5 +128,4 @@ Balearic,BaleariCat
 BlueMattOfficial,matt
 babsclone,robsclone
 Cocka,Rocka
-Johan,Johanne
 Johanne_orannje,Johanne

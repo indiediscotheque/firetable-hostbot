@@ -100,9 +100,11 @@ Some pairs only a person can call ("are `Star Rain` and `Star Ruin` the same?").
 
 Answers are kept for good, in the room's database too (`historyDecisions`), and never asked again.
 
-Two files cover what the history can't know on its own (`alias,canonical` per line). Keep them in `tools/history/` and commit them, so the GitHub Action uses them too; a copy in `history-data/` is read after it and wins:
+Two files cover what the history can't know on its own (`alias,canonical` per line). Keep them in `tools/history/` and commit them, so the GitHub Action uses them too; one in `history-data/` is read as well:
 - `artist-aliases.csv`, e.g. `Shiina Ringo,椎名林檎`
-- `dj-aliases.csv`, for a DJ who played under more than one name (`CJ-,CJ`). Case never matters: `chris` and `Chris` are one DJ already.
+- `dj-aliases.csv`, for a DJ who played under more than one name (`CJ-,CJ`), or one person's several accounts.
+
+**Who is who.** A DJ is an account: its username, every name it ever claimed (the room's `nameClaim` keeps old names after a rename) and its id, so a renamed DJ's plays stay together and a name that mimics someone else's (`citizensips`) goes to the account that took it. `dj-aliases.csv` only needs names from before claims existed, and accounts that are one person. Each DJ is shown as the name they played under most (case never matters); to show another, pin it with `=`: `Noumenon,=Andrew`. `djs.csv` lists every name each DJ played under.
 
 ## keeping it current
 The bot does the day-to-day work:

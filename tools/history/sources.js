@@ -385,6 +385,15 @@ var reviewAnswers = function(db, node) {
   return n;
 };
 
+// Every name an account ever took: nameClaim/<name in lower case> = its id.
+// Claims are kept after a rename, so old names still lead to their account.
+function claimsToNames(db, node) {
+  var ins = db.prepare("INSERT INTO dj_names (source, id, name) VALUES ('claim', ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name");
+  var n = 0;
+  each(node, function(name, uid) { if (typeof uid === "string" && uid) { ins.run(String(name).toLowerCase(), uid); n++; } });
+  return n;
+}
+
 function usersToNames(db, node) {
   var ins = db.prepare("INSERT INTO dj_names (source, id, name) VALUES ('fb', ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name");
   each(node, function(uid, u) { if (u && u.username) ins.run(uid, String(u.username)); });
@@ -406,6 +415,7 @@ function importFirebaseFile(db, file, log) {
       counts[p] = w.count() - before;
     });
     if (root.users) usersToNames(db, root.users);
+    if (root.nameClaim) claimsToNames(db, root.nameClaim);
     if (root.tagReview) counts.reviewAnswers = reviewAnswers(db, root.tagReview);
   });
   return counts;
@@ -422,6 +432,12 @@ async function fetchFirebase(db, env, opts, log) {
   var users = await c.get("users", {});
   store.tx(db, function() { usersToNames(db, users); });
   log("  " + Object.keys(users || {}).length + " users");
+  try {
+    var claimed = await c.get("nameClaim");
+    log("  " + store.tx(db, function() { return claimsToNames(db, claimed); }) + " names claimed by accounts");
+  } catch (e) {
+    log("  nameClaim: skipped (" + e.message + ")");
+  }
 
   // names by id first, for entries that only give ids
   var named = { users: users };

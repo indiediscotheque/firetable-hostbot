@@ -473,18 +473,39 @@ function reconcile(db, opts) {
   log("lining up plays...");
   var djNames = new Map();
   db.prepare("SELECT source, id, name FROM dj_names").all().forEach(function(r) { djNames.set(r.source + ":" + r.id, r.name); });
-  var djAlias = new Map();
-  listFiles(opts.dir, "dj-aliases.csv").forEach(function(f) {
-    readAliasCsv(f).forEach(function(p) { djAlias.set(p[0].toLowerCase(), p[1]); });
+  // Who is who. One DJ is an account: its username now, every name it ever
+  // claimed (nameClaim keeps them all) and its id. dj-aliases.csv joins
+  // names, and so accounts, that are one person. A DJ shows as the name they
+  // played under most, unless the list pins one: "Noumenon,=Andrew".
+  var djUnion = new KeyUnion();
+  var djPinned = new Map(); // root -> name
+  djNames.forEach(function(name, key) {
+    var i = key.indexOf(":");
+    var src = key.slice(0, i);
+    var id = key.slice(i + 1);
+    var uid = src === "fb" ? id : src === "claim" ? String(name) : null;
+    if (!uid) return;
+    // a play saved under the bare id (an account since deleted) is that account too
+    djUnion.union("u:" + uid, "n:" + uid.toLowerCase());
+    djUnion.union("u:" + uid, "n:" + (src === "fb" ? String(name) : id).toLowerCase());
   });
-  var djDisplay = new Map(); // key -> Map(display -> n)
+  var pins = [];
+  listFiles(opts.dir, "dj-aliases.csv").forEach(function(f) {
+    readAliasCsv(f).forEach(function(p) {
+      var pin = p[1].charAt(0) === "=";
+      var to = pin ? p[1].slice(1).trim() : p[1];
+      djUnion.union("n:" + p[0].toLowerCase(), "n:" + to.toLowerCase());
+      if (pin) pins.push(to);
+    });
+  });
+  pins.forEach(function(n) { djPinned.set(djUnion.find("n:" + n.toLowerCase()), n); });
+  var djDisplay = new Map(); // root -> Map(display -> n)
   function djOf(raw, src) {
     if (!raw) return null;
     raw = String(raw).trim();
     var name = djNames.get((src.indexOf("fb:") === 0 ? "fb" : src) + ":" + raw) || djNames.get("fb:" + raw) || raw;
     if (src === "adam" && /^\d+$/.test(raw)) name = djNames.get("adam:" + raw) || name;
-    name = djAlias.get(name.toLowerCase()) || name;
-    var k = name.toLowerCase();
+    var k = djUnion.find("n:" + name.toLowerCase());
     if (!djDisplay.has(k)) djDisplay.set(k, new Map());
     djDisplay.get(k).set(name, (djDisplay.get(k).get(name) || 0) + 1);
     return k;
@@ -724,13 +745,18 @@ function reconcile(db, opts) {
       if (fd && fd === f) djStat(f.dj).firsts++;
     }
   });
+  // the name played under most (whatever its case), written the way it is most often
   function djName(k) {
     if (!k) return null;
+    if (djPinned.has(k)) return djPinned.get(k);
     var d = djDisplay.get(k);
-    if (!d) return k;
+    if (!d) return k.replace(/^[nu]:/, "");
+    var byName = new Map();
+    d.forEach(function(c, name) { var l = name.toLowerCase(); byName.set(l, (byName.get(l) || 0) + c); });
+    var top = null;
+    byName.forEach(function(c, l) { if (top === null || c > byName.get(top)) top = l; });
     var best = null;
-    var n = -1;
-    d.forEach(function(c, name) { if (c > n) { n = c; best = name; } });
+    d.forEach(function(c, name) { if (name.toLowerCase() === top && (best === null || c > d.get(best))) best = name; });
     return best;
   }
 
