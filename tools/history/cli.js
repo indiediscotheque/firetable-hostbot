@@ -34,7 +34,9 @@ getting the data in
         shared with the bot: at most --max-quota units per run, so the room never runs short)
 
 making sense of it
-  reconcile [--window 10] [--adam-tz auto|America/Chicago|-6]
+  reconcile [--window 10] [--adam-tz auto|America/Chicago|-6] [--accent-min 2]
+        --accent-min: how many logs must write a name or word with its accents
+        before it's restored (a trusted source counts on its own)
   report                              summary.md and CSVs in the data folder
   review apply <review.csv>           save your merge/separate answers, then reconcile again
   lookup "Artist - Title"             what the history knows about one song
@@ -135,7 +137,7 @@ async function main() {
       await sources.enrichArtists(db, env.LASTFM_APIKEY, Number(args.limit) || 3000, log);
       break;
     case "reconcile":
-      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", log: log });
+      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", accentMin: args.accentMin, log: log });
       break;
     case "report":
       report.report(db, dir, log);
@@ -167,7 +169,7 @@ async function main() {
       log("== uploads");
       await verify.verifyUploads(db, env, { maxQuota: args.maxQuota }, log);
       log("== reconcile");
-      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", log: log });
+      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", accentMin: args.accentMin, log: log });
       report.report(db, dir, log);
       if (args.publish) {
         log("== publish");
@@ -181,6 +183,7 @@ async function main() {
       var k = tags.keysOf(p);
       log("reads as: " + tags.format(p) + "\n  key: " + k.track + (p.weak ? "  (too vague to match on)" : ""));
       var v = db.prepare("SELECT track_id FROM variants WHERE track_key = ? LIMIT 1").get(k.track) ||
+        db.prepare("SELECT id track_id FROM tracks WHERE keys LIKE ? LIMIT 1").get('%"' + k.track.replace(/[%_]/g, "") + '"%') ||
         db.prepare("SELECT track_id FROM variants WHERE song_key = ? LIMIT 1").get(k.song);
       if (!v) { log("  not in the history (run reconcile?)"); break; }
       var t = db.prepare("SELECT * FROM tracks WHERE id = ?").get(v.track_id);

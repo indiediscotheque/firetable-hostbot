@@ -1,0 +1,25 @@
+{
+  "users": { "uidA": { "username": "ana" }, "uidB": { "username": "ben" }, "uidC": { "username": "cy" } },
+  "globalTracks": {
+    "1joga0000001": { "artist": "Bjork", "title": "Joga", "first_play_date": 1700000000000, "first_play_dj": "ana", "type": 1 },
+    "1joga0000002": { "artist": "Bj?rk", "title": "Joga (Live)", "first_play_date": 1700000100000, "first_play_dj": "ana", "type": 1 },
+    "1hyper000001": { "artist": "Bjrk", "title": "Hyperballad", "first_play_date": 1700000200000, "first_play_dj": "ana", "type": 1 },
+    "1numb0000001": { "artist": "Foals", "title": "My Number", "first_play_date": 1700000300000, "first_play_dj": "ana", "type": 1 },
+    "1feat0000001": { "artist": "Gorillaz", "title": "Andromeda feat. DRAM", "first_play_date": 1700000400000, "first_play_dj": "ana", "type": 1 },
+    "2777": { "artist": "Sigur Ros", "title": "Saeglopur", "first_play_date": 1700000500000, "first_play_dj": "ana", "type": 2 }
+  },
+  "playlists": {
+    "uidA": { "p": { "name": "a", "list": {
+      "1": { "name": "Björk - Jóga", "type": 1, "cid": "joga0000001" },
+      "2": { "name": "Foals - My Nümber", "type": 1, "cid": "numb0000001" },
+      "3": { "name": "Björk - Army of Me", "type": 1, "cid": "army00000001" }
+    } } },
+    "uidB": { "p": { "name": "b", "list": {
+      "1": { "name": "Björk - Jóga", "type": 1, "cid": "joga0000001" },
+      "2": { "name": "Gorillaz - Andromeda feat. DRÄM", "type": 1, "cid": "feat0000001" }
+    } } },
+    "uidC": { "p": { "name": "c", "list": {
+      "1": { "name": "Gorillaz - Andromeda feat. DRÄM", "type": 1, "cid": "feat0000001" }
+    } } }
+  }
+}

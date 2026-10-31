@@ -240,6 +240,25 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async accents_restored_live() {
+    // the history writes this track "Björk - Jóga"; a DJ's copy lost its
+    // accents to the old Last.fm bug
+    await put("/", base({
+      queues: { dj1: { k1: yt("ytj", "Bjork - Joga") }, dj2: { s1: yt("yt2") } },
+      globalSongsMeta: { ready: true },
+      globalSongs: { t1: { artist: "Björk", title: "Jóga", plays: 5, first_play_date: Date.UTC(2016, 0, 1) } },
+      globalSongKeys: { [tags.hash(tags.trackKey("Bjork", "Joga"))]: "t1" }
+    }));
+    const p = startBot("accents");
+    await waitFor(p, "Listening now.");
+    await sleep(2500);
+    const st = await get("/");
+    check(st.globalTracks["1ytj"].artist === "Björk" && st.globalTracks["1ytj"].title === "Jóga" && st.globalTracks["1ytj"].song === "t1", "the upload's tags get their accents back");
+    check(st.tagUpdate && st.tagUpdate.adamData.artist === "Björk" && st.tagUpdate.adamData.track_name === "Jóga", "the room sees them");
+    check(Object.values(st.queues.dj1).some((t) => t.name === "Björk - Jóga"), "and so does the DJ's queue");
+    await healthy(p);
+    return p;
+  },
   async remove_respects_rank() {
     await put("/", base({
       users: Object.assign(base().users, { mod1: { username: "mod1", status: true, mod: true } }),

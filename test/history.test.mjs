@@ -33,9 +33,10 @@ test("versions that sound different stay apart; the song key still joins them", 
   assert.notEqual(key("Artist", "Song Part 1"), key("Artist", "Song Part 2"));
 });
 
-test("artists: order, &/and, The, accents and case don't matter", () => {
+test("artists: order, &/and, accents and case don't matter; 'The X' and 'X' are different artists", () => {
   assert.equal(key("Simon & Garfunkel", "The Boxer"), key("Simon and Garfunkel", "The Boxer"));
-  assert.equal(key("The Rolling Stones", "Angie"), key("Rolling Stones", "Angie"));
+  assert.notEqual(key("The Rolling Stones", "Angie"), key("Rolling Stones", "Angie"));
+  assert.equal(key("Beatles, The", "Help!"), key("The Beatles", "Help!"));
   assert.equal(key("Beyoncé", "Halo"), key("BEYONCE", "Halo"));
   assert.equal(key("Sigur Rós", "Hoppípolla"), key("Sigur Ros", "Hoppipolla"));
   assert.equal(key("Mura Masa x Charli XCX", "1 Night"), key("Charli XCX & Mura Masa", "1 Night"));
@@ -85,8 +86,10 @@ test("toolkit: ADAM + Last.fm + Firebase become one history", async () => {
     assert.match(foals, /all 2 versions: 6 plays/);
     assert.match(run("lookup", "Bear Hands - 2AM"), /2 spellings/, "the Sheets-damaged '2:00 AM' joined '2AM'");
     assert.match(run("lookup", "Calvin Harris & Dua Lipa - One Kiss"), /3 spellings/, "feat. and & spellings joined");
-    assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppípolla/, "accents restored from a playlist and ADAM");
-    assert.match(readFileSync(join(dir, "restore_accents.csv"), "utf8"), /Sigur Ros - Hoppipolla,Sigur Rós - Hoppípolla/);
+    // "Sigur Rós" is in 3 logs (ADAM, a playlist): restored. "Hoppípolla" is in
+    // only 1 (one playlist entry): not enough, the title stays as it is
+    assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppipolla\n/, "artist accents restored, a single log isn't enough for the title");
+    assert.match(readFileSync(join(dir, "restore_accents.csv"), "utf8"), /Sigur Ros - Hoppipolla,Sigur Rós - Hoppipolla,/);
     assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /\| plays \| 19 /);
 
     run("publish", "--restore-accents");
@@ -169,6 +172,63 @@ test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and ex
     run("publish");
     preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
     assert.equal(preview.tagChanges.length, 0, "without --tidy nothing is tidied");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("accents: restored when enough logs (or a trusted source) have them, word by word across an artist's songs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
+  try {
+    run("import-firebase", FIX + "firebase-accents.json");
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    // SoundCloud's own artist/title for one upload: a trusted source, once is enough
+    db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('sc', '777', ?, 1)").run(JSON.stringify({ title: "Sæglópur", artist: "Sigur Rós", release: "Sæglópur" }));
+    db.close();
+    run("verify-uploads");
+    run("reconcile");
+    const look = (q) => run("lookup", q).split("\n").find((l) => /^track /.test(l));
+    assert.match(look("Bjork - Joga"), /: Björk - Jóga$/, "two playlists write it with accents: restored");
+    assert.match(look("Bjork - Joga (Live)"), /: Björk - Jóga \(Live\)$/, "'Bj?rk' and the live version's title restored from the artist's other songs");
+    assert.match(look("Bjork - Hyperballad"), /: Björk - Hyperballad$/, "'Bjrk' (letter dropped) restored");
+    assert.match(look("Foals - My Number"), /: Foals - My Number$/, "one odd spelling ('Nümber') isn't enough");
+    assert.match(look("Gorillaz - Andromeda"), /: Gorillaz - Andromeda feat\. DRÄM$/, "a featured artist's name restored too");
+    assert.match(look("Sigur Ros - Saeglopur"), /: Sigur Rós - Sæglópur$/, "SoundCloud's own tags: trusted, restored from one log");
+    const why = readFileSync(join(dir, "restore_accents.csv"), "utf8");
+    assert.match(why, /Bj\?rk - Joga \(Live\),Björk - Jóga \(Live\),.*Joga→Jóga \(2 logs\)/, "the report says why");
+    run("reconcile", "--accent-min", "3");
+    assert.match(look("Bjork - Joga"), /: Björk - Joga$/, "--accent-min 3: 'Björk' is in 3 logs and stays, 'Jóga' in 2 doesn't");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("'The X' and 'X': different artists, but the same track when the title matches, shown under the more used name", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const entry = (name, cid) => ({ name, type: 1, cid });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({
+      globalTracks: {
+        "1naive000001": { artist: "Kooks", title: "Naive", first_play_date: 1700000000000, first_play_dj: "ana", type: 1 },
+        "1naive000002": { artist: "The Kooks", title: "Naive", first_play_date: 1600000000000, first_play_dj: "ben", type: 1 },
+        "1intro000001": { artist: "The Kills", title: "Intro", first_play_date: 1600000000000, type: 1 },
+        "1intro000002": { artist: "Kills", title: "Intro", first_play_date: 1600000000000, type: 1 }
+      },
+      playlists: { u: { p: { name: "x", list: {
+        a: entry("The Kooks - Ooh La", "oohla0000001"), b: entry("The Kooks - She Moved In", "moved0000001"), c: entry("The Kooks - Naive", "naive000002")
+      } } } }
+    }));
+    run("import-firebase", join(dir, "fb.json"));
+    run("reconcile");
+    const naive = run("lookup", "Kooks - Naive");
+    assert.match(naive, /: The Kooks - Naive\n/, "'The Kooks' is used more, so it's the name shown");
+    assert.match(naive, /2 uploads/, "both uploads are one track");
+    assert.match(naive, /first: 2020-09-13 .* by ben/, "with the true first play");
+    assert.match(run("lookup", "The Kills - Intro"), /1 uploads/, "a vague title never joins them");
+    assert.notEqual(tags.trackKey("The Kooks", "Ooh La"), tags.trackKey("Kooks", "Ooh La"), "otherwise they stay different artists");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

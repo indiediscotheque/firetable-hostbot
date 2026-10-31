@@ -60,6 +60,14 @@ Tick **force** to send it anyway. A preview never writes anything. `publish --of
    ```
    Deploy `firebase-rules.json` first. The bot switches over on its own: true first plays, its own counts, and `!plays`. `publish --off` switches it back.
 
+## restoring accents
+For years accents and other non-English letters were stripped from tags so Last.fm would take the scrobbles. The history puts them back wherever enough logs still have them:
+- An accented name, title or word is restored when **at least 2 logs** write it that way (`--accent-min` changes this). One log from a trusted source is enough: a mod's logged fix, SoundCloud's own artist/title, a YouTube Topic channel, or Last.fm's spelling of the artist. It doesn't need to outnumber the stripped spelling, which years of stripping made the common one. If logs disagree on the accents (`Beyoncé` / `Beyoncè`), the most-logged version wins.
+- **Artist names** are restored on every song by that artist, featured spots included. **Words** in titles are restored across the same artist's songs: if `Jóga` is well logged, `Joga (Live)` becomes `Jóga (Live)`. It's never across different artists, so "resume" never turns into "résumé".
+- Dropped letters and `?` count too: `Bjrk` and `Bj?rk` become `Björk`.
+- `restore_accents.csv` lists every change and why (how many logs). `publish --restore-accents` applies them to the room's tags; the Action does it by default.
+- From then on the bot restores them live: when a stripped upload of a known song plays, it shows and saves the accented tags, and the DJ's queue entry follows.
+
 ## tidying tags
 Matching ignores upload junk, but by default the room's tags are only changed to put accents back (`--restore-accents`). To clean them too, publish with `--tidy` (or pick **tidy** when running the Action). Check `tidy_preview.csv` first; it shows both levels for every track:
 - `--tidy junk` takes out what only describes the upload: `(Official Video)`, `[Official Audio]`, `HD`, `(Visualizer)`, `[Monstercat Release]`, `| uploader text`, hashtags, `- Topic`, `VEVO`. Everything else stays exactly as typed, `ft.` and `[brackets]` included.
@@ -76,10 +84,11 @@ Fixes made before the tag log existed can't be told apart from the bot's own gue
 ## how songs are matched
 Rohn Standard Notation is the guide for *recognising* a song, never a rule for rewriting one. Tags people chose stay exactly as they are.
 - **Same upload** (YouTube/SoundCloud id) = same track. If its tags disagree completely, it goes to review.
-- **Same artist(s) and title after cleanup**: case, accents, "The", `&`/`and`/`x`, artist order, `feat.`, `(Official Video)`, `[HD]`, `- Topic`, `VEVO`, label tags, `| uploader text`, `Radio Edit`, `Extended Mix`, `Remastered`.
+- **Same artist(s) and title after cleanup**: case, accents, `&`/`and`/`x`, artist order, `feat.`, `(Official Video)`, `[HD]`, `- Topic`, `VEVO`, label tags, `| uploader text`, `Radio Edit`, `Extended Mix`, `Remastered`.
 - **Different versions stay apart** but are grouped as one song: `(X Remix)`, `Edit`, `Bootleg`, `VIP`, live, acoustic, instrumental, demo, slowed/sped up, covers.
+- **"The X" and "X" are different artists**, except on a song they share: `The X - Song Title` and `X - Song Title` are one track, shown under whichever artist name the logs use more. Vague titles (`Intro`, `Track 1`) never join them. Otherwise they're joined only on evidence: the same upload tagged both ways, Last.fm or ADAM saying they're one artist, or `artist-aliases.csv`. `X, The` is read as `The X`.
 - **Artist aliases**: ADAM's artist ids, Last.fm's artist ids and corrections, `artist-aliases.csv`.
-- **The old Last.fm accent bug**: `Bjrk`, `Bj?rk` and `Bjork` all match `Björk`. The accented spelling is restored when any source has it (`restore_accents.csv`).
+- **The old Last.fm accent bug**: `Bjrk`, `Bj?rk` and `Bjork` all match `Björk`.
 - **ISRC** (SoundCloud's recording id) links uploads of the same recording.
 - **Typos**: swapped letters and very close titles are merged; anything less certain goes to review. Numbers never count as typos (`Part 1` ≠ `Part 2`).
 - **Vague tags** (`Unknown - Intro`, `Track 3`) are never matched across uploads.

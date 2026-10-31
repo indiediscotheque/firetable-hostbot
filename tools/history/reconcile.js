@@ -193,6 +193,8 @@ function reconcile(db, opts) {
 
   // -------------------------------------------------------- artist aliases
   log("joining artist spellings...");
+  var accentMin = opts.accentMin == null ? 2 : Number(opts.accentMin);
+  var accents = accentBook(accentMin);
   var artistUnion = new KeyUnion();
   var artistSeen = new Map(); // key -> count
   var artistDisplay = new Map(); // key -> Map(display -> count)
@@ -206,6 +208,7 @@ function reconcile(db, opts) {
       // a YouTube channel name ("ArtistVEVO", "Artist - Topic") isn't how the room writes the artist
       var channel = /vevo$|\s-\stopic$/i.test(sp.artist) || onlyFrom(sp, WEAK_PLATFORM);
       d.set(a, (d.get(a) || 0) + (channel ? 0.1 : sp.seen + sp.maxWeight * 3));
+      if (!channel) accents.note("artist", k, a, sp.seen, trusted(sp));
     });
   });
   var aliasReasons = [];
@@ -225,6 +228,7 @@ function reconcile(db, opts) {
     aliasPair(r.query, res.name, "lastfm-correction");
     // Last.fm's own spelling is a source of accents too
     var k = tags.artistKeyOf(res.name);
+    accents.note("artist", k, res.name, 1, true);
     if (!artistDisplay.has(k)) artistDisplay.set(k, new Map());
     artistDisplay.get(k).set(res.name, (artistDisplay.get(k).get(res.name) || 0) + 1);
     artistSeen.set(k, (artistSeen.get(k) || 0));
@@ -260,6 +264,8 @@ function reconcile(db, opts) {
   spellings.forEach(function(sp, i) {
     sp.raw = tags.keysOf(sp.parsed);
     sp.keys = tags.keysOf(sp.parsed, artistMap);
+    // the artists with any leading "The" taken off ("The Kooks" -> "kooks")
+    sp.theLess = sp.parsed.artists.map(function(a) { return tags.squash(tags.fold(a).replace(/^the\s+/, "")); }).sort().join("+");
     sp.weak = sp.parsed.weak;
     push(rawKeyIndex, sp.raw.track, i);
     if (!sp.weak) push(trackIndex, sp.keys.track, i);
@@ -313,7 +319,7 @@ function reconcile(db, opts) {
   var conflicts = 0;
   uploadSpellings.forEach(function(m, up) {
     var best = -1;
-    var bestW = -1;
+    var bestW = -Infinity;
     m.forEach(function(w, si) {
       var adj = w + (spellings[si].weak ? -100 : 0) + tags.quality(spellings[si].artist, spellings[si].title) * 0.1;
       if (adj > bestW) { bestW = adj; best = si; }
@@ -378,6 +384,9 @@ function reconcile(db, opts) {
       for (var b = a + 1; b < reps.length; b++) {
         var B = artistSets(spellings[reps[b]]);
         if (subset(A.primary, B.full) && subset(B.primary, A.full)) { join(reps[a], reps[b], "featured-artist", 0.97); continue; }
+        // "The X - Song" and "X - Song": different artists in general, the same
+        // track when the (specific) title matches
+        if (spellings[reps[a]].theLess && spellings[reps[a]].theLess === spellings[reps[b]].theLess) { join(reps[a], reps[b], "the-prefix", 0.96); continue; }
         // one name off ("The Nationals"), same title: worth a look
         if (A.primary.length === 1 && B.primary.length === 1) {
           var s = tags.similarity(A.primary[0], B.primary[0]);
@@ -497,16 +506,26 @@ function reconcile(db, opts) {
     });
     bestArtistName.set(c, cur);
   });
-  // the same name with its accents back wins over the stripped one
-  artistDisplay.forEach(function(displays, k) {
-    var c = artistMap.get(k) || k;
-    var cur = bestArtistName.get(c);
-    displays.forEach(function(n, name) {
-      if (nonAsciiCount(name) > nonAsciiCount(cur.name) && (tags.fold(name) === tags.fold(cur.name) || skeleton(name) === tags.squash(cur.name))) {
-        cur = { name: name, score: cur.score };
-      }
+  // the same name with its accents back wins over the stripped one, when
+  // enough logs have it (years of stripping for the old Last.fm bug mean the
+  // stripped one is usually the most common)
+  bestArtistName.forEach(function(cur, c) {
+    var keys = [c];
+    artistMap.forEach(function(to, from) { if (to === c) keys.push(from); });
+    var pick = null;
+    keys.forEach(function(k) {
+      var p = accents.pick("artist", k, cur.name);
+      if (p && (!pick || p.n > pick.n)) pick = p;
     });
-    bestArtistName.set(c, cur);
+    if (pick) bestArtistName.set(c, { name: pick.word, score: cur.score, accent: pick });
+  });
+  // accented words in each artist's titles ("Jóga" for Björk), from every spelling
+  spellings.forEach(function(sp) {
+    if (sp.weak || !NON_ASCII_LETTER.test(sp.title)) return;
+    var ok = trusted(sp);
+    sp.keys.artist.split("+").forEach(function(ak) {
+      wordsOf(sp.parsed.title).forEach(function(w) { if (NON_ASCII_LETTER.test(w)) accents.note("word:" + ak, null, w, sp.seen, ok); });
+    });
   });
 
   // tag-exceptions.csv: artists ("Artist") or songs ("Artist - Title") never to tidy
@@ -528,6 +547,22 @@ function reconcile(db, opts) {
     });
   }
 
+  // Put each artist name in text back the way the logs write it, accents included
+  function restoreNames(text, why, names) {
+    var list = names || tags.splitArtists(tags.parse(text, "x").artist);
+    list.forEach(function(name) {
+      var k = tags.artistKeyOf(name);
+      var best = bestArtistName.get(artistMap.get(k) || k);
+      if (!best || !best.accent || nonAsciiCount(best.name) <= nonAsciiCount(name)) return;
+      if (tags.fold(best.name) !== tags.fold(name) && skeleton(best.name) !== tags.squash(name)) return;
+      var at = text.indexOf(name);
+      if (at === -1) return;
+      text = text.slice(0, at) + best.name + text.slice(at + name.length);
+      why.push(name + "→" + best.name + " (" + best.accent.n + " logs" + (best.accent.trusted ? ", trusted source" : "") + ")");
+    });
+    return text;
+  }
+
   var accentFixes = [];
   clusters.forEach(function(members, root) {
     var best = -1;
@@ -541,20 +576,46 @@ function reconcile(db, opts) {
     var chosen = spellings[best];
     var artist = chosen.artist;
     var title = chosen.title;
-    var restoredFrom = [];
-    // accents: the same words with their letters back, from any spelling
+    // joined over a leading "The": the artist name the logs use more wins
+    var theForms = new Map();
     members.forEach(function(si) {
       var sp = spellings[si];
-      if (nonAsciiCount(sp.title) > nonAsciiCount(title) && (tags.fold(sp.title) === tags.fold(title) || skeleton(sp.title) === tags.squash(title) && usableSkeleton(sp.title, skeleton(sp.title)))) {
-        title = sp.title; restoredFrom.push(Array.from(sp.sources).join("+"));
-      }
+      if (sp.weak || sp.theLess !== chosen.theLess || sp.keys.artist === chosen.keys.artist) return;
+      theForms.set(sp.keys.artist, sp);
     });
-    var aBest = chosen.parsed.artists.length === 1 ? bestArtistName.get(chosen.keys.artist) : null;
-    if (aBest && nonAsciiCount(aBest.name) > nonAsciiCount(artist) &&
-        (tags.fold(aBest.name) === tags.fold(artist) || skeleton(aBest.name) === tags.squash(artist))) {
-      artist = aBest.name; restoredFrom.push("artist");
+    if (theForms.size) {
+      var prevalent = chosen;
+      theForms.forEach(function(sp, k) { if ((artistSeen.get(k) || 0) > (artistSeen.get(prevalent.keys.artist) || 0)) prevalent = sp; });
+      if (prevalent !== chosen) {
+        var name = bestArtistName.get(prevalent.keys.artist);
+        artist = name && prevalent.parsed.artists.length === 1 && !prevalent.parsed.featured.length ? name.name : prevalent.artist;
+      }
     }
-    if (artist !== chosen.artist || title !== chosen.title) accentFixes.push({ from: chosen.artist + " - " + chosen.title, to: artist + " - " + title, sources: restoredFrom.join("; ") });
+    var restoredFrom = [];
+    // accents, 1: the whole title as other spellings of this track have it
+    var titleLogs = accentBook(accentMin);
+    members.forEach(function(si) { titleLogs.note("t", "t", spellings[si].title, spellings[si].seen, trusted(spellings[si])); });
+    var tp = titleLogs.pick("t", "t", title);
+    if (tp) { title = tp.word; restoredFrom.push("title in " + tp.n + " logs" + (tp.trusted ? " (incl. a trusted source)" : "")); }
+    // 2: word by word, from this artist's other songs ("Joga (Live)" -> "Jóga (Live)")
+    var restoredWords = [];
+    title = title.split(WORD_SPLIT).map(function(tok) {
+      if (!/[\p{L}]/u.test(tok) || tok.length < 3) return tok;
+      var best = null;
+      chosen.keys.artist.split("+").forEach(function(ak) {
+        var p = accents.pick("word:" + ak, null, tok);
+        if (p && (!best || p.n > best.n)) best = p;
+      });
+      if (!best) return tok;
+      restoredWords.push(tok + "→" + best.word + " (" + best.n + " logs)");
+      return matchCase(best.word, tok);
+    }).join("");
+    if (restoredWords.length) restoredFrom.push("words: " + restoredWords.join(", "));
+    // 3: every artist name (and featured artist), the way the room's logs write it
+    artist = restoreNames(artist, restoredFrom);
+    if (chosen.parsed.featured.length) title = restoreNames(title, restoredFrom, chosen.parsed.featured);
+    var aBest = chosen.parsed.artists.length === 1 ? bestArtistName.get(chosen.keys.artist) : null;
+    if (artist !== chosen.artist || title !== chosen.title) accentFixes.push({ from: chosen.artist + " - " + chosen.title, to: artist + " - " + title, why: restoredFrom.join("; ") });
 
     var nonWeak = members.filter(function(si) { return !spellings[si].weak; });
     var anchorKey = nonWeak.length ? nonWeak.map(function(si) { return spellings[si].raw.track; }).sort()[0]
@@ -733,7 +794,7 @@ function reconcile(db, opts) {
     });
   });
   fs.mkdirSync(opts.dir, { recursive: true });
-  csv.writeCsv(path.join(opts.dir, "restore_accents.csv"), ["from", "to", "sources"], accentFixes);
+  csv.writeCsv(path.join(opts.dir, "restore_accents.csv"), ["from", "to", "why"], accentFixes);
 
   var summary = {
     observations: obsList.length, spellings: spellings.length, tracks: trackRows.length, songs: songMembers.size,
@@ -743,6 +804,59 @@ function reconcile(db, opts) {
   };
   log("  " + JSON.stringify(summary));
   return summary;
+}
+
+// ------------------------------------------------- accent restoration
+// How many logs write a name or word with its accents (or other non-English
+// letters). An accented version replaces the plain one when at least
+// accentMin logs have it, or a trusted source does; it doesn't need to beat
+// the plain one, which years of stripping for the old Last.fm bug made common.
+var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
+function trusted(sp) {
+  for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;
+  return false;
+}
+function accentBook(min) {
+  var book = new Map(); // scope|base -> Map(word -> {n, trusted})
+  function baseOf(w) { return tags.fold(w).replace(/\s+/g, " ").trim(); }
+  return {
+    note: function(scope, key, word, n, isTrusted) {
+      if (!word || !NON_ASCII_LETTER.test(word)) return;
+      [baseOf(word), "~" + skeleton(word)].forEach(function(b, i) {
+        if (i === 1 && !usableSkeleton(word, skeleton(word))) return;
+        var k = scope + "|" + (key == null ? "" : key + "|") + b;
+        var m = book.get(k);
+        if (!m) book.set(k, m = new Map());
+        var cur = m.get(word) || { n: 0, trusted: false };
+        cur.n += n;
+        cur.trusted = cur.trusted || !!isTrusted;
+        m.set(word, cur);
+      });
+    },
+    // the best-supported accented version of `plain`, or null
+    pick: function(scope, key, plain) {
+      var prefix = scope + "|" + (key == null ? "" : key + "|");
+      var m = book.get(prefix + baseOf(plain)) || book.get(prefix + "~" + tags.squash(plain));
+      if (!m) return null;
+      var best = null;
+      m.forEach(function(v, word) {
+        if (nonAsciiCount(word) <= nonAsciiCount(plain)) return;
+        if (v.n < min && !v.trusted) return;
+        var score = v.n + (v.trusted ? min : 0);
+        if (!best || score > best.score) best = { word: word, n: v.n, trusted: v.trusted, score: score };
+      });
+      return best;
+    }
+  };
+}
+var WORD_SPLIT = /([^\p{L}\p{N}'’]+)/u;
+function wordsOf(title) { return String(title).split(WORD_SPLIT).filter(function(w) { return /\p{L}/u.test(w) && w.length >= 3; }); }
+// "JOGA" -> "JÓGA", "joga" -> "jóga", "Joga" -> "Jóga"
+function matchCase(word, like) {
+  if (like === like.toUpperCase() && like !== like.toLowerCase()) return word.toUpperCase();
+  if (like === like.toLowerCase()) return word.toLowerCase();
+  if (like[0] === like[0].toUpperCase()) return word[0].toUpperCase() + word.slice(1);
+  return word;
 }
 
 var WEAK_PLATFORM = new Set(["yt", "sc"]);

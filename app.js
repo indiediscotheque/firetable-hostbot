@@ -2489,6 +2489,15 @@ var gts = {
           // a first play has no earlier play to show
           if (!songIndex.ready) return gts.reportNp(s, listRef, played ? up : { artist: up.artist, title: up.title, type: up.type });
           return gts.countPlay(s, upKey, up).then(function(track) {
+            // the history writes this track with accents the upload's tags
+            // lost (the old Last.fm bug): use them, and keep them
+            var fixed = {};
+            if (track.artist && tags.accentsRestored(up.artist, track.artist)) fixed.artist = track.artist;
+            if (track.title && tags.accentsRestored(up.title, track.title)) fixed.title = track.title;
+            if (fixed.artist || fixed.title) {
+              up = Object.assign({}, up, fixed);
+              globalpeek.update(fixed).catch(function(err) { console.log("accent restore error:", err && err.message); });
+            }
             gts.reportNp(s, listRef, up, track);
           }, function(err) {
             console.log("song index error:", err && err.message);
@@ -2527,7 +2536,7 @@ var gts = {
         var workId = t.work || link.work;
         s.songId = link.id;
         var track = {
-          id: link.id, plays: prev ? prev.plays : (t.plays || 1) - 1,
+          id: link.id, plays: prev ? prev.plays : (t.plays || 1) - 1, artist: t.artist, title: t.title,
           first_play_date: t.first_play_date, first_play_dj: t.first_play_dj,
           prev_play_date: prev && prev.date, prev_play_dj: prev && prev.dj
         };
