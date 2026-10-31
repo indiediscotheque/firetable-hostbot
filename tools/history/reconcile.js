@@ -618,16 +618,22 @@ function reconcile(db, opts) {
   // enough logs have it (years of stripping for the old Last.fm bug mean the
   // stripped one is usually the most common)
   // Which accents go on an artist's name across all their songs is checked
-  // against YouTube Music (the artist's Topic channel), or a mod's fix: the
-  // logs only suggest. YouTube Music writing it without accents settles it
+  // against YouTube Music (the artist's Topic channel): the logs, and mods'
+  // fixes (often made to take accents out), only suggest. YouTube Music writing it without accents settles it
   // ("BLOW", not "Bülow"); an artist not found there yet is left as it is and
   // listed for check-artists to look up.
   var keysOfArtist = new Map(); // canonical key -> every key joined to it
   artistMap.forEach(function(to, from) { if (!keysOfArtist.has(to)) keysOfArtist.set(to, []); keysOfArtist.get(to).push(from); });
-  var personArtist = new Map(); // key -> accented name a mod wrote
+  // a mod's spelling of an artist ("SebastiAn"): it sets capitals and
+  // punctuation, never accents (many fixes took them out for the old Last.fm
+  // bug); those follow YouTube Music
+  var personSpelling = new Map();
   spellings.forEach(function(sp) {
-    if (!sp.sources.has("fb:tagLog") || !NON_ASCII_LETTER.test(sp.artist)) return;
-    sp.parsed.artists.forEach(function(a) { if (NON_ASCII_LETTER.test(a)) personArtist.set(tags.artistKeyOf(a), a); });
+    if (!sp.sources.has("fb:tagLog")) return;
+    sp.parsed.artists.forEach(function(a) {
+      var k = tags.artistKeyOf(a);
+      personSpelling.set(artistMap.get(k) || k, a);
+    });
   });
   var artistAccents = []; // artist_accents.csv
   var ytmWanted = [];     // to look up on YouTube Music
@@ -639,13 +645,9 @@ function reconcile(db, opts) {
       if (p && (!pick || p.n > pick.n)) pick = p;
     });
     var ref = ytmRef(keys);
-    var person = keys.map(function(k) { return personArtist.get(k); }).filter(Boolean)[0];
     var out = null;
     var outcome = null;
-    if (person && nonAsciiCount(person) > nonAsciiCount(cur.name)) {
-      out = { word: person, n: 1, trusted: true, by: "a mod's fix" };
-      outcome = "accents from a mod's fix";
-    } else if (ref) {
+    if (ref) {
       var w = NON_ASCII_LETTER.test(ref.name) ? withAccentsOf(cur.name, ref.name) : null;
       if (w && w !== cur.name) { out = { word: w, n: ref.n, trusted: true, by: "YouTube Music" }; outcome = "accents from YouTube Music"; }
       else if (pick) outcome = "left as it is: YouTube Music writes it " + ref.name;
@@ -773,7 +775,23 @@ function reconcile(db, opts) {
     // 3: every artist name (and featured artist), the way the room's logs write it
     artist = restoreNames(artist, restoredFrom);
     if (chosen.parsed.featured.length) title = restoreNames(title, restoredFrom, chosen.parsed.featured);
-    var aBest = chosen.parsed.artists.length === 1 ? bestArtistName.get(chosen.keys.artist) : null;
+    // tidying writes an artist one way everywhere only as a mod wrote it
+    // (accents per YouTube Music), or with YouTube Music's accents; otherwise
+    // the artist stays as typed
+    // ("SebastiAn", "A R I Z O N A", "Tegan and Sara" are left alone)
+    var aBest = null;
+    if (chosen.parsed.artists.length === 1) {
+      var ak = artistMap.get(chosen.keys.artist) || chosen.keys.artist;
+      var bn = bestArtistName.get(chosen.keys.artist);
+      var mine = personSpelling.get(ak);
+      var mineRef = mine ? ytmRef([ak].concat(keysOfArtist.get(ak) || [])) : null;
+      if (mineRef) mine = withAccentsOf(mine, mineRef.name) || mine;
+      // without YouTube Music's word, a mod's spelling never takes characters out
+      if (mine && (mineRef || nonAsciiCount(mine) >= nonAsciiCount(chosen.artist))) aBest = { name: mine };
+      else if (bn && bn.accent && bn.accent.by) aBest = bn;
+      // or the room's usual spelling, when only the spaces differ ("TameImpalaVEVO")
+      else if (bn && bn.name.replace(/\s+/g, "") === tags.tidy(chosen.artist, "x", "junk").artist.replace(/\s+/g, "")) aBest = bn;
+    }
     if (artist !== chosen.artist || title !== chosen.title) accentFixes.push({ from: chosen.artist + " - " + chosen.title, to: artist + " - " + title, why: restoredFrom.join("; ") });
 
     var nonWeak = members.filter(function(si) { return !spellings[si].weak; });

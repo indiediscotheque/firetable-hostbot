@@ -158,6 +158,67 @@ test("toolkit: YouTube/SoundCloud answers add evidence, catch dead uploads and l
   }
 });
 
+test("tidy never loses what a tag says about the song: only upload junk goes, RSN only moves feat. and brackets", () => {
+  const rsn = (a, t) => { const r = tags.tidy(a, t, "rsn"); return r.artist + " - " + r.title; };
+  const junk = (a, t) => { const r = tags.tidy(a, t, "junk"); return r.artist + " - " + r.title; };
+  // laid out
+  assert.equal(rsn("Steve Angello", "Remember (feat. The Presets)"), "Steve Angello - Remember feat. The Presets");
+  assert.equal(rsn("Kris Menace feat. Black Hills", "Waiting For You (Oliver Remix)"), "Kris Menace - Waiting For You feat. Black Hills (Oliver Remix)");
+  assert.equal(rsn("RAC", "Hollywood (feat. Penguin Prison) (Felix Da Housecat Remix)"), "RAC - Hollywood feat. Penguin Prison (Felix Da Housecat Remix)");
+  assert.equal(rsn("Analog People In a Digital World", "Liar - Guys In Venice Remix"), "Analog People In a Digital World - Liar (Guys In Venice Remix)");
+  assert.equal(rsn("Gramatik", "Corporate Demons Feat. Luxas"), "Gramatik - Corporate Demons feat. Luxas");
+  assert.equal(rsn("Grum", "Heartbeats [Worship Remix]"), "Grum - Heartbeats (Worship Remix)");
+  // upload junk out
+  assert.equal(junk("Datarock", "Bulldozer [Official Music Video]"), "Datarock - Bulldozer");
+  assert.equal(junk("Oleska", "Road Trip (Original Mix) [OUT NOW ON THE BEARDED MAN]"), "Oleska - Road Trip (Original Mix)");
+  assert.equal(junk("Ella Henderson", "Mirror Man (Henry Krinkle Remix) [Thissongissick.com Premiere]"), "Ella Henderson - Mirror Man (Henry Krinkle Remix)");
+  // left as typed
+  for (const [a, t] of [
+    ["Azari & III", "Reckless (With Your Love)"], ["Walker & Royce", "Take Me To Your Leader feat. Dances With White Girls"],
+    ["Matthew Dear", "Bad Ones feat. Tegan and Sara"], ["karensyork", "Disclosure | You & Me (Flume Remix)"], ["Flight Facilities", "37,000 ft Mixtape (2013)"],
+    ["Willie Hutch", "Brother's Gonna Work It Out (The Mack/Soundtrack Version)"], ["Reva DeVito", "So Bad (Prod. Kaytranada)"],
+    ["Black Gold", "C'mon Stop (1983)"], ["Breakbot", "Peanuts (Bonus Track)"], ["SebastiAn", "Embody"], ["A R I Z O N A", "Electric Touch"],
+    ["Late Nite Tuff Guy", "Bless The Rains [LNTG Epic Journey]"]
+  ]) assert.equal(rsn(a, t), a + " - " + t, a + " - " + t);
+});
+
+test("a mod's fix sets an artist's capitals everywhere, never their accents (those follow YouTube Music)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({
+      globalTracks: {
+        "1embody00001": { artist: "Sebastian", title: "Embody (Official Video)", type: 1, first_play_date: 1600000000000 },
+        "1totale00001": { artist: "Sebastian", title: "Total (Official Video)", type: 1, first_play_date: 1600000000000 },
+        "1joga0000001": { artist: "Björk", title: "Jóga (Official Video)", type: 1, first_play_date: 1600000000000 },
+        "1army0000001": { artist: "Bjork", title: "Army of Me", type: 1, first_play_date: 1600000000000 }
+      },
+      // mods' fixes: one for capitals, one that took the accent out (the old Last.fm bug)
+      tagLog: {
+        "-t1": { k: "1totale00001", a: "SebastiAn", t: "Total", by: "boss", at: 1715000000000 },
+        "-t2": { k: "1army0000001", a: "Bjork", t: "Army of Me", by: "boss", at: 1715000000000 }
+      }
+    }));
+    run("import-firebase", join(dir, "fb.json"));
+    run("reconcile");
+    run("report");
+    let preview = readFileSync(join(dir, "tidy_preview.csv"), "utf8");
+    assert.match(preview, /Sebastian - Embody \(Official Video\),SebastiAn - Embody,/, "the mod's 'SebastiAn' reaches the artist's other songs");
+    assert.match(preview, /Björk - Jóga \(Official Video\),Björk - Jóga,/, "the mod's 'Bjork' doesn't take the accent out (no YouTube Music answer yet)");
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('ytm', 'bjork', ?, 1)").run(JSON.stringify({ names: ["Björk"] }));
+    db.close();
+    run("reconcile");
+    run("report");
+    preview = readFileSync(join(dir, "tidy_preview.csv"), "utf8");
+    assert.match(preview, /Björk - Jóga \(Official Video\),Björk - Jóga,/, "with YouTube Music's 'Björk', the accent stays");
+    assert.match(run("lookup", "Bjork - Army of Me"), /track \S+: Björk - Army of Me\n/, "and goes back on the song the mod took it off");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and exceptions left alone", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });

@@ -128,8 +128,7 @@ function report(db, dir, log) {
   if (tz[2]) add("| ADAM clock (moved into globalTracks) | " + clock(zones[2], tz[2]) + " |");
   add("| accents restored | " + n(st.accentFixes) + " (restore_accents.csv) |");
   var by = function(re) { return artistAccents.filter(function(a) { return re.test(a.outcome); }).length; };
-  if (artistAccents.length) add("| artist names (artist_accents.csv) | " + n(by(/^accents from YouTube/)) + " accented as YouTube Music writes them, " + n(by(/mod's fix/)) +
-    " by a mod's fix; " + n(by(/YouTube Music writes it/)) + " left plain as YouTube Music writes them; " + n(by(/until YouTube Music is checked|not found/)) + " left as they are until YouTube Music confirms |");
+  if (artistAccents.length) add("| artist names (artist_accents.csv) | " + n(by(/^accents from YouTube/)) + " accented as YouTube Music writes them; " + n(by(/YouTube Music writes it/)) + " left plain as YouTube Music writes them; " + n(by(/until YouTube Music is checked|not found/)) + " left as they are until YouTube Music confirms |");
   add("| waiting for you | " + n(totals.review) + " (review.csv) |");
   add();
   add("## sources");
