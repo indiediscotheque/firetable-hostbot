@@ -26,6 +26,8 @@ getting the data in
         [--archive]   keep a copy in the room's database, so any rebuild (e.g. the GitHub Action) has it
   fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot, ADAM's
         moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs)
+  check-artists [--max-quota 3000]    look up on YouTube Music the artists whose accents the logs
+        disagree on (100 quota units each, most played first; refresh does this too). reconcile after
   probe [path ...]                    how each path is laid out (fields and kinds of values, no data)
   import-firebase <export.json>       or a Firebase console export instead
   fetch-lastfm [--user a,b]           every scrobble (default LASTFM_USERNAME); later runs fetch only new ones
@@ -138,6 +140,9 @@ async function main() {
     case "verify-uploads":
       await verify.verifyUploads(db, env, { limit: args.limit, recheckDays: args.recheckDays, maxQuota: args.maxQuota }, log);
       break;
+    case "check-artists":
+      await verify.checkArtists(db, env, { maxQuota: args.maxQuota }, log);
+      break;
     case "enrich":
       await sources.enrichArtists(db, env.LASTFM_APIKEY, Number(args.limit) || 3000, log);
       break;
@@ -172,9 +177,14 @@ async function main() {
         await sources.fetchLastfm(db, env.LASTFM_APIKEY, env.LASTFM_USERNAME, log);
       }
       log("== uploads");
-      await verify.verifyUploads(db, env, { maxQuota: args.maxQuota }, log);
+      var checked = await verify.verifyUploads(db, env, { maxQuota: args.maxQuota }, log);
       log("== reconcile");
-      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", accentMin: args.accentMin, log: log });
+      var rec = { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", accentMin: args.accentMin, log: log };
+      reconcile.reconcile(db, rec);
+      // artists whose accents the logs disagree on, looked up on YouTube Music
+      // with the quota left; when any were, reconcile again with the answers
+      var artists = await verify.checkArtists(db, env, { maxQuota: args.maxQuota, quotaUsed: checked && checked.quotaUsed }, log);
+      if (artists.checked) { log("== reconcile (with YouTube Music's answers)"); reconcile.reconcile(db, rec); }
       report.report(db, dir, log);
       if (args.publish) {
         log("== publish");

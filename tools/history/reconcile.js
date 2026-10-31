@@ -151,6 +151,18 @@ function reconcile(db, opts) {
   var uploadCurrent = new Map(); // "1abc" -> {artist, title} saved in globalTracks
   var isrcUploads = new Map();   // ISRC (SoundCloud) -> Set(upload)
 
+  var ytmNames = new Map(); // artist key -> Map(name on YouTube Music -> uploads)
+  function noteYtm(name, n) {
+    var k = tags.artistKeyOf(name);
+    if (!ytmNames.has(k)) ytmNames.set(k, new Map());
+    ytmNames.get(k).set(name, (ytmNames.get(k).get(name) || 0) + n);
+  }
+  // and the ones found by searching (check-artists)
+  db.prepare("SELECT query, result FROM lookups WHERE kind = 'ytm' AND result IS NOT NULL").all().forEach(function(r) {
+    (JSON.parse(r.result).names || []).forEach(function(n) { noteYtm(n, 1); });
+  });
+  var ytmChecked = new Set(db.prepare("SELECT query FROM lookups WHERE kind = 'ytm'").all().map(function(r) { return r.query; }));
+
   var rows = db.prepare("SELECT source, artist, title, type, cid, role, at, naive_tz, dj, weight, extra FROM obs ORDER BY id").iterate();
   var pendingAdamPlays = [];
   for (var row of rows) {
@@ -162,6 +174,8 @@ function reconcile(db, opts) {
         adamArtist.get(extra.adam_artist).add(row.artist);
       }
     }
+    // YouTube Music's own artist names: the Topic channels of uploads the room played
+    if (row.source === "yt:topic" && row.artist) noteYtm(row.artist, 1);
     if (extra && extra.amb && row.artist) {
       if (!mbidArtists.has(extra.amb)) mbidArtists.set(extra.amb, new Set());
       mbidArtists.get(extra.amb).add(row.artist);
@@ -358,6 +372,31 @@ function reconcile(db, opts) {
           (platform ? "YouTube/SoundCloud say this upload is the other one: " : "upload tagged both ways: ") + uploadUrl(up));
       }
     });
+  });
+
+  // A spelling with only vague tags (the bot saved "Remember (feat. The
+  // Presets)" as the artist, with no title) is the track of the upload it was
+  // logged for, when every log of it is of uploads of that one track. Logged
+  // anywhere without an upload (a scrobble of "Unknown - Intro"), or on
+  // uploads of two tracks, it stays apart.
+  var loose = new Set();
+  obsList.forEach(function(o) { if (!o[6]) loose.add(o[0]); });
+  var vague = new Map(); // si -> {mains: Set, bad}
+  uploadSpellings.forEach(function(m, up) {
+    var main = uploadMain.get(up);
+    m.forEach(function(w, si) {
+      if (!spellings[si].weak) return;
+      var v = vague.get(si);
+      if (!v) vague.set(si, v = { mains: new Set(), bad: false });
+      if (si === main || spellings[main].weak) v.bad = true;
+      else v.mains.add(main);
+    });
+  });
+  vague.forEach(function(v, si) {
+    if (v.bad || loose.has(si) || !v.mains.size) return;
+    var mains = Array.from(v.mains);
+    var root = uf.find(mains[0]);
+    if (mains.every(function(m) { return uf.find(m) === root; })) join(mains[0], si, "same-upload-vague", 0.95);
   });
 
   // the same ISRC (a recording's industry id, from SoundCloud) = the same track
@@ -578,16 +617,53 @@ function reconcile(db, opts) {
   // the same name with its accents back wins over the stripped one, when
   // enough logs have it (years of stripping for the old Last.fm bug mean the
   // stripped one is usually the most common)
+  // Which accents go on an artist's name across all their songs is checked
+  // against YouTube Music (the artist's Topic channel), or a mod's fix: the
+  // logs only suggest. YouTube Music writing it without accents settles it
+  // ("BLOW", not "Bülow"); an artist not found there yet is left as it is and
+  // listed for check-artists to look up.
+  var keysOfArtist = new Map(); // canonical key -> every key joined to it
+  artistMap.forEach(function(to, from) { if (!keysOfArtist.has(to)) keysOfArtist.set(to, []); keysOfArtist.get(to).push(from); });
+  var personArtist = new Map(); // key -> accented name a mod wrote
+  spellings.forEach(function(sp) {
+    if (!sp.sources.has("fb:tagLog") || !NON_ASCII_LETTER.test(sp.artist)) return;
+    sp.parsed.artists.forEach(function(a) { if (NON_ASCII_LETTER.test(a)) personArtist.set(tags.artistKeyOf(a), a); });
+  });
+  var artistAccents = []; // artist_accents.csv
+  var ytmWanted = [];     // to look up on YouTube Music
   bestArtistName.forEach(function(cur, c) {
-    var keys = [c];
-    artistMap.forEach(function(to, from) { if (to === c) keys.push(from); });
+    var keys = [c].concat((keysOfArtist.get(c) || []).filter(function(k) { return k !== c; }));
     var pick = null;
     keys.forEach(function(k) {
       var p = accents.pick("artist", k, cur.name);
       if (p && (!pick || p.n > pick.n)) pick = p;
     });
-    if (pick) bestArtistName.set(c, { name: pick.word, score: cur.score, accent: pick });
+    var ref = ytmRef(keys);
+    var person = keys.map(function(k) { return personArtist.get(k); }).filter(Boolean)[0];
+    var out = null;
+    var outcome = null;
+    if (person && nonAsciiCount(person) > nonAsciiCount(cur.name)) {
+      out = { word: person, n: 1, trusted: true, by: "a mod's fix" };
+      outcome = "accents from a mod's fix";
+    } else if (ref) {
+      var w = NON_ASCII_LETTER.test(ref.name) ? withAccentsOf(cur.name, ref.name) : null;
+      if (w && w !== cur.name) { out = { word: w, n: ref.n, trusted: true, by: "YouTube Music" }; outcome = "accents from YouTube Music"; }
+      else if (pick) outcome = "left as it is: YouTube Music writes it " + ref.name;
+    } else if (pick) {
+      outcome = ytmChecked.has(c) ? "left as it is: not found on YouTube Music" : "left as it is until YouTube Music is checked";
+      if (!ytmChecked.has(c)) ytmWanted.push({ key: c, name: cur.name, accented: pick.word, logs: pick.n });
+    }
+    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + pick.n + " logs)" : "", youtube_music: ref ? ref.name : "", outcome: outcome, shown_as: out ? out.word : cur.name });
+    if (out) bestArtistName.set(c, { name: out.word, score: cur.score, accent: out });
   });
+  // YouTube Music's most used spelling of an artist, from any of their keys
+  function ytmRef(keys) {
+    var best = null;
+    keys.forEach(function(k) {
+      (ytmNames.get(k) || new Map()).forEach(function(n, name) { if (!best || n > best.n) best = { name: name, n: n }; });
+    });
+    return best;
+  }
   // accented words in each artist's titles ("Jóga" for Björk), from every spelling
   spellings.forEach(function(sp) {
     if (sp.weak || !NON_ASCII_LETTER.test(sp.title)) return;
@@ -627,7 +703,7 @@ function reconcile(db, opts) {
       var at = text.indexOf(name);
       if (at === -1) return;
       text = text.slice(0, at) + best.name + text.slice(at + name.length);
-      why.push(name + "→" + best.name + " (" + best.accent.n + " logs" + (best.accent.trusted ? ", trusted source" : "") + ")");
+      why.push(name + "→" + best.name + " (" + (best.accent.by || best.accent.n + " logs" + (best.accent.trusted ? ", trusted source" : "")) + ")");
     });
     return text;
   }
@@ -676,6 +752,9 @@ function reconcile(db, opts) {
     var artistLogs = accentBook(accentMin);
     members.forEach(function(si) { artistLogs.note("a", "a", spellings[si].artist, spellings[si].seen, trusted(spellings[si])); });
     var ap = artistLogs.pick("a", "a", artist);
+    // YouTube Music knows this artist: only its accents
+    var apRef = ap && chosen.parsed.artists.length === 1 ? ytmRef([chosen.keys.artist].concat(keysOfArtist.get(chosen.keys.artist) || [])) : null;
+    if (apRef && (withAccentsOf(artist, apRef.name) || "").toLowerCase() !== ap.word.toLowerCase()) ap = null;
     if (ap) { artist = ap.word; restoredFrom.push("artist in " + ap.n + " logs" + (ap.trusted ? " (incl. a trusted source)" : "")); }
     // 2: word by word, from this artist's other songs ("Joga (Live)" -> "Jóga (Live)")
     var restoredWords = [];
@@ -884,6 +963,24 @@ function reconcile(db, opts) {
       seenPairs.add(k);
       insR.run(r.kind, r.a, r.b, r.a_label, r.b_label, Math.round(r.score * 1000) / 1000, r.evidence);
     });
+    // each artist's most played song, to search YouTube Music with
+    var bestSongOf = new Map();
+    var songsOf = new Map();
+    spellings.forEach(function(sp) {
+      if (sp.weak || sp.parsed.artists.length !== 1) return;
+      var k = artistMap.get(sp.keys.artist) || sp.keys.artist;
+      songsOf.set(k, (songsOf.get(k) || 0) + 1);
+      var b = bestSongOf.get(k);
+      if (!b || sp.plays > b.plays) bestSongOf.set(k, sp);
+    });
+    ytmWanted.forEach(function(w) {
+      var song = bestSongOf.get(w.key);
+      w.song = song ? song.title : "";
+      w.songs = songsOf.get(w.key) || 0;
+    });
+    ytmWanted.sort(function(a, b) { return b.songs - a.songs; });
+    store.setState(db, "ytm_wanted", ytmWanted);
+    store.setState(db, "artist_accents", artistAccents);
     store.setState(db, "reconcile", {
       at: Date.now(), zone: zone, zones: zones, tz: tzReport, window: windowMs / MIN, conflicts: conflicts,
       accentFixes: accentFixes.length, seconds: Math.round((Date.now() - started) / 1000)
@@ -911,6 +1008,22 @@ var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
 function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;
   return false;
+}
+// `name` with the accents `ref` has, letter by letter, in name's own capitals
+// ("Etienne De Crecy" + "Etienne de Crécy" -> "Etienne De Crécy"); null when
+// the letters aren't the same
+function withAccentsOf(name, ref) {
+  var LETTER = /[\p{L}\p{N}]/u;
+  var b = Array.from(String(ref).normalize("NFC")).filter(function(ch) { return LETTER.test(ch); });
+  var j = 0;
+  var out = "";
+  for (var ch of Array.from(String(name).normalize("NFC"))) {
+    if (!LETTER.test(ch)) { out += ch; continue; }
+    var r = b[j++];
+    if (r == null || tags.fold(r) !== tags.fold(ch)) return null;
+    out += ch !== ch.toLowerCase() ? r.toUpperCase() : r.toLowerCase();
+  }
+  return j === b.length ? out : null;
 }
 // an accent is a Latin letter with a mark (é, ø, Å, Ü); symbols, emoji and
 // other scripts are not ("♫ Artist", "Friends諝", "GRYFF グリフ")

@@ -59,7 +59,8 @@ Tick **force** to send it anyway. A preview never writes anything. `publish --of
 ## restoring accents
 For years accents and other non-English letters were stripped from tags so Last.fm would take the scrobbles. The history puts them back wherever enough logs still have them:
 - An accented name, title or word is restored when **at least 2 logs** write it that way (`--accent-min` changes this). One log from a trusted source is enough: a mod's logged fix, SoundCloud's own artist/title, a YouTube Topic channel, or Last.fm's spelling of the artist. It doesn't need to outnumber the stripped spelling, which years of stripping made the common one. If logs disagree on the accents (`Beyoncé` / `Beyoncè`), the most-logged version wins.
-- **Artist names** are restored on every song by that artist, featured spots included. An upload's own YouTube/SoundCloud data counts as one ordinary log for that (it can be another artist with the same letters: SoundCloud's `Márina` isn't Marina); it still restores the artist on its own track.
+- **Artist names** are checked against **YouTube Music** before they change across an artist's songs, featured spots included: the logs only suggest. The artist's Topic channel decides, letter by letter: `Tyler Touche` becomes `Tyler Touché`, `Etienne de Crecy` becomes `Etienne de Crécy` (not `Étienne`, which YouTube Music doesn't write), and `Blow`, `Ford`, `Lemaitre` or `Louis La Roche` stay as they are however many logs say `Bülow`, `FØRD`, `Lemâitre` or `Roché`. A mod's logged fix counts as well. The Topic channels come free from the uploads the room played; artists not found that way are looked up by searching for their most played song (`check-artists`, which `refresh` and the Action run: 100 YouTube quota units each, most played artists first, within the run's quota). Until an artist is confirmed, their name is left as it is. `artist_accents.csv` lists every artist the logs suggested accents for, what YouTube Music says and what was done.
+- On a single track, its own logs still restore its artist and title (an upload's SoundCloud tags, a Topic upload), unless YouTube Music writes that artist differently.
 - Only accented Latin letters count: `♫ Artist`, `█▬█ █ ▀█▀ Artist`, emoji and other scripts (`GRYFF グリフ`) are never put back. **Words** in titles are restored across the same artist's songs: if `Jóga` is well logged, `Joga (Live)` becomes `Jóga (Live)`. It's never across different artists, so "resume" never turns into "résumé".
 - Dropped letters and `?` count too: `Bjrk` and `Bj?rk` become `Björk`.
 - `restore_accents.csv` lists every change and why (how many logs). `publish --restore-accents` applies them to the room's tags; the Action does it by default.
@@ -88,7 +89,7 @@ Rohn Standard Notation is the guide for *recognising* a song, never a rule for r
 - **The old Last.fm accent bug**: `Bjrk`, `Bj?rk` and `Bjork` all match `Björk`.
 - **ISRC** (SoundCloud's recording id) links uploads of the same recording.
 - **Typos**: swapped letters and very close titles are merged; anything less certain goes to review. Numbers never count as typos (`Part 1` ≠ `Part 2`).
-- **Vague tags** (`Unknown - Intro`, `Track 3`) are never matched across uploads.
+- **Vague tags** (`Unknown - Intro`, `Track 3`) are never matched across uploads. One that is only ever logged for uploads of one track (the bot once saved `Remember (feat. The Presets)` as the artist, with no title) is that track's.
 
 **The best spelling** for each track is chosen in this order: a mod's fix (`tagLog`, then the room's saved tags), then the most-used spelling, then cleanliness, with accents restored. YouTube and SoundCloud's own data is just one source: their trusted fields (Topic channels, SoundCloud's artist/title) count about as much as an ADAM tag, plain video titles hardly at all, and channel names never decide how an artist is written.
 
@@ -131,6 +132,7 @@ To run it every Monday at 4:10 on the server (`crontab -e`):
 | `lastfm_split.csv` | how Last.fm's count was split across spellings |
 | `tag_fixes.csv` | uploads whose room tags differ from the track's best spelling (`publish --retag` applies them) |
 | `restore_accents.csv` | accents that will be put back (`publish --restore-accents`) |
+| `artist_accents.csv` | artists the logs would put accents on, what YouTube Music writes, and what was done |
 | `dead_uploads.csv` | uploads that are gone, with a working upload of the same track |
 | `djs.csv` | every DJ: plays, first plays, years active |
 | `merges.csv` | why each pair of spellings was joined |

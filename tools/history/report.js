@@ -75,6 +75,12 @@ function report(db, dir, log) {
       }
     })());
 
+  // artist names the logs would put accents on, and what YouTube Music says
+  var artistAccents = store.getState(db, "artist_accents") || [];
+  files["artist_accents.csv"] = csv.writeCsv(path.join(dir, "artist_accents.csv"),
+    ["artist", "logs_suggest", "youtube_music", "outcome", "shown_as"],
+    artistAccents.map(function(a) { return [a.name, a.logs_suggest, a.youtube_music, a.outcome, a.shown_as]; }));
+
   files["djs.csv"] = csv.writeCsv(path.join(dir, "djs.csv"),
     ["dj", "spellings_of_name", "plays", "first_plays", "tracks", "first_seen", "last_seen"],
     db.prepare("SELECT * FROM djs ORDER BY plays DESC").iterate().map(function(d) {
@@ -121,6 +127,9 @@ function report(db, dir, log) {
   if (tz[1] || !tz[2]) add("| ADAM clock (its exports) | " + clock(zones[1], tz[1]) + " |");
   if (tz[2]) add("| ADAM clock (moved into globalTracks) | " + clock(zones[2], tz[2]) + " |");
   add("| accents restored | " + n(st.accentFixes) + " (restore_accents.csv) |");
+  var by = function(re) { return artistAccents.filter(function(a) { return re.test(a.outcome); }).length; };
+  if (artistAccents.length) add("| artist names (artist_accents.csv) | " + n(by(/^accents from YouTube/)) + " accented as YouTube Music writes them, " + n(by(/mod's fix/)) +
+    " by a mod's fix; " + n(by(/YouTube Music writes it/)) + " left plain as YouTube Music writes them; " + n(by(/until YouTube Music is checked|not found/)) + " left as they are until YouTube Music confirms |");
   add("| waiting for you | " + n(totals.review) + " (review.csv) |");
   add();
   add("## sources");

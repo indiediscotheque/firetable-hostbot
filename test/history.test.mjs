@@ -86,9 +86,24 @@ test("toolkit: ADAM + Last.fm + Firebase become one history", async () => {
     assert.match(foals, /all 2 versions: 6 plays/);
     assert.match(run("lookup", "Bear Hands - 2AM"), /2 spellings/, "the Sheets-damaged '2:00 AM' joined '2AM'");
     assert.match(run("lookup", "Calvin Harris & Dua Lipa - One Kiss"), /3 spellings/, "feat. and & spellings joined");
-    // "Sigur Rós" is in 3 logs (ADAM, a playlist): restored. "Hoppípolla" is in
-    // only 1 (one playlist entry): not enough, the title stays as it is
-    assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppipolla\n/, "artist accents restored, a single log isn't enough for the title");
+    // "Sigur Rós" is in 3 logs (ADAM, a playlist), but an artist's name changes
+    // on all their songs only as YouTube Music writes it: until it's looked up,
+    // it stays, and the artist is listed for check-artists
+    assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Ros - Hoppipolla\n/, "not checked on YouTube Music yet: left as it is");
+    assert.match(readFileSync(join(dir, "artist_accents.csv"), "utf8"), /Sigur Ros,Sigur Rós \(\d+ logs\),,left as it is until YouTube Music is checked,Sigur Ros/);
+    {
+      const store = require("../tools/history/store.js");
+      const db = store.open(dir);
+      const wanted = store.getState(db, "ytm_wanted");
+      assert.ok(wanted.some((w) => w.key === "sigurros" && w.song === "Hoppipolla"), "check-artists would search for its most played song");
+      // what check-artists found: the "Sigur Rós - Topic" channel
+      db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('ytm', 'sigurros', ?, 1)").run(JSON.stringify({ names: ["Sigur Rós"] }));
+      db.close();
+    }
+    run("reconcile");
+    run("report");
+    // "Hoppípolla" is in only 1 log (one playlist entry): not enough, the title stays as it is
+    assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppipolla\n/, "YouTube Music writes it 'Sigur Rós': restored; a single log isn't enough for the title");
     assert.match(readFileSync(join(dir, "restore_accents.csv"), "utf8"), /Sigur Ros - Hoppipolla,Sigur Rós - Hoppipolla,/);
     assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /\| plays \| 19 /);
 
@@ -225,16 +240,29 @@ test("accents: restored when enough logs (or a trusted source) have them, word b
     run("verify-uploads");
     run("reconcile");
     const look = (q) => run("lookup", q).split("\n").find((l) => /^track /.test(l));
+    // an artist's name changes on all their songs only as YouTube Music writes it
+    assert.match(look("Bjork - Hyperballad"), /: Bjrk - Hyperballad$/, "not looked up on YouTube Music yet: the artist is left as it is");
+    assert.match(look("Sigur Ros - Saeglopur"), /: Sigur Rós - Sæglópur$/, "an upload's own SoundCloud tags still put the accents on its own track");
+    const db2 = store.open(dir);
+    const ytm = db2.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('ytm', ?, ?, 1)");
+    ytm.run("bjork", JSON.stringify({ names: ["Björk"] })); // what check-artists found: "Björk - Topic"
+    ytm.run("dram", JSON.stringify({ names: ["DRÄM"] }));
+    ytm.run("foals", JSON.stringify({ names: ["Foals"] }));
+    db2.close();
+    run("reconcile");
     assert.match(look("Bjork - Joga"), /: Björk - Jóga$/, "two playlists write it with accents: restored");
     assert.match(look("Bjork - Joga (Live)"), /: Björk - Jóga \(Live\)$/, "'Bj?rk' and the live version's title restored from the artist's other songs");
     assert.match(look("Bjork - Hyperballad"), /: Björk - Hyperballad$/, "'Bjrk' (letter dropped) restored");
     assert.match(look("Foals - My Number"), /: Foals - My Number$/, "one odd spelling ('Nümber') isn't enough");
+    run("report");
+    assert.match(readFileSync(join(dir, "artist_accents.csv"), "utf8"), /Bjork,Björk \(\d+ logs\),Björk,accents from YouTube Music,Björk/);
     assert.match(look("Gorillaz - Andromeda"), /: Gorillaz - Andromeda feat\. DRÄM$/, "a featured artist's name restored too");
     assert.match(look("Sigur Ros - Saeglopur"), /: Sigur Rós - Sæglópur$/, "SoundCloud's own tags: trusted, restored from one log");
+    run("report");
     const why = readFileSync(join(dir, "restore_accents.csv"), "utf8");
     assert.match(why, /Bj\?rk - Joga \(Live\),Björk - Jóga \(Live\),.*Joga→Jóga \(2 logs\)/, "the report says why");
     run("reconcile", "--accent-min", "3");
-    assert.match(look("Bjork - Joga"), /: Björk - Joga$/, "--accent-min 3: 'Björk' is in 3 logs and stays, 'Jóga' in 2 doesn't");
+    assert.match(look("Bjork - Joga"), /: Björk - Joga$/, "--accent-min 3: 'Björk' (YouTube Music) stays, 'Jóga' in 2 logs doesn't");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -364,6 +392,37 @@ test("ADAM's moved dates: the shift is measured against Last.fm and taken off, s
     assert.match(winter, /first: 2017-01-03 01:30 by ana/, "at the scrobble's time, with ADAM's DJ");
     assert.match(run("lookup", "Shift Act 6 - Song 6"), /1 plays[^]*first: 2017-07-09 01:30 by ana/, "summer time too (5 hours, not 6)");
     assert.match(run("lookup", "Bot Era - Song"), /1 plays[^]*first: 2023-06-01 20:00 by ben/, "the bot's own dates are left alone");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a vague spelling (the whole tag saved as the artist) is its upload's track, not a track of its own", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const entry = (name, cid) => ({ name, type: 2, cid });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({
+      globalTracks: {
+        // the bot couldn't split it: the whole tag is the artist, no title
+        "2231205170": { artist: "Remember (feat. The Presets)", type: 2, first_play_date: 1600000000000, first_play_dj: "ana" },
+        // a vague spelling on uploads of two different songs stays apart
+        "2900000001": { artist: "Intro", type: 2 }, "2900000002": { artist: "Intro", type: 2 }
+      },
+      playlists: { u: { p: { name: "x", list: {
+        a: entry("Steve Angello - Remember (feat. The Presets)", "231205170"), b: entry("Steve Angello - Remember (feat. The Presets)", "231205170"),
+        c: entry("The xx - Intro", "900000001"), d: entry("M83 - Intro", "900000002")
+      } } } }
+    }));
+    run("import-firebase", join(dir, "fb.json"));
+    run("reconcile");
+    run("report");
+    const look = run("lookup", "Steve Angello - Remember (feat. The Presets)");
+    assert.match(look, /track \S+: Steve Angello - Remember \(feat\. The Presets\)\n/);
+    assert.match(look, /1 plays .* 1 uploads, 2 spellings/, "the vague spelling joined its upload's track");
+    const tracks = readFileSync(join(dir, "tracks.csv"), "utf8");
+    assert.doesNotMatch(tracks, /^[^,]+,Remember \(feat\. The Presets\),/m, "no empty track left behind");
+    assert.match(run("lookup", "The xx - Intro"), /1 spellings/, "'Intro' on two songs' uploads joins neither");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

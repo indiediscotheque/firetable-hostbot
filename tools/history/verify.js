@@ -118,6 +118,63 @@ async function verifyUploads(db, env, opts, log) {
   return counts;
 }
 
+// How YouTube Music writes the artists whose accents the logs disagree on,
+// for the ones no upload the room played came from their Topic channel. One
+// search per artist (100 quota units): their most played song; the artist is
+// the Topic (or official) channel among the results whose name has the same
+// letters. Answers are kept, so each artist is looked up once; the most
+// played artists go first, within the run's quota.
+async function checkArtists(db, env, opts, log) {
+  var tags = require("../../lib/tags");
+  var wanted = store.getState(db, "ytm_wanted") || [];
+  var done = new Set(db.prepare("SELECT query FROM lookups WHERE kind = 'ytm'").all().map(function(r) { return r.query; }));
+  var todo = wanted.filter(function(w) { return !done.has(w.key); });
+  if (!todo.length) return { checked: 0, quotaUsed: 0 };
+  if (!env.YOUTUBE_KEY) { log("YouTube Music: " + todo.length + " artists to check, skipped (no YOUTUBE_KEY)"); return { checked: 0, quotaUsed: 0 }; }
+  var budget = Math.max(0, (Number(opts.maxQuota) || 3000) - (Number(opts.quotaUsed) || 0));
+  var n = Math.min(todo.length, Math.floor(budget / 100));
+  log("YouTube Music: checking " + n + " of " + todo.length + " artists" + (n < todo.length ? " (the rest on the next runs, within the quota)" : "") + "...");
+  var save = db.prepare("INSERT OR REPLACE INTO lookups (kind, query, result, fetched_at) VALUES ('ytm', ?, ?, ?)");
+  var counts = { checked: 0, quotaUsed: 0, found: 0 };
+  for (var i = 0; i < n; i++) {
+    var w = todo[i];
+    var q = w.name + (w.song ? " " + w.song : "");
+    var url = new URL("https://www.googleapis.com/youtube/v3/search");
+    url.searchParams.set("part", "snippet");
+    url.searchParams.set("type", "video");
+    url.searchParams.set("maxResults", "10");
+    url.searchParams.set("q", q);
+    url.searchParams.set("fields", "items(snippet(channelTitle,title))");
+    url.searchParams.set("key", env.YOUTUBE_KEY);
+    var res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    var j = await res.json().catch(function() { return null; });
+    counts.quotaUsed += 100;
+    if (!res.ok || !j || !Array.isArray(j.items)) {
+      var msg = j && j.error && j.error.message || "HTTP " + res.status;
+      log("  YouTube Music check stopped: " + msg);
+      break;
+    }
+    // the artist's Topic channel (YouTube Music) if it's there, else their own
+    // channel ("Artist", "ArtistVEVO", "Artist Official") with the same letters
+    var same = tags.squash(w.name);
+    var topics = [];
+    var own = [];
+    j.items.forEach(function(it) {
+      var ch = String(it.snippet && it.snippet.channelTitle || "");
+      var name = ch.replace(/\s-\sTopic$/, "").replace(/\s*(VEVO|Official)$/i, "").trim();
+      if (tags.squash(name) !== same) return;
+      var list = /\s-\sTopic$/.test(ch) ? topics : own;
+      if (list.indexOf(name) === -1) list.push(name);
+    });
+    var names = topics.length ? topics : own;
+    save.run(w.key, JSON.stringify({ names: names, q: q }), Date.now());
+    counts.checked++;
+    if (names.length) counts.found++;
+  }
+  log("  " + counts.checked + " artists checked, " + counts.found + " found on YouTube (" + counts.quotaUsed + " quota units)");
+  return counts;
+}
+
 // The platforms' answers as observations (rebuilt each time from lookups).
 function toObservations(db) {
   return store.tx(db, function() {
@@ -184,4 +241,4 @@ function deadUploads(db) {
 }
 function url(type, cid) { return type == 1 ? "https://youtu.be/" + cid : "https://api.soundcloud.com/tracks/" + cid; }
 
-module.exports = { verifyUploads: verifyUploads, toObservations: toObservations, deadUploads: deadUploads };
+module.exports = { verifyUploads: verifyUploads, checkArtists: checkArtists, toObservations: toObservations, deadUploads: deadUploads };
