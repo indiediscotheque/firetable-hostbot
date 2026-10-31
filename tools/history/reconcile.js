@@ -225,7 +225,11 @@ function reconcile(db, opts) {
       // a YouTube channel name ("ArtistVEVO", "Artist - Topic") isn't how the room writes the artist
       var channel = /vevo$|\s-\stopic$/i.test(sp.artist) || onlyFrom(sp, WEAK_PLATFORM);
       d.set(a, (d.get(a) || 0) + (channel ? 0.1 : sp.seen + sp.maxWeight * 3));
-      if (!channel) accents.note("artist", k, a, sp.seen, trusted(sp));
+      // an upload's own YouTube/SoundCloud data is one log, and not a trusted one,
+      // for every song by an artist: it can be another artist with the same
+      // letters (SoundCloud's "Márina" is not Marina)
+      var uploadOnly = onlyFrom(sp, ALL_PLATFORM);
+      if (!channel) accents.note("artist", k, a, uploadOnly ? 1 : sp.seen, trusted(sp) && !uploadOnly);
     });
   });
   var aliasReasons = [];
@@ -667,6 +671,12 @@ function reconcile(db, opts) {
     members.forEach(function(si) { titleLogs.note("t", "t", spellings[si].title, spellings[si].seen, trusted(spellings[si])); });
     var tp = titleLogs.pick("t", "t", title);
     if (tp) { title = tp.word; restoredFrom.push("title in " + tp.n + " logs" + (tp.trusted ? " (incl. a trusted source)" : "")); }
+    // the artist as other spellings of this track have it (an upload's own
+    // YouTube/SoundCloud data counts here, on its own track)
+    var artistLogs = accentBook(accentMin);
+    members.forEach(function(si) { artistLogs.note("a", "a", spellings[si].artist, spellings[si].seen, trusted(spellings[si])); });
+    var ap = artistLogs.pick("a", "a", artist);
+    if (ap) { artist = ap.word; restoredFrom.push("artist in " + ap.n + " logs" + (ap.trusted ? " (incl. a trusted source)" : "")); }
     // 2: word by word, from this artist's other songs ("Joga (Live)" -> "Jóga (Live)")
     var restoredWords = [];
     title = title.split(WORD_SPLIT).map(function(tok) {
@@ -902,15 +912,16 @@ function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;
   return false;
 }
-var DECORATION = /(?![\x00-\x7F])[\p{S}\p{C}]/u;
+// an accent is a Latin letter with a mark (é, ø, Å, Ü); symbols, emoji and
+// other scripts are not ("♫ Artist", "Friends諝", "GRYFF グリフ")
+var NOT_AN_ACCENT = /(?![\x00-\x7F])[^\p{Script=Latin}\p{M}]/u;
 function accentBook(min) {
   var book = new Map(); // scope|base -> Map(word -> {n, trusted})
   function baseOf(w) { return tags.fold(w).replace(/\s+/g, " ").trim(); }
   return {
     note: function(scope, key, word, n, isTrusted) {
       if (!word || !NON_ASCII_LETTER.test(word)) return;
-      // decoration ("♫ Artist", "█▬█ █ ▀█▀ Artist", emoji) is not an accent
-      if (DECORATION.test(word)) return;
+      if (NOT_AN_ACCENT.test(word)) return;
       [baseOf(word), "~" + skeleton(word)].forEach(function(b, i) {
         if (i === 1 && !usableSkeleton(word, skeleton(word))) return;
         var k = scope + "|" + (key == null ? "" : key + "|") + b;
@@ -950,6 +961,7 @@ function matchCase(word, like) {
 
 var WEAK_PLATFORM = new Set(["yt", "sc"]);
 var TRUSTED_PLATFORM = new Set(["yt:topic", "sc:meta"]);
+var ALL_PLATFORM = new Set(["yt", "sc", "yt:topic", "sc:meta"]);
 function onlyFrom(sp, set) {
   if (!sp.sources.size) return false;
   for (var s of sp.sources) if (!set.has(s)) return false;

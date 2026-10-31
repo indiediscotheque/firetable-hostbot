@@ -177,21 +177,35 @@ test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and ex
   }
 });
 
-test("accents: decoration (♫, block letters, emoji) is never put back as if it were an accent", () => {
+test("accents: decoration (♫, block letters, emoji), other scripts and one upload's data are never put back on an artist's songs", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
-  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
   try {
     const t = (artist, cid) => ({ artist, title: "Someday", type: 1, first_play_date: 1600000000000 });
     writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: {
       "1someday0001": t("Two Door Cinema Club"), "1someday0002": t("Two Door Cinema Club"), "1someday0003": t("Two Door Cinema Club"),
       "1someday0004": t("♫ Two Door Cinema Club"), "1someday0005": t("♫ Two Door Cinema Club"),
       "1someday0006": t("█▬█ █ ▀█▀ Two Door Cinema Club"), "1someday0007": t("█▬█ █ ▀█▀ Two Door Cinema Club"),
+      "1friends0001": { artist: "Friends", title: "I'm His Girl", type: 1 }, "1friends0002": { artist: "Friends諝", title: "I'm His Girl", type: 1 },
+      "1friends0003": { artist: "Friends諝", title: "I'm His Girl", type: 1 }, "1friends0004": { artist: "Friends", title: "I'm His Girl", type: 1 },
+      "1friends0005": { artist: "Friends", title: "I'm His Girl", type: 1 },
       "1sigurros001": { artist: "Sigur Ros", title: "Hoppipolla", type: 1 }, "1sigurros002": { artist: "Sigur Rós", title: "Hoppipolla", type: 1 },
-      "1sigurros003": { artist: "Sigur Rós", title: "Hoppipolla", type: 1 }
+      "1sigurros003": { artist: "Sigur Rós", title: "Hoppipolla", type: 1 },
+      // the room's Marina, and an upload SoundCloud says is by "Márina" (another artist)
+      "1marina00001": { artist: "Marina", title: "Primadonna", type: 1 }, "1marina00002": { artist: "Marina", title: "Primadonna", type: 1 },
+      "2300259189": { artist: "Marina", title: "Around", type: 2 }
     } }));
     run("import-firebase", join(dir, "fb.json"));
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('sc', '300259189', ?, 1)").run(JSON.stringify({ title: "Around", user: "marina", artist: "Márina", release: "Around" }));
+    db.close();
+    run("verify-uploads");
     run("reconcile");
+    assert.match(run("lookup", "Marina - Primadonna"), /track \S+: Marina - Primadonna\n/, "one upload's SoundCloud data doesn't respell the artist everywhere");
+    assert.match(run("lookup", "Marina - Around"), /track \S+: Márina - Around\n/, "only on its own track");
     assert.match(run("lookup", "Two Door Cinema Club - Someday"), /track \S+: Two Door Cinema Club - Someday\n/, "the plain name stays");
+    assert.match(run("lookup", "Friends - I'm His Girl"), /track \S+: Friends - I'm His Girl\n/, "letters of another script aren't accents");
     assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppipolla\n/, "a real accent is still put back");
   } finally {
     rmSync(dir, { recursive: true, force: true });
