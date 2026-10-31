@@ -264,12 +264,12 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
       users: { "uidDjRob000000000000000001": { username: "rob" } },
       globalTracks: {
         // an early SoundCloud upload: "2" + "17819", as short as an ADAM id
-        "217819": { artist: "Early Act", title: "Fool", type: 2, first_play_date: 1545087896476, first_play_dj: "Keeraah", last_play_date: 1706742946446, last_play_dj: "matt" },
+        "217819": { artist: "Early Act", title: "Fool", type: 2, first_play_date: 1545087896476, first_play_dj: "Wendee", last_play_date: 1706742946446, last_play_dj: "matt" },
         // a bot bug once left the type out of the key
         "undefinedAbCdEfGhIjK": { artist: "Lost Key", title: "Found" },
         "undefinedundefined": { artist: "Fakey", title: "McFakesong" },
         // DJ saved as a uid; the first play logged after the last one; type as text
-        "1qwertyuiopa": { artist: "Uid Band", title: "Who", type: "1", first_play_date: 1600000000000, first_play_dj: "uidDjRob000000000000000001", last_play_date: 1500000000000, last_play_dj: "keeraah" },
+        "1qwertyuiopa": { artist: "Uid Band", title: "Who", type: "1", first_play_date: 1600000000000, first_play_dj: "uidDjRob000000000000000001", last_play_date: 1500000000000, last_play_dj: "wendee" },
         // only a last play (most entries ADAM had no first play for)
         "1lastonly000": { artist: "Last Only", title: "Once", type: 1, last_play_date: 1480000000000, last_play_dj: "eve" },
         // one DJ, two names: tools/history/dj-aliases.csv, and one only in this data folder
@@ -295,11 +295,11 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
     assert.match(names, /first: 2017-07-14 .* by CJ\n/, "the repo's dj-aliases.csv: 'CJ-' is CJ");
     assert.match(names, /last: {2}2020-09-13 .* by Rocka\n/, "and the data folder's own list is read too");
     const fool = run("lookup", "Early Act - Fool");
-    assert.match(fool, /first: 2018-12-17 .* by Keeraah/, "ADAM's first play and DJ");
+    assert.match(fool, /first: 2018-12-17 .* by Wendee/, "ADAM's first play and DJ");
     assert.match(fool, /last: {2}2024-03-09 .* by eve/, "the room's later play is the last one");
     assert.match(fool, /1 uploads/, "the room's play of SoundCloud 17819 is the same upload");
     const who = run("lookup", "Uid Band - Who");
-    assert.match(who, /first: 2017-07-14 .* by Keeraah/, "a first play logged after the last one: the earlier is first; a DJ shows as most often written");
+    assert.match(who, /first: 2017-07-14 .* by Wendee/, "a first play logged after the last one: the earlier is first; a DJ shows as most often written");
     assert.match(who, /last: {2}2020-09-13 .* by rob/, "a DJ saved as a uid shows by name");
     assert.match(run("lookup", "Last Only - Once"), /first: 2016-11-24 .* by eve/, "a last play alone is still a play");
   } finally {
