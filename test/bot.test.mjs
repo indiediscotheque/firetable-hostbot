@@ -471,6 +471,9 @@ const scenarios = {
     check(await waitFor(p, "push: on (new keys saved in the database, subject https://room.example)"), "first start: makes a key pair and keeps it in the database");
     let st = await get("/");
     check(st.pushKey && st.pushVapid && st.pushKey === st.pushVapid.publicKey, "publishes the public key for the site");
+    // the bot drops old devices just after it says push is on: wait for it
+    await waitFor(p, "push: dropping 1 device(s) not seen in 60 days");
+    for (let i = 0; i < 30 && st.pushSubs.dj1 && st.pushSubs.dj1.old_dj1x; i++) { await sleep(100); st = await get("/"); }
     check(st.pushSubs.dj1 && !st.pushSubs.dj1.old_dj1x && st.pushSubs.dj1.phone_dj1, "devices not opened in 60 days are dropped");
     await say("dj2", "hey @dj1 come back");
     check(await waitFor(p, "fake push /fcm/send/dj1-phone [vapid ok ttl=86400]: dj2 | hey @dj1 come back | badge=1"), "a mention reaches the phone, signed, with the unread count");
