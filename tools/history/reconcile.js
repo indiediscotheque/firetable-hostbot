@@ -779,18 +779,25 @@ function reconcile(db, opts) {
     // (accents per YouTube Music), or with YouTube Music's accents; otherwise
     // the artist stays as typed
     // ("SebastiAn", "A R I Z O N A", "Tegan and Sara" are left alone)
-    var aBest = null;
+    // One way of writing an artist everywhere, starting from the tag as typed:
+    // a mod's spelling sets capitals and punctuation ("SebastiAn"), the room's
+    // usual spelling only puts missing spaces back ("TameImpalaVEVO"), and
+    // YouTube Music sets the accents, in the tag's own capitals. Nothing else
+    // ("MAM", "A R I Z O N A", "For Esmé" stay).
+    var unifyArtist = function(cur) { return cur; };
     if (chosen.parsed.artists.length === 1) {
       var ak = artistMap.get(chosen.keys.artist) || chosen.keys.artist;
       var bn = bestArtistName.get(chosen.keys.artist);
       var mine = personSpelling.get(ak);
-      var mineRef = mine ? ytmRef([ak].concat(keysOfArtist.get(ak) || [])) : null;
-      if (mineRef) mine = withAccentsOf(mine, mineRef.name) || mine;
-      // without YouTube Music's word, a mod's spelling never takes characters out
-      if (mine && (mineRef || nonAsciiCount(mine) >= nonAsciiCount(chosen.artist))) aBest = { name: mine };
-      else if (bn && bn.accent && bn.accent.by) aBest = bn;
-      // or the room's usual spelling, when only the spaces differ ("TameImpalaVEVO")
-      else if (bn && bn.name.replace(/\s+/g, "") === tags.tidy(chosen.artist, "x", "junk").artist.replace(/\s+/g, "")) aBest = bn;
+      var aRef = ytmRef([ak].concat(keysOfArtist.get(ak) || []));
+      var spaces = function(x) { return (x.match(/\s/g) || []).length; };
+      unifyArtist = function(cur) {
+        var r = cur;
+        if (mine) r = withAccentsOf(mine, cur) || (nonAsciiCount(mine) >= nonAsciiCount(cur) ? mine : cur);
+        else if (bn && bn.name.replace(/\s+/g, "") === cur.replace(/\s+/g, "") && spaces(bn.name) > spaces(cur)) r = bn.name;
+        if (aRef) r = withAccentsOf(r, aRef.name) || r;
+        return r;
+      };
     }
     if (artist !== chosen.artist || title !== chosen.title) accentFixes.push({ from: chosen.artist + " - " + chosen.title, to: artist + " - " + title, why: restoredFrom.join("; ") });
 
@@ -824,9 +831,11 @@ function reconcile(db, opts) {
     var tidyJunk = tags.tidy(artist, title, "junk");
     var tidyRsn = tags.tidy(artist, title, "rsn");
     // one way of writing each artist everywhere: a mod's fix first, then the most used
-    if (aBest && chosen.parsed.artists.length === 1 && !chosen.parsed.featured.length) {
-      if (tags.artistKeyOf(tidyJunk.artist) === tags.artistKeyOf(aBest.name) || artistMap.get(tags.artistKeyOf(tidyJunk.artist)) === chosen.keys.artist) tidyJunk.artist = aBest.name;
-      if (tags.artistKeyOf(tidyRsn.artist) === tags.artistKeyOf(aBest.name) || artistMap.get(tags.artistKeyOf(tidyRsn.artist)) === chosen.keys.artist) tidyRsn.artist = aBest.name;
+    if (chosen.parsed.artists.length === 1 && !chosen.parsed.featured.length) {
+      [tidyJunk, tidyRsn].forEach(function(td) {
+        var tk = tags.artistKeyOf(td.artist);
+        if (tk === chosen.keys.artist || (artistMap.get(tk) || tk) === (artistMap.get(chosen.keys.artist) || chosen.keys.artist)) td.artist = unifyArtist(td.artist);
+      });
     }
     trackRows.push({
       id: id, root: root, artist: artist, title: title,

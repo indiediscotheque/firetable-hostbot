@@ -168,6 +168,13 @@ test("tidy never loses what a tag says about the song: only upload junk goes, RS
   assert.equal(rsn("Analog People In a Digital World", "Liar - Guys In Venice Remix"), "Analog People In a Digital World - Liar (Guys In Venice Remix)");
   assert.equal(rsn("Gramatik", "Corporate Demons Feat. Luxas"), "Gramatik - Corporate Demons feat. Luxas");
   assert.equal(rsn("Grum", "Heartbeats [Worship Remix]"), "Grum - Heartbeats (Worship Remix)");
+  assert.equal(rsn("N.A.S.A.", "Gifted (Aston Shuffle Remix feat. Kanye West, Santigold & Lykke Li) (Bonus Track)"),
+    "N.A.S.A. - Gifted (Aston Shuffle Remix feat. Kanye West, Santigold & Lykke Li) (Bonus Track)", "a credit inside a version's brackets stays there");
+  assert.equal(rsn("Major Lazer feat. Amber (of Dirty Projectors)", "Get Free"), "Major Lazer - Get Free feat. Amber (of Dirty Projectors)");
+  assert.equal(rsn("September 87", "Bad Dream Baby feat. Dream Fiend (Dream Fiend Cut)"), "September 87 - Bad Dream Baby feat. Dream Fiend (Dream Fiend Cut)");
+  assert.equal(junk("MNDR", "#1 in Heaven"), "MNDR - #1 in Heaven", "'#1' is not a hashtag");
+  assert.equal(junk("Artist", "Song #tbt"), "Artist - Song");
+  assert.equal(junk("Miike Snow", "Paddling Out (Jacques Lu Cont Remix (Audio))"), "Miike Snow - Paddling Out (Jacques Lu Cont Remix)");
   // upload junk out
   assert.equal(junk("Datarock", "Bulldozer [Official Music Video]"), "Datarock - Bulldozer");
   assert.equal(junk("Oleska", "Road Trip (Original Mix) [OUT NOW ON THE BEARDED MAN]"), "Oleska - Road Trip (Original Mix)");
@@ -186,6 +193,7 @@ test("tidy never loses what a tag says about the song: only upload junk goes, RS
   assert.equal(ap("walking on a dream"), "Walking on a Dream");
   assert.equal(ap("Waiting For You feat. Black Hills (Oliver Remix)"), "Waiting for You feat. Black Hills (Oliver Remix)");
   assert.equal(ap("Hollywood feat. Penguin Prison (felix da housecat remix)"), "Hollywood feat. Penguin Prison (felix da housecat Remix)", "names in parentheses as typed");
+  assert.equal(tags.tidy("Flight Facilities", "37,000 ft Mixtape (2013)", "rsn").title, "37,000 ft Mixtape (2013)", "units after numbers as typed");
   for (const keep of ["Comme des enfants", "Je ne regrette rien", "ISLANDS", "iPhone Love", "Where Are Ü Now", "Mr. Brightside", "Dancing in the Moonlight", "2 Hearts"]) assert.equal(ap(keep), keep, keep);
   assert.equal(tags.tidy("Tame Impala", "The Less I Know The Better", "rsn").title, "The Less I Know the Better");
   assert.equal(tags.tidy("Tame Impala", "The Less I Know The Better", "junk").title, "The Less I Know The Better", "junk never changes capitals");
