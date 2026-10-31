@@ -121,6 +121,9 @@ async function publish(db, env, opts, log) {
     if (current === wanted) continue;
     var accentOnly = tags.fold(current) === tags.fold(wanted) || skeletonOf(wanted) === tags.squash(current);
     if (opts.retag || tidied || (opts.restoreAccents && accentOnly)) {
+      // the rules take an upload's artist and title as text of 500 characters
+      // at most: a story pasted in as a title stays as it is
+      if (!fits(sh.a) || !fits(sh.t)) { counts.tooLong = (counts.tooLong || 0) + 1; continue; }
       updates[up + "artist"] = sh.a;
       updates[up + "title"] = sh.t;
       tagBackup[u.type + "" + u.cid] = { a: u.artist, t: u.title || "", na: sh.a, nt: sh.t };
@@ -190,25 +193,20 @@ async function publish(db, env, opts, log) {
   // first, so `undo-tags` can put them back (historyArchive is the bot's own)
   var runId = String(Date.now());
   var backupKeys = Object.keys(tagBackup);
-  for (var b = 0; b < backupKeys.length; b += 2500) {
-    var part = {};
-    backupKeys.slice(b, b + 2500).forEach(function(k) { part["historyArchive/tagBackups/" + runId + "/" + k] = tagBackup[k]; });
-    await c.update(part);
-  }
+  var backupUpdates = {};
+  backupKeys.forEach(function(k) { backupUpdates["historyArchive/tagBackups/" + runId + "/" + k] = tagBackup[k]; });
+  await writeAll(c, backupUpdates, log);
   await c.update({ ["historyArchive/tagBackupRuns/" + runId]: { at: { ".sv": "timestamp" }, uploads: backupKeys.length } });
   log("  " + backupKeys.length + " upload tags backed up (undo with: undo-tags)");
 
   // ready goes last, so the bot only switches over once everything is there
   var ready = { "globalSongsMeta/ready": true, "globalSongsMeta/published_at": { ".sv": "timestamp" }, "globalSongsMeta/tracks": counts.tracks, "globalSongsMeta/songs": counts.songs, "globalSongsMeta/plays": counts.plays };
   paths = paths.filter(function(p) { return p.indexOf("globalSongsMeta/") !== 0; });
-  var size = 2500;
-  for (var i = 0; i < paths.length; i += size) {
-    var chunk = {};
-    paths.slice(i, i + size).forEach(function(p) { chunk[p] = updates[p]; });
-    await c.update(chunk);
-    if ((i / size) % 20 === 0) log("  " + Math.min(i + size, paths.length).toLocaleString("en-US") + " / " + paths.length.toLocaleString("en-US"));
-  }
+  var rest = {};
+  paths.forEach(function(p) { rest[p] = updates[p]; });
+  var skipped = await writeAll(c, rest, log, true);
   await c.update(ready);
+  if (skipped.length) log("  " + skipped.length + " values the database refused were left out: " + skipped.slice(0, 10).join(", ") + (skipped.length > 10 ? ", ..." : ""));
   log("published. The bot now shows true first plays and the room's own play counts (undo with: publish --off)");
   return counts;
 }
@@ -219,33 +217,70 @@ async function undoTags(env, opts, log) {
   var c = fb.client(env);
   var runs = (await c.get("historyArchive/tagBackupRuns")) || {};
   var ids = Object.keys(runs).sort();
-  var id = opts.run ? String(opts.run) : ids[ids.length - 1];
-  if (!id || !runs[id]) throw new Error(ids.length ? "no backup " + opts.run + "; there are: " + ids.join(", ") : "no tag backups yet: nothing to undo");
-  var backup = (await c.get("historyArchive/tagBackups/" + id)) || {};
+  // one run (--run), or every one not undone yet, newest first: a publish
+  // that stopped half way and its re-run are undone together
+  var todo = opts.run ? [String(opts.run)] : ids.filter(function(id) { return !runs[id].undone; }).reverse();
+  if (opts.run && !runs[opts.run]) throw new Error(ids.length ? "no backup " + opts.run + "; there are: " + ids.join(", ") : "no tag backups yet: nothing to undo");
+  if (!todo.length) throw new Error(ids.length ? "every publish is undone already" : "no tag backups yet: nothing to undo");
   var now = {};
   await c.getPaged("globalTracks", 20000, function(page) { Object.assign(now, page); });
-  var updates = {};
-  var restored = 0;
-  var kept = 0;
-  Object.keys(backup).forEach(function(up) {
-    var b = backup[up];
-    var cur = now[up] || {};
-    if ((cur.artist || "") !== (b.na || "") || (cur.title || "") !== (b.nt || "")) { kept++; return; }
-    updates["globalTracks/" + up + "/artist"] = b.a;
-    updates["globalTracks/" + up + "/title"] = b.t;
-    restored++;
-  });
-  log(restored + " upload tags " + (opts.write ? "put back" : "would be put back") + " from the publish of " + new Date(Number(id)).toISOString() +
-    "; " + kept + " changed since (left as they are)");
-  if (!opts.write) { log("nothing sent (add --write)"); return { restored: restored, kept: kept }; }
-  var paths = Object.keys(updates);
-  for (var i = 0; i < paths.length; i += 2500) {
-    var chunk = {};
-    paths.slice(i, i + 2500).forEach(function(p) { chunk[p] = updates[p]; });
-    await c.update(chunk);
+  var total = { restored: 0, kept: 0 };
+  for (var r = 0; r < todo.length; r++) {
+    var id = todo[r];
+    var backup = (await c.get("historyArchive/tagBackups/" + id)) || {};
+    var updates = {};
+    var restored = 0;
+    var kept = 0;
+    Object.keys(backup).forEach(function(up) {
+      var b = backup[up];
+      var cur = now[up] || {};
+      if ((cur.artist || "") !== (b.na || "") || (cur.title || "") !== (b.nt || "")) { kept++; return; }
+      updates["globalTracks/" + up + "/artist"] = b.a;
+      updates["globalTracks/" + up + "/title"] = b.t;
+      // what the next (older) run compares with
+      now[up] = Object.assign({}, cur, { artist: b.a, title: b.t });
+      restored++;
+    });
+    log(restored + " upload tags " + (opts.write ? "put back" : "would be put back") + " from the publish of " + new Date(Number(id)).toISOString() +
+      "; " + kept + " changed since (left as they are)");
+    total.restored += restored;
+    total.kept += kept;
+    if (opts.write) {
+      await writeAll(c, updates, log);
+      await c.update({ ["historyArchive/tagBackupRuns/" + id + "/undone"]: { ".sv": "timestamp" } });
+    }
   }
-  return { restored: restored, kept: kept };
+  if (!opts.write) log("nothing sent (add --write)");
+  return total;
 }
+
+// Writes many values in batches. The database takes a batch whole or not at
+// all, so a refused batch is split until the refused values are found; those
+// are left out (and returned) and the rest is written.
+async function writeAll(c, updates, log, progress) {
+  var paths = Object.keys(updates);
+  var skipped = [];
+  async function send(list) {
+    var chunk = {};
+    list.forEach(function(p) { chunk[p] = updates[p]; });
+    try {
+      await c.update(chunk);
+    } catch (e) {
+      if (!e.denied && !e.refused) throw e;
+      if (list.length === 1) { skipped.push(list[0]); return; }
+      var half = Math.ceil(list.length / 2);
+      await send(list.slice(0, half));
+      await send(list.slice(half));
+    }
+  }
+  var size = 2500;
+  for (var i = 0; i < paths.length; i += size) {
+    await send(paths.slice(i, i + size));
+    if (progress && (i / size) % 20 === 0) log("  " + Math.min(i + size, paths.length).toLocaleString("en-US") + " / " + paths.length.toLocaleString("en-US"));
+  }
+  return skipped;
+}
+function fits(v) { return typeof v === "string" && v.length <= 500; }
 
 function checks(counts, previous, db) {
   var problems = [];
