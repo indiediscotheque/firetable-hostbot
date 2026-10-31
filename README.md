@@ -25,6 +25,8 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `SITE_URL` | the firetable-user site's address; the bot follows its seasons from there (see [seasons](#seasons)) |
 | `TZ` | time zone for the seasonal months, e.g. `America/Chicago` (default: the server's, usually UTC) |
 | `AVATARSET` / `LIGHTS_MONTHS` | optional: force a card avatar set / lights months (e.g. `11,12`) instead of following the site; leave unset |
+| `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
 
 ## hosting (free, always on)
 The bot is a long-running process with no web server, so it needs a host that never sleeps. Oracle Cloud's Always Free tier works and costs nothing.
@@ -129,6 +131,8 @@ pm2 start app.js --name hostbot && pm2 save
 - `@vibrant/*` (the room's colours from the artwork; node-vibrant 4's parts, set up in `lib/colors.js`)
 - `acorn` (reads the site's season settings without running them)
 
+Push notifications (`lib/webpush.js`) use Node's own crypto and `fetch`: Web Push encryption and VAPID signing, no extra packages.
+
 YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 1 unit of quota per song).
 
 ## commands added recently
@@ -141,6 +145,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!autodj`: say what the autopilot DJ is doing; mods can add `auto` to end an `!upbot` / `!downbot` override (see below).
 - `!plays` / `!firstplay`: how many times the playing song has been played, every version included, and when and by whom it was first and last played (see [play history](#play-history)).
 - `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
+- `!pushtest`: send a test push notification to your own devices (the site's Settings has a button for it).
 
 ## play history
 `tools/history` joins the room's database (with ADAM's history, which was moved into it) and Last.fm into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
@@ -197,6 +202,16 @@ When YouTube or SoundCloud can't be reached it flags nothing (see the README's s
 ## one copy at a time
 Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.
 
+## push notifications
+People who install the site as an app (Add to Home Screen on iPhone/iPad, Install app on Android) and turn on **Settings → Push @mentions to this device** get a notification on their phone when someone @mentions them, even with the app closed. It works in desktop browsers too.
+- **What's sent:** every mention that lands in the site's @ inbox; the bot's own @name messages (like "are you there?" when you're on deck and went quiet); and `@everyone` from mods and the bot, to devices that turned that on (at most one every 10 minutes). Tapping a notification opens the room's @ inbox; the app icon shows the unread count where the phone supports it.
+- **Not sent:** while you're looking at the room (online and not idle), to people blocked either way, or for messages more than 10 minutes old. At most 6 a minute per person, to their 10 most recently used devices.
+- **Setup: none.** On first start the bot makes a key pair (VAPID), keeps it under `pushVapid` in the database (only bot accounts can read it) and publishes the public half as `pushKey`; the log says `push: on (new keys saved in the database, …)`, then `push: on (keys from the database, …)` on later starts. It needs the latest `firebase-rules.json` published; until then the log says so and push stays off.
+- Each device is saved under `pushSubs/<uid>/` (the site writes it; only that person and the bot can read it). The bot posts only to Apple's, Google's, Mozilla's and Microsoft's push services, removes devices those services say are gone, and drops devices not opened in 60 days.
+- The notification's contact address (VAPID subject) is `SITE_URL`'s address, or `VAPID_SUBJECT` (a `mailto:` or `https:` address) if set.
+- Changing the keys (setting `VAPID_*`, or deleting `pushVapid`) means every device has to sign up again; the site does it on its own the next time each one opens the room.
+- `PUSH_NOTIFICATIONS=false` turns it off. Sent pushes are logged as `push: mention for <name> to N device(s)`.
+
 ## last.fm
 With the `LASTFM_*` settings, each song is sent to last.fm as "now playing" and scrobbled when it ends, or when it's skipped after playing long enough by last.fm's rule (longer than 30 seconds, and played for half its length or 4 minutes).
 
@@ -216,7 +231,7 @@ Usernames are unique whatever their case ("Boss" and "boss" are one name): names
 Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working. The bot acts on each message once, and ignores commands more than 2 minutes old (sent before a long disconnect, or a copy of an old message added to the feed again).
 
 ## tests
-`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), unit tests of the helpers in `lib/`, the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud answers (outages, broken tracks, skips, commands, names, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation), the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
 ```
 npm ci && cd test && npm ci && npm test
 ```
