@@ -91,6 +91,24 @@
         }
       }
     },
+    "notices": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+        ".indexOn": "time",
+        "$notice": {
+          ".write": "auth.uid == $uid && !newData.exists()",
+          ".validate": "newData.hasChildren(['txt', 'time'])",
+          "txt": { ".validate": "newData.isString() && newData.val().length <= 300" },
+          "time": { ".validate": "newData.isNumber()" },
+          "kind": { ".validate": "newData.isString() && newData.val().length <= 16" },
+          "card": { ".validate": "newData.isString() && newData.val().length <= 64" },
+          "expires": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        }
+      }
+    },
     "songBpm": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"

@@ -221,6 +221,21 @@ await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("banned/eve").se
 await expect("DENIED", "a banned user saves a device", eve.ref("pushSubs/eve/dev_eve_4").set(device()));
 await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("banned/eve").remove());
 
+// Private notices from the bot (#231): shown as a toast, then removed by the site
+const notice = (extra) => Object.assign({ txt: "You got the card!", time: TS, kind: "card", card: "c1" }, extra);
+await expect("ALLOWED", "bot sends someone a notice", db("bot").ref("notices/eve/n1").set(notice()));
+await expect("ALLOWED", "bot sends one that expires", db("bot").ref("notices/eve/n2").set(notice({ kind: "away", expires: 1, card: null })));
+await expect("ALLOWED", "read your own notices", eve.ref("notices/eve").once("value"));
+await expect("ALLOWED", "remove a notice once shown", eve.ref("notices/eve/n1").remove());
+await expect("ALLOWED", "bot reads every notice (to prune old ones)", db("bot").ref("notices").once("value"));
+await expect("DENIED", "read someone else's notices", eve.ref("notices/bob").once("value"));
+await expect("DENIED", "read every notice", eve.ref("notices").once("value"));
+await expect("DENIED", "send yourself a notice", eve.ref("notices/eve/n3").set(notice()));
+await expect("DENIED", "send someone else a notice", eve.ref("notices/bob/n3").set(notice()));
+await expect("DENIED", "change a notice", eve.ref("notices/eve/n2/txt").set("changed"));
+await expect("DENIED", "bot notice of 200 KB", db("bot").ref("notices/eve/n4").set(notice({ txt: big })));
+await expect("DENIED", "bot notice with an extra field", db("bot").ref("notices/eve/n4").set(notice({ junk: "x" })));
+
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
 process.exit(failed ? 1 : 0);

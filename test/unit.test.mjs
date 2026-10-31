@@ -71,10 +71,10 @@ test("soundcloudProblem: blocked, private and 30-second previews never play", ()
   assert.equal(soundcloudProblem({ ...ok, duration: 30000 }), 5); // shorter than the full track
 });
 
-test("problemMessage fits in chat and names the DJ", () => {
+test("problemMessage fits a notice and doesn't @ping anyone", () => {
   for (const code of [2, 3, 4, 5, 6, 7]) {
-    const m = problemMessage(code, "x".repeat(22), "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-    assert.ok(m.includes("@" + "x".repeat(22)) && m.length <= 240, "code " + code + ": " + m.length);
+    const m = problemMessage(code, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    assert.ok(!m.includes("@") && m.length <= 240, "code " + code + ": " + m.length);
   }
 });
 
