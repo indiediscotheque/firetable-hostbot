@@ -293,7 +293,9 @@ const scenarios = {
     check(st.songToPlay.cid === "good1", "the first track that can play, plays");
     const keys = Object.keys(st.queues.dj1).sort();
     check(keys.length === 7 && !keys.some((k) => k.startsWith("k")), "every checked track moved to the bottom, none lost (" + keys.join(",") + ")");
-    check(said(st).some((t) => /only a preview/.test(t)), "the DJ is told why");
+    const told = Object.values((st.notices || {}).dj1 || {}).map((n) => n.txt);
+    check(told.some((t) => /only a preview/.test(t)) && !said(st).some((t) => /only a preview|@dj1/.test(t)),
+      "the DJ is told why, privately (a notice, not an @ping in chat)");
     await healthy(p);
     return p;
   },

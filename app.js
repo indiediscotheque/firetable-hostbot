@@ -508,6 +508,59 @@ var talk = function(txt, card) {
   });
 };
 
+// Tell one person something without pinging them in chat (#231): a notice
+// they see as a toast on the site (notices/<uid>), and a push notification
+// when they're away from the room. Until the database rules have notices/,
+// it falls back to the old "@name ..." line in chat.
+// opts: card (a card id to show), ttl (seconds it stays worth seeing),
+// tag / topic (replace an earlier push of the same kind), name (fallback).
+var NOTICE_MAX = 300;
+var notify = function(uid, txt, opts) {
+  opts = opts || {};
+  if (!uid || uid == botid) return Promise.resolve();
+  txt = String(txt || "").replace(/\s+/g, " ").trim().slice(0, NOTICE_MAX);
+  var botName = (users[botid] && users[botid].username) || "hostbot";
+  var ref = firebase.database().ref("notices/" + uid).push();
+  var notice = { txt: txt, time: firebase.database.ServerValue.TIMESTAMP, kind: opts.kind || "bot" };
+  if (opts.card) notice.card = opts.card;
+  if (opts.ttl) notice.expires = serverNow() + opts.ttl * 1000;
+  return ref.set(notice).then(function() {
+    push.toUser(uid, {
+      kind: "bot", id: ref.key, title: botName, body: push.text(txt), from: botName, fromId: botid,
+      time: Date.now(), tag: opts.tag || "bot-" + ref.key, url: opts.card ? "./#cards" : "./"
+    }, { ttl: opts.ttl || 60 * 60, topic: opts.topic });
+  }, function(err) {
+    if (!/permission/i.test(err.code || err.message)) return console.log("couldn't send a notice:", err.message);
+    if (!notify.warned) {
+      notify.warned = true;
+      console.log("notices: the database rules don't allow them yet (publish firebase-rules.json); pinging in chat until then.");
+    }
+    var name = (users[uid] && users[uid].username) || opts.name;
+    talk(name ? "@" + name + " " + txt : txt, opts.card);
+  });
+};
+
+// Notices are read (and removed) by the site; any left over after a day go
+var pruneNotices = function() {
+  var cutoff = serverNow() - 24 * 60 * 60 * 1000;
+  var ref = firebase.database().ref("notices");
+  shallowKeys("notices").then(function(people) {
+    return Promise.all(people.map(function(uid) {
+      return ref.child(uid).orderByChild("time").endAt(cutoff).once("value").then(function(snap) {
+        var updates = {};
+        snap.forEach(function(item) { updates[uid + "/" + item.key] = null; });
+        return updates;
+      });
+    }));
+  }).then(function(perPerson) {
+    var updates = Object.assign.apply(null, [{}].concat(perPerson));
+    if (Object.keys(updates).length) return ref.update(updates);
+  }).catch(function(err) {
+    if (!/permission/i.test((err && (err.code || err.message)) || "")) console.log("notice prune error:", err && err.message);
+  });
+};
+setInterval(pruneNotices, 6 * 60 * 60 * 1000);
+
 // Room state only the bot writes (deck, line, spotlight, play limit, dance,
 // colours). Everyone in the room downloads every write, even one that changes
 // nothing, so only values that changed are sent.
@@ -686,7 +739,7 @@ var flagAndRetry = function(listRef, key, track, code, message) {
   moveToBottom(listRef, key, Object.assign({}, track, {
     flagged: { date: Date.now(), code: code }
   })).catch(function() {});
-  if (theDJ.id !== botid && trackBrokenMessages) talk(message);
+  if (theDJ.id !== botid && trackBrokenMessages) notify(theDJ.id, message, { kind: "track", name: theDJ.name });
   retrySameDJ(3000);
 };
 
@@ -1097,7 +1150,7 @@ var startSong = function(noPrevPlay) {
             var ytProblem = checks.youtubeProblem(result.items[0]);
             if (ytProblem) {
               flagAndRetry(listRef, nextSongkey, data[nextSongkey], ytProblem,
-                checks.problemMessage(ytProblem, theDJ.name, "https://www.youtube.com/watch?v=" + data[nextSongkey].cid));
+                checks.problemMessage(ytProblem, "https://www.youtube.com/watch?v=" + data[nextSongkey].cid));
             } else {
               var video = result.items[0];
               var snippet = video.snippet || {};
@@ -1149,7 +1202,7 @@ begin sc check
           if (status == 404 || status == 410) {
             // SoundCloud answered: the track is gone (deleted or private)
             lookupWorked("SoundCloud");
-            flagAndRetry(listRef, nextSongkey, data[nextSongkey], 4, checks.problemMessage(4, theDJ.name));
+            flagAndRetry(listRef, nextSongkey, data[nextSongkey], 4, checks.problemMessage(4));
           } else if (!scTrack || !scTrack.id) {
             // down, rate limited or refusing the key: the track itself may be fine
             lookupFailed("SoundCloud", error || ("HTTP " + status));
@@ -1158,7 +1211,7 @@ begin sc check
             lookupWorked("SoundCloud");
             var scProblem = checks.soundcloudProblem(scTrack);
             flagAndRetry(listRef, nextSongkey, data[nextSongkey], scProblem,
-              checks.problemMessage(scProblem, theDJ.name, scTrack.permalink_url || "that SoundCloud track"));
+              checks.problemMessage(scProblem, scTrack.permalink_url || "that SoundCloud track"));
           } else {
             lookupWorked("SoundCloud");
             var uploader = (scTrack.user && scTrack.user.username) || "Unknown";
@@ -1196,7 +1249,7 @@ end sc check
         */
       } else {
         // a kind of track this bot can't play
-        flagAndRetry(listRef, nextSongkey, data[nextSongkey], 2, checks.problemMessage(2, theDJ.name));
+        flagAndRetry(listRef, nextSongkey, data[nextSongkey], 2, checks.problemMessage(2));
       }
 
     } else {
@@ -1291,7 +1344,7 @@ var giveCard = function(id, name) {
   cardForGrabs = null;
   var ref = firebase.database().ref("cards/" + cardid + "/owner");
   ref.set(id);
-  talk("good job @" + name + " you got the card.", cardid);
+  notify(id, "Good job, you got the card! It's in your card case.", { card: cardid, kind: "card", name: name });
 };
 
 var THEME_MAX_LENGTH = 80;
@@ -1806,7 +1859,7 @@ var busTargetFor = function(senderId, senderName, args) {
 };
 var setBus = function(target, on, byId) {
   var check = addCheck(target.id);
-  var who = target.self ? target.name + ", " : "@" + target.name + ", a mod has set it so ";
+  var who = target.self ? target.name + ", " : "";
   if (!check) {
     talk(target.self ? target.name + ", you aren't even DJing..." : target.name + " isn't DJing.");
     return;
@@ -1826,8 +1879,14 @@ var setBus = function(target, on, byId) {
     if (on) talk(isPlaying ? who + "I'll remove you at the end of this song." : who + "I'll remove you after your next song.");
     else talk(isPlaying ? who + "I will NOT remove you after this song." : who + "I will NOT remove you after your next song.");
   } else {
-    if (on) talk(who + (isPlaying ? "you'll step down at the end of this song." : "you'll step down after your next song."));
-    else talk("@" + target.name + ", you're staying on after all.");
+    // the person hears it privately; the mod who asked gets a confirmation
+    var when = isPlaying ? "at the end of this song" : "after your next song";
+    if (on) notify(target.id, "A mod has set it so you'll step down " + when + ".", { kind: "bus", name: target.name });
+    else notify(target.id, "You're staying on after all.", { kind: "bus", name: target.name });
+    if (byId && byId !== target.id) {
+      notify(byId, on ? target.name + " will step down " + (isPlaying ? "at the end of this song." : "after their next song.")
+        : target.name + " is staying on.", { kind: "bus" });
+    }
   }
   if (check == 1) updateWaitlist(); else updateTable();
 };
@@ -2281,7 +2340,8 @@ var handleChat = function(chatID, feedKey) {
           if (chatData.card && theDJ) {
             var ccref = firebase.database().ref("cards/" + chatData.card + "/owner");
             ccref.set(theDJ.id);
-            talk(":white_check_mark: Card has been transfered from " + namebo + " to @" + theDJ.name);
+            notify(theDJ.id, ":white_check_mark: " + namebo + " gave you a card! It's in your card case.", { card: chatData.card, kind: "card", name: theDJ.name });
+            if (chatData.id !== theDJ.id) notify(chatData.id, ":white_check_mark: Card sent to " + theDJ.name + ".", { kind: "card" });
             if (chatData.id !== theDJ.id) cardGiftedThisSong = true;
           }
         } else if (command == "grab") {
@@ -3065,7 +3125,8 @@ setInterval(function() {
     } else if (!removalPending[id]) {
       removalPending[id] = true;
       console.log(id + " removal pending.");
-      talk("@" + (u.username || id) + " are you there?");
+      notify(id, "Are you there? You'll be taken off the decks in a couple of minutes unless you come back.",
+        { kind: "away", ttl: 4 * 60, tag: "away", topic: "away", name: u.username || id });
     } else {
       removalPending[id] = null;
       console.log(id + " removed");

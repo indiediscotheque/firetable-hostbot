@@ -204,13 +204,16 @@ Only one copy of the bot runs the room. The running copy holds `botLock` in the 
 
 ## push notifications
 People who install the site as an app (Add to Home Screen on iPhone/iPad, Install app on Android) and turn on **Settings → Push @mentions to this device** get a notification on their phone when someone @mentions them, even with the app closed. It works in desktop browsers too.
-- **What's sent:** every mention that lands in the site's @ inbox; the bot's own @name messages (like "are you there?" when you're on deck and went quiet); and `@everyone` from mods and the bot, to devices that turned that on (at most one every 10 minutes). Tapping a notification opens the room's @ inbox; the app icon shows the unread count where the phone supports it.
+- **What's sent:** every mention that lands in the site's @ inbox; the bot's private notices (see below); and `@everyone` from mods and the bot, to devices that turned that on (at most one every 10 minutes). Tapping a notification opens the room's @ inbox; the app icon shows the unread count where the phone supports it.
 - **Not sent:** while you're looking at the room (online and not idle), to people blocked either way, or for messages more than 10 minutes old. At most 6 a minute per person, to their 10 most recently used devices.
 - **Setup: none.** On first start the bot makes a key pair (VAPID), keeps it under `pushVapid` in the database (only bot accounts can read it) and publishes the public half as `pushKey`; the log says `push: on (new keys saved in the database, …)`, then `push: on (keys from the database, …)` on later starts. It needs the latest `firebase-rules.json` published; until then the log says so and push stays off.
 - Each device is saved under `pushSubs/<uid>/` (the site writes it; only that person and the bot can read it). The bot posts only to Apple's, Google's, Mozilla's and Microsoft's push services, removes devices those services say are gone, and drops devices not opened in 60 days.
 - The notification's contact address (VAPID subject) is `SITE_URL`'s address, or `VAPID_SUBJECT` (a `mailto:` or `https:` address) if set.
 - Changing the keys (setting `VAPID_*`, or deleting `pushVapid`) means every device has to sign up again; the site does it on its own the next time each one opens the room.
 - `PUSH_NOTIFICATIONS=false` turns it off. Sent pushes are logged as `push: mention for <name> to N device(s)`.
+
+## private notices
+The bot doesn't @ping people in chat. What's meant for one person (you got a card, someone gave you a card, a mod put you on the bus, "are you there?" when you're on deck and went quiet, the track you queued can't play) goes to `notices/<uid>/`: the site shows it as a toast and removes it, and the person also gets a push notification when they're away from the room. Notices left over after a day are cleared. Needs the latest `firebase-rules.json` published; until then the log says so once and the bot pings in chat as before.
 
 ## last.fm
 With the `LASTFM_*` settings, each song is sent to last.fm as "now playing" and scrobbled when it ends, or when it's skipped after playing long enough by last.fm's rule (longer than 30 seconds, and played for half its length or 4 minutes).
