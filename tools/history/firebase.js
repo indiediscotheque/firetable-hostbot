@@ -54,10 +54,15 @@ function client(env) {
           throw err;
         }
         if (res.status >= 500 || res.status === 429) throw new Error("database answered " + res.status);
-        if (!res.ok) throw new Error("database answered " + res.status + ": " + (await res.text()).slice(0, 200));
+        if (!res.ok) {
+          // a request the database won't take (bad data): asking again won't help
+          var bad = new Error("database answered " + res.status + ": " + (await res.text()).slice(0, 200));
+          bad.refused = true;
+          throw bad;
+        }
         return await res.json();
       } catch (e) {
-        if (e.denied || attempt >= 5) throw e;
+        if (e.denied || e.refused || attempt >= 5) throw e;
         await sleep(1000 * Math.pow(2, attempt));
       }
     }

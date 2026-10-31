@@ -278,16 +278,20 @@ test("one artist, one name: YouTube Music's spelling when well attested; it neve
   }
 });
 
-test("undo: a publish backs up every upload tag it changes, and undo-tags puts them back (not over a later fix)", async () => {
+test("undo: a publish backs up the tags it changes; a refused value is left out; undo-tags undoes every publish (not over a later fix)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
   const fb = require("../tools/history/firebase.js");
   const realClient = fb.client;
   try {
     const fixture = JSON.parse(readFileSync(FIX + "firebase-tidy.json", "utf8"));
-    run("import-firebase", FIX + "firebase-tidy.json");
+    // a story pasted in as a title (longer than the rules allow), and a tag the database refuses
+    fixture.globalTracks["1storystory1"] = { artist: "Writer", title: "Story (Official Video) " + "and then ".repeat(70), type: 1, first_play_date: 1710000000000 };
+    fixture.globalTracks["1refuseme001"] = { artist: "REFUSED", title: "Kept Out Of The Database (Official Video)", type: 1, first_play_date: 1710000000000 };
+    writeFileSync(join(dir, "fb.json"), JSON.stringify(fixture));
+    run("import-firebase", join(dir, "fb.json"));
     run("reconcile");
-    // the room's database, in memory
+    // the room's database, in memory, with the rules' 500-character limit
     const root = { globalTracks: JSON.parse(JSON.stringify(fixture.globalTracks)) };
     const at = (p) => p.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), root);
     const put = (p, v) => {
@@ -297,29 +301,44 @@ test("undo: a publish backs up every upload tag it changes, and undo-tags puts t
       if (v === null) delete o[ks[ks.length - 1]];
       else o[ks[ks.length - 1]] = JSON.parse(JSON.stringify(v, (k, x) => (x && x[".sv"] ? Date.now() : x)));
     };
+    let failAfter = Infinity;
     fb.client = () => ({
       get: async (p) => JSON.parse(JSON.stringify(at(p) ?? null)),
       getPaged: async (p, size, onPage) => onPage(JSON.parse(JSON.stringify(at(p) || {}))),
-      update: async (u) => Object.entries(u).forEach(([p, v]) => put(p, v)),
+      update: async (u) => {
+        if (failAfter-- <= 0) throw new Error("network went away");
+        const bad = Object.entries(u).some(([p, v]) => /^globalTracks\/[^/]+\/(artist|title)$/.test(p) && v !== null && (typeof v !== "string" || v.length > 500 || /REFUSED/.test(v)));
+        if (bad) { const e = new Error("permission denied for "); e.denied = true; throw e; }
+        Object.entries(u).forEach(([p, v]) => put(p, v));
+      },
       uid: async () => "bot"
     });
     const store = require("../tools/history/store.js");
     const { publish, undoTags } = require("../tools/history/publish.js");
     const db = store.open(dir);
     const quiet = () => {};
-    await publish(db, {}, { dir, write: true, tidy: "junk", restoreAccents: true }, quiet);
+    const said = [];
+    // the first publish stops half way (backups written, some batches not)
+    failAfter = 2; // the backups are written, then the connection drops
+    await assert.rejects(publish(db, {}, { dir, write: true, tidy: "junk", restoreAccents: true }, quiet));
+    failAfter = Infinity;
+    await publish(db, {}, { dir, write: true, tidy: "junk", restoreAccents: true }, (m) => said.push(m));
     db.close();
+    assert.equal(root.globalSongsMeta.ready, true, "the re-run finished");
     assert.equal(root.globalTracks["1eeeeeeeeee"].artist, "Tame Impala", "the publish tidied the upload's tags");
-    const runs = Object.keys(root.historyArchive.tagBackupRuns);
-    assert.equal(runs.length, 1);
-    assert.equal(root.historyArchive.tagBackups[runs[0]]["1eeeeeeeeee"].a, "TameImpalaVEVO", "and kept them as they were");
-    // a mod retags another changed upload afterwards
+    assert.match(root.globalTracks["1storystory1"].title, /Official Video/, "a title too long for the rules is left as it is");
+    assert.equal(root.globalTracks["1refuseme001"].title, "Kept Out Of The Database", "only the refused value is left out; the rest of its batch is written...");
+    assert.ok(said.some((m) => /values the database refused were left out: globalTracks\/1refuseme001\//.test(m)), "...and named");
+    assert.equal(Object.keys(root.historyArchive.tagBackupRuns).length, 2);
+    // a mod retags a changed upload afterwards
     root.globalTracks["1ggggggggggg"].title = "Get Lucky (fixed by a mod)";
     const r = await undoTags({}, { write: true }, quiet);
-    assert.equal(root.globalTracks["1eeeeeeeeee"].artist, "TameImpalaVEVO", "undo puts the old tags back");
+    assert.equal(root.globalTracks["1eeeeeeeeee"].artist, "TameImpalaVEVO", "undo puts the old tags back, from both publishes");
     assert.equal(root.globalTracks["1eeeeeeeeee"].title, "Feels Like We Only Go Backwards (Official Video) HD");
     assert.equal(root.globalTracks["1ggggggggggg"].title, "Get Lucky (fixed by a mod)", "a fix made since is left alone");
-    assert.ok(r.restored >= 1 && r.kept === 1);
+    assert.ok(r.restored >= 1 && r.kept >= 1);
+    assert.ok(Object.values(root.historyArchive.tagBackupRuns).every((x) => x.undone), "both publishes are marked undone");
+    await assert.rejects(undoTags({}, { write: true }, quiet), /undone already/);
   } finally {
     fb.client = realClient;
     rmSync(dir, { recursive: true, force: true });
