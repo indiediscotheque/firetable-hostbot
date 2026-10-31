@@ -97,6 +97,14 @@ function djRank(src) {
 }
 function isLastfm(src) { return src.slice(0, 7) === "lastfm:"; }
 
+// A list file kept in the repo (tools/history/, so the GitHub Action has it
+// too) and, after it, the one in the data folder, which wins where they differ
+function listFiles(dir, name) {
+  var here = path.join(__dirname, name);
+  var there = path.join(dir, name);
+  return path.resolve(here) === path.resolve(there) ? [here] : [here, there];
+}
+
 function readAliasCsv(file) {
   var pairs = [];
   if (!fs.existsSync(file)) return pairs;
@@ -233,7 +241,9 @@ function reconcile(db, opts) {
     artistDisplay.get(k).set(res.name, (artistDisplay.get(k).get(res.name) || 0) + 1);
     artistSeen.set(k, (artistSeen.get(k) || 0));
   });
-  readAliasCsv(path.join(opts.dir, "artist-aliases.csv")).forEach(function(p) { aliasPair(p[0], p[1], "artist-aliases.csv"); });
+  listFiles(opts.dir, "artist-aliases.csv").forEach(function(f) {
+    readAliasCsv(f).forEach(function(p) { aliasPair(p[0], p[1], "artist-aliases.csv"); });
+  });
   // accents dropped or turned into "?" by the old Last.fm bug: "Bjrk" = "Björk"
   var skeletonToKey = new Map();
   artistDisplay.forEach(function(displays, k) {
@@ -464,7 +474,9 @@ function reconcile(db, opts) {
   var djNames = new Map();
   db.prepare("SELECT source, id, name FROM dj_names").all().forEach(function(r) { djNames.set(r.source + ":" + r.id, r.name); });
   var djAlias = new Map();
-  readAliasCsv(path.join(opts.dir, "dj-aliases.csv")).forEach(function(p) { djAlias.set(p[0].toLowerCase(), p[1]); });
+  listFiles(opts.dir, "dj-aliases.csv").forEach(function(f) {
+    readAliasCsv(f).forEach(function(p) { djAlias.set(p[0].toLowerCase(), p[1]); });
+  });
   var djDisplay = new Map(); // key -> Map(display -> n)
   function djOf(raw, src) {
     if (!raw) return null;
@@ -530,8 +542,8 @@ function reconcile(db, opts) {
 
   // tag-exceptions.csv: artists ("Artist") or songs ("Artist - Title") never to tidy
   var exceptions = { artists: new Set(), tracks: new Set() };
-  var exFile = path.join(opts.dir, "tag-exceptions.csv");
-  if (fs.existsSync(exFile)) {
+  listFiles(opts.dir, "tag-exceptions.csv").forEach(function(exFile) {
+    if (!fs.existsSync(exFile)) return;
     fs.readFileSync(exFile, "utf8").split(/\r?\n/).forEach(function(line) {
       line = line.replace(/^"|"$/g, "").trim();
       if (!line || /^#/.test(line) || /^(artist|exception|tag)s?$/i.test(line)) return;
@@ -545,7 +557,7 @@ function reconcile(db, opts) {
         exceptions.artists.add(artistMap.get(ak) || ak);
       }
     });
-  }
+  });
 
   // Put each artist name in text back the way the logs write it, accents included
   function restoreNames(text, why, names) {

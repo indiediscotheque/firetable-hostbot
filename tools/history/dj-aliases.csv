@@ -1,0 +1,11 @@
+alias,canonical
+# DJs who played under more than one name: one alias per line, then the name
+# to show. Case doesn't matter ("chris" and "Chris" are already one DJ).
+# A dj-aliases.csv in history-data/ is read after this one and wins.
+CJ-,CJ
+CJY,CJ
+CJ_Y,CJ
+Chris_,Chris
+_chris_,Chris
+chrisrohn,Chris
+Chris_Rohn,Chris

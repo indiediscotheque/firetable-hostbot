@@ -73,7 +73,7 @@ Both also write each artist one way everywhere: the spelling a mod chose, otherw
 
 Tidy never touches:
 - tags a mod fixed: logged in `tagLog`, which covers every fix from now on (`!fixtags` or the site's editor)
-- anything in `history-data/tag-exceptions.csv`: one artist (`!!!`) or song (`Artist - Title`) per line, for deliberate exceptions to RSN
+- anything in `tag-exceptions.csv` (in `tools/history/`, or `history-data/`): one artist (`!!!`) or song (`Artist - Title`) per line, for deliberate exceptions to RSN
 
 Fixes made before the tag log existed can't be told apart from the bot's own guesses. Add the ones that break RSN on purpose to the exceptions file. For the Action, set the repository variable `HISTORY_TIDY` to `junk` or `rsn` to make it the weekly default.
 
@@ -100,9 +100,9 @@ Some pairs only a person can call ("are `Star Rain` and `Star Ruin` the same?").
 
 Answers are kept for good, in the room's database too (`historyDecisions`), and never asked again.
 
-Two files in `history-data/` cover what the history can't know on its own (`alias,canonical` per line):
+Two files cover what the history can't know on its own (`alias,canonical` per line). Keep them in `tools/history/` and commit them, so the GitHub Action uses them too; a copy in `history-data/` is read after it and wins:
 - `artist-aliases.csv`, e.g. `Shiina Ringo,椎名林檎`
-- `dj-aliases.csv`, for a DJ who changed names
+- `dj-aliases.csv`, for a DJ who played under more than one name (`CJ-,CJ`). Case never matters: `chris` and `Chris` are one DJ already.
 
 ## keeping it current
 The bot does the day-to-day work:

@@ -271,7 +271,9 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
         // DJ saved as a uid; the first play logged after the last one; type as text
         "1qwertyuiopa": { artist: "Uid Band", title: "Who", type: "1", first_play_date: 1600000000000, first_play_dj: "uidDjRob000000000000000001", last_play_date: 1500000000000, last_play_dj: "keeraah" },
         // only a last play (most entries ADAM had no first play for)
-        "1lastonly000": { artist: "Last Only", title: "Once", type: 1, last_play_date: 1480000000000, last_play_dj: "eve" }
+        "1lastonly000": { artist: "Last Only", title: "Once", type: 1, last_play_date: 1480000000000, last_play_dj: "eve" },
+        // one DJ, two names: tools/history/dj-aliases.csv, and one only in this data folder
+        "1cjplayed000": { artist: "Alias Act", title: "Names", type: 1, first_play_date: 1500000000000, first_play_dj: "CJ-", last_play_date: 1600000000000, last_play_dj: "rocka2" }
       },
       songHistory: {
         "-Nplay000000000000001": { artist: "Early Act", title: "Fool (Free Download)", type: 2, cid: "17819", dj: "eve", when: 1710000000000 }
@@ -287,7 +289,11 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
     assert.equal(up("undefinedundefined").cid, null, "a key with no id stays without an upload");
     db.close();
 
+    writeFileSync(join(dir, "dj-aliases.csv"), "alias,canonical\nrocka2,Rocka\n");
     run("reconcile");
+    const names = run("lookup", "Alias Act - Names");
+    assert.match(names, /first: 2017-07-14 .* by CJ\n/, "the repo's dj-aliases.csv: 'CJ-' is CJ");
+    assert.match(names, /last: {2}2020-09-13 .* by Rocka\n/, "and the data folder's own list is read too");
     const fool = run("lookup", "Early Act - Fool");
     assert.match(fool, /first: 2018-12-17 .* by Keeraah/, "ADAM's first play and DJ");
     assert.match(fool, /last: {2}2024-03-09 .* by eve/, "the room's later play is the last one");
