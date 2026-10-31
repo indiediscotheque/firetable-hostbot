@@ -25,6 +25,8 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `SITE_URL` | the firetable-user site's address; the bot follows its seasons from there (see [seasons](#seasons)) |
 | `TZ` | time zone for the seasonal months, e.g. `America/Chicago` (default: the server's, usually UTC) |
 | `AVATARSET` / `LIGHTS_MONTHS` | optional: force a card avatar set / lights months (e.g. `11,12`) instead of following the site; leave unset |
+| `SWAP_SUGGESTIONS` | nightly YouTube Music swap suggestions for broken tracks, on unless set to `false` (see [swap suggestions](#swap-suggestions)) |
+| `SWAP_HOUR` / `SWAP_MAX_SEARCHES` | optional: the hour the swap search runs (in `TZ`, default `4`) and its search limit per run (default `300`) |
 | `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
 
@@ -133,7 +135,7 @@ pm2 start app.js --name hostbot && pm2 save
 
 Push notifications (`lib/webpush.js`) use Node's own crypto and `fetch`: Web Push encryption and VAPID signing, no extra packages.
 
-YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 1 unit of quota per song).
+YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 1 unit of quota per song). Swap suggestions search YouTube Music with no API key or quota (`lib/ytmusic.js`) and check their matches 50 at a time (1 unit per call).
 
 ## commands added recently
 - `!remove name` (mods): takes someone off the decks or the waitlist; a mod can't remove a supermod.
@@ -146,6 +148,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!plays` / `!firstplay`: how many times the playing song has been played, every version included, and when and by whom it was first and last played (see [play history](#play-history)).
 - `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
 - `!pushtest`: send a test push notification to your own devices (the site's Settings has a button for it).
+- `!swaps`: how the last swap search went (see [swap suggestions](#swap-suggestions)). `!swapscan` (mods) runs it now for people seen since their last scan; `!swapscan all` for everyone.
 
 ## play history
 `tools/history` joins the room's database (with ADAM's history, which was moved into it) and Last.fm into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
@@ -199,6 +202,24 @@ Before a track plays, the bot checks it with the same rules (and flag codes) as 
 
 When YouTube or SoundCloud can't be reached it flags nothing (see the README's soundcloud and troubleshooting notes).
 
+## swap suggestions
+Every night at 4 a.m. (`SWAP_HOUR`, in `TZ`) the bot looks for a working copy of each broken track in people's playlists and saves it with the track; the site shows a ⇄ button on it, and a **Swap all** bar over the list. Nothing in a playlist changes until its owner swaps (and Undo puts it back).
+- **Which tracks:** flagged as gone, private, blocked, not embeddable, age restricted, broken or low audio quality (codes 1–9; not off-theme). YouTube and SoundCloud tracks alike.
+- **What counts as a match:** YouTube Music's audio tracks only (the labels' "Artist - Topic" uploads). Music videos, "Official Audio" uploads and fan uploads are never suggested. The title, the artists (featured artists may sit in either field) and the version must match: a remix never stands in for the original, live never for studio. A known length must be within 15%. Each match is checked with the same rules the bot uses before every song (`lib/checks.js`), so a swapped track plays.
+- **A track the bot flags while playing** is looked up straight away (one search).
+- **The owner** gets one private notice (toast, and a push when away) when new swaps are ready. "Not this one" on the site keeps that match from being suggested again for 90 days.
+
+**What it costs each night:**
+| | |
+|---|---|
+| YouTube Music searches | free, no key or quota (`lib/ytmusic.js`, the search music.youtube.com itself uses). One per song, shared by every copy and spelling in every list, remembered for 30 days in `swapCache/`; paced (one every 2.5 seconds) and capped (`SWAP_MAX_SEARCHES`) |
+| YouTube Data API | 1 unit per 50 matches checked. Matches confirmed in the last 7 days aren't checked again, and a second-choice match only when the first fails. A typical night is 0–5 units of the 10,000 |
+| Database | only people seen since their last scan (`swapScans/`), and only the flagged tracks of their lists (an indexed query on `flagged/date`), never whole playlists |
+
+The log and `!swaps` say what each run did, including the YouTube units it used.
+
+**Needs the latest `firebase-rules.json` published** (the `flagged/date` index, `swapCache`, `swapScans`). Until then the run stops before reading any playlist and the log says so. YouTube Music's search isn't a public API: if YouTube changes it, searches find nothing (the log says `YouTube Music returned nothing` or `isn't answering`), no suggestions are made and nothing else is affected. If the server's region gets no songs from YouTube Music, the same happens. `SWAP_SUGGESTIONS=false` turns it all off.
+
 ## one copy at a time
 Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.
 
@@ -227,7 +248,7 @@ When a song starts, the bot looks up its BPM on Deezer's public API (no key need
 ## database rules
 `firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
 
-Playlists and queues have no limit on how many tracks they hold (the bot's own crate is over 10,000). The rules only check each track's fields: `type` and `cid` are short text or numbers (older imports saved them as text), `name` is text up to 1,000 characters, `img` / `url` links up to 2,048, `flagged` is `{date, code}`, and any other field can't be text over 2,048 characters. Playlist names, and the artist / title mods fix in Recent and the global tags, are text up to 500 characters. The tests reorder a 12,000-track list to make sure big lists keep working.
+Playlists and queues have no limit on how many tracks they hold (the bot's own crate is over 10,000). The rules only check each track's fields: `type` and `cid` are short text or numbers (older imports saved them as text), `name` is text up to 1,000 characters, `img` / `url` links up to 2,048, `flagged` is `{date, code}`, `swap` is the bot's suggestion (a YouTube id, artist, title, album, length, date, or `dismissed`), `swappedFrom` is `{type, cid, date}`, and any other field can't be text over 2,048 characters. Playlist names, and the artist / title mods fix in Recent and the global tags, are text up to 500 characters. The tests reorder a 12,000-track list to make sure big lists keep working.
 
 Usernames are unique whatever their case ("Boss" and "boss" are one name): names are claimed in lowercase under `nameClaim/`. The bot gives every existing name its lowercase claim when it starts (and every 6 hours); if two older accounts differ only in case, the earlier member keeps the claim and the log says so.
 

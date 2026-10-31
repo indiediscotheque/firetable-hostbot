@@ -120,6 +120,18 @@
         ".validate": "$track.matches(/^[0-9]{1,2}_[A-Za-z0-9_-]{1,64}$/)"
       }
     },
+    "swapCache": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "$song": {
+        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+        ".validate": "$song.matches(/^[A-Za-z0-9_-]{1,32}$/) && newData.hasChildren(['date'])"
+      }
+    },
+    "swapScans": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "$uid": { ".validate": "newData.isNumber()" }
+    },
     "playlistPrefs": {
       "$uid": {
         ".read": "auth.uid == $uid",
@@ -349,7 +361,7 @@
       "$uid": {
         ".read": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
         ".write": "($uid == auth.uid || root.child('users/' + auth.uid + '/hostbot').val() == true) && root.child('banned/' + auth.uid).val() != true",
-        ".indexOn": "cid",
+        ".indexOn": ["cid", "flagged/date"],
         "$track": {
           ".validate": "newData.hasChildren()",
           "type": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 8)" },
@@ -361,6 +373,25 @@
             ".validate": "newData.hasChildren()",
             "date": { ".validate": "newData.isNumber()" },
             "code": { ".validate": "newData.isNumber()" }
+          },
+          "swap": {
+            ".validate": "newData.hasChildren(['date'])",
+            "cid": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{11}$/)" },
+            "artist": { ".validate": "newData.isString() && newData.val().length <= 500" },
+            "title": { ".validate": "newData.isString() && newData.val().length <= 500" },
+            "album": { ".validate": "newData.isString() && newData.val().length <= 500" },
+            "dur": { ".validate": "newData.isNumber()" },
+            "explicit": { ".validate": "newData.isBoolean()" },
+            "date": { ".validate": "newData.isNumber()" },
+            "dismissed": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "$other": { ".validate": false }
+          },
+          "swappedFrom": {
+            ".validate": "newData.hasChildren(['cid', 'date'])",
+            "type": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 8)" },
+            "cid": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 256)" },
+            "date": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
           },
           "$other": { ".validate": "!newData.isString() || newData.val().length <= 2048" }
         }
@@ -374,7 +405,7 @@
         "$listid": {
           "name": { ".validate": "newData.isString() && newData.val().length <= 500" },
           "list":{
-            ".indexOn": "cid",
+            ".indexOn": ["cid", "flagged/date"],
             "$track": {
               ".validate": "newData.hasChildren()",
               "type": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 8)" },
@@ -386,6 +417,25 @@
                 ".validate": "newData.hasChildren()",
                 "date": { ".validate": "newData.isNumber()" },
                 "code": { ".validate": "newData.isNumber()" }
+              },
+              "swap": {
+                ".validate": "newData.hasChildren(['date'])",
+                "cid": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{11}$/)" },
+                "artist": { ".validate": "newData.isString() && newData.val().length <= 500" },
+                "title": { ".validate": "newData.isString() && newData.val().length <= 500" },
+                "album": { ".validate": "newData.isString() && newData.val().length <= 500" },
+                "dur": { ".validate": "newData.isNumber()" },
+                "explicit": { ".validate": "newData.isBoolean()" },
+                "date": { ".validate": "newData.isNumber()" },
+                "dismissed": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "$other": { ".validate": false }
+              },
+              "swappedFrom": {
+                ".validate": "newData.hasChildren(['cid', 'date'])",
+                "type": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 8)" },
+                "cid": { ".validate": "newData.isNumber() || (newData.isString() && newData.val().length <= 256)" },
+                "date": { ".validate": "newData.isNumber()" },
+                "$other": { ".validate": false }
               },
               "$other": { ".validate": "!newData.isString() || newData.val().length <= 2048" }
             }

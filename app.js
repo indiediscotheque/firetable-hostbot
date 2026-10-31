@@ -24,6 +24,8 @@ var tags = require('./lib/tags');
 var splitTags = text.splitTags;
 var fitChat = text.fitChat;
 var checks = require('./lib/checks');
+var ytmusic = require('./lib/ytmusic');
+var swaps = require('./lib/swaps');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -726,9 +728,10 @@ var retrySameDJ = function(delay) {
 // lose the track, and the DJ's site redraws the list once.
 var moveToBottom = function(listRef, key, entry) {
   var updates = {};
+  var newKey = listRef.push().key;
   updates[key] = null;
-  updates[listRef.push().key] = entry;
-  return listRef.update(updates).catch(function(error) {
+  updates[newKey] = entry;
+  return listRef.update(updates).then(function() { return newKey; }, function(error) {
     console.log("couldn't move the track to the bottom of the list: " + error.message);
     throw error;
   });
@@ -736,9 +739,13 @@ var moveToBottom = function(listRef, key, entry) {
 
 var flagAndRetry = function(listRef, key, track, code, message) {
   // keep everything saved with the track (artwork, page URL)
+  var djid = theDJ.id;
   moveToBottom(listRef, key, Object.assign({}, track, {
     flagged: { date: Date.now(), code: code }
-  })).catch(function() {});
+  })).then(function(newKey) {
+    // look for a YouTube Music copy right away (one search, no quota)
+    if (swapsOn) setTimeout(function() { swapper().track(djid, listRef, newKey); }, 5000);
+  }, function() {});
   if (theDJ.id !== botid && trackBrokenMessages) notify(theDJ.id, message, { kind: "track", name: theDJ.name });
   retrySameDJ(3000);
 };
@@ -1839,6 +1846,104 @@ var flagTrackForDJ = function(djid, cid, type, flag) {
   });
 };
 
+// ─── Swap suggestions for broken tracks (lib/swaps.js) ──────────────────────
+// Every night (SWAP_HOUR, 4 a.m. by default, in TZ) the bot looks through
+// everyone's playlists for flagged tracks, finds the same recording among
+// YouTube Music's audio tracks (no API quota) and saves it with the track as
+// a suggestion; the site shows a swap button. A track the bot flags while
+// playing is looked up straight away. SWAP_SUGGESTIONS=false turns it off.
+var swapsOn = process.env.SWAP_SUGGESTIONS !== "false";
+var SWAP_HOUR = parseInt(process.env.SWAP_HOUR, 10);
+if (!(SWAP_HOUR >= 0 && SWAP_HOUR <= 23)) SWAP_HOUR = 4;
+var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 300;
+
+// Can these YouTube videos play here? One videos.list call (1 unit) for up
+// to 50. Resolves {id: flag code (0 = fine)}; ids YouTube doesn't know are
+// left out (gone). Rejects when YouTube can't answer (quota, key, network).
+var youtubeProblems = function(ids) {
+  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
+  url.searchParams.set("part", "snippet,contentDetails,status");
+  url.searchParams.set("id", ids.join(","));
+  url.searchParams.set("maxResults", "50");
+  url.searchParams.set("fields", "items(id,snippet(liveBroadcastContent),contentDetails(regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
+  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
+  return http(url).then(function(res) {
+    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
+      var apiError = res.json && res.json.error;
+      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
+    }
+    var out = {};
+    res.json.items.forEach(function(item) { out[item.id] = checks.youtubeProblem(item); });
+    return out;
+  });
+};
+
+// The flagged tracks of one list, and nothing else: an indexed query on
+// flagged/date (database REST, signed in as the bot). Without the index
+// (firebase-rules.json not published) the database would send whole
+// playlists, so this refuses (err.noIndex) and the run stops instead.
+// Other REST trouble falls back to the same query through Firebase.
+var flaggedTracks = function(ref) {
+  var sdk = function() {
+    return ref.orderByChild("flagged/date").startAt(1).once("value").then(function(snap) {
+      var out = [];
+      snap.forEach(function(c) { out.push({ key: c.key, track: c.val() }); });
+      return out;
+    });
+  };
+  var user = firebase.auth().currentUser;
+  if (!user || !process.env.FIREBASE_DB) return sdk();
+  var path = decodeURIComponent(ref.toString().slice(ref.root.toString().length).replace(/^\/+/, ""));
+  return user.getIdToken().then(function(token) {
+    var url = new URL(process.env.FIREBASE_DB);
+    url.pathname = url.pathname.replace(/\/?$/, "/") + path + ".json";
+    url.searchParams.set("orderBy", JSON.stringify("flagged/date"));
+    url.searchParams.set("startAt", "1");
+    url.searchParams.set("auth", token);
+    return http(url, { timeout: 30000 });
+  }).then(function(res) {
+    if (res.status === 400 && /index not defined/i.test(res.body)) {
+      var err = new Error("no index on flagged/date");
+      err.noIndex = true;
+      throw err;
+    }
+    if (res.status !== 200) return sdk();
+    var data = res.json && typeof res.json === "object" ? res.json : {};
+    return Object.keys(data).sort().map(function(k) { return { key: k, track: data[k] }; });
+  }, function() { return sdk(); });
+};
+
+var swapperInstance = null;
+var swapper = function() {
+  if (!swapperInstance) {
+    swapperInstance = swaps.createSwapper({
+      db: firebase.database(),
+      shallowKeys: shallowKeys,
+      flagged: flaggedTracks,
+      search: ytmusic.searchSongs,
+      verify: youtubeProblems,
+      notify: notify,
+      users: function() { return users; },
+      botid: function() { return botid; },
+      log: console.log,
+      maxSearches: SWAP_MAX_SEARCHES,
+      delayMs: 2500
+    });
+  }
+  return swapperInstance;
+};
+
+var swapRanOn = null;
+var swapTick = function() {
+  if (!swapsOn || !started) return;
+  var d = new Date();
+  var today = d.toDateString();
+  if (d.getHours() !== SWAP_HOUR || swapRanOn === today) return;
+  swapRanOn = today;
+  swapper().run({ reason: "nightly" });
+};
+setInterval(swapTick, 10 * 60 * 1000);
+
 // Who a bus command is for: the sender, or (mods) someone of lower rank.
 var busRank = function(u) {
   if (!u) return 0;
@@ -2487,6 +2592,25 @@ var handleChat = function(chatID, feedKey) {
                 console.log("flagplay error:", err);
               });
             }
+          }
+        } else if (command == "swaps" || command == "swapscan") {
+          if (!swapsOn) {
+            talk("Swap suggestions are off (SWAP_SUGGESTIONS=false).");
+          } else if (command == "swapscan" && senderIsMod) {
+            // !swapscan: people seen since their last scan (like the nightly run);
+            // !swapscan all: everyone
+            var fullScan = args == "all";
+            if (swapper().state.running) {
+              talk("Already looking for swaps; !swaps says how it went once it's done.");
+            } else {
+              talk(":mag: Looking through " + (fullScan ? "everyone's" : "recently active people's") + " playlists for broken tracks with a YouTube Music copy. !swaps says how it went.");
+              swapper().run({ reason: "!swapscan", full: fullScan });
+            }
+          } else if (swapper().state.running) {
+            talk("Looking for swaps right now (started " + Math.round((Date.now() - swapper().state.startedAt) / 60000) + " min ago).");
+          } else {
+            var lastRun = swapper().state.last;
+            talk(fitChat("Swaps (nightly at " + SWAP_HOUR + ":00): " + (lastRun ? swaps.summary(lastRun) : "no run yet; mods can start one with !swapscan.")));
           }
         } else if (command == "bpm") {
           if (!song || !song.cid) {
