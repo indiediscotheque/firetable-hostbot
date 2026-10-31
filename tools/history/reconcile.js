@@ -611,6 +611,9 @@ function reconcile(db, opts) {
   }
 
   var accentFixes = [];
+  var usedTrackIds = new Set();
+  var idClashes = [];
+  var idClashCount = 0;
   clusters.forEach(function(members, root) {
     var best = -1;
     var bestScore = -Infinity;
@@ -668,6 +671,16 @@ function reconcile(db, opts) {
     var anchorKey = nonWeak.length ? nonWeak.map(function(si) { return spellings[si].raw.track; }).sort()[0]
       : "upload:" + (Array.from(uploadRoot.entries()).find(function(e) { return e[1] === root; }) || [spellings[members[0]].raw.track])[0];
     var id = "t" + tags.hash(anchorKey);
+    if (usedTrackIds.has(id)) {
+      // another track has the same key (vague tags with no upload, or two a
+      // review answer kept apart): this one is named by its own spellings,
+      // which belong to no other track
+      var own = members.map(function(si) { return spellings[si].artist + "\u0001" + spellings[si].title; }).sort();
+      for (var n = 0; usedTrackIds.has(id); n++) id = "t" + tags.hash("spellings:" + own.join("\u0002") + (n ? "#" + n : ""));
+      if (idClashes.length < 5) idClashes.push(anchorKey + " (" + spellings[members[0]].artist + " - " + spellings[members[0]].title + ")");
+      idClashCount++;
+    }
+    usedTrackIds.add(id);
     members.forEach(function(si) { spellingTrack[si] = id; });
     var keys = new Set();
     nonWeak.forEach(function(si) { keys.add(spellings[si].raw.track); keys.add(spellings[si].keys.track); });
@@ -695,6 +708,7 @@ function reconcile(db, opts) {
       tidyJunk: tidyJunk, tidyRsn: tidyRsn, protected: isProtected
     });
   });
+  if (idClashCount) log("  " + idClashCount + " tracks share a key with another track and were named by their spellings, e.g. " + idClashes.join("; "));
   var rootToTrack = new Map(trackRows.map(function(t) { return [t.root, t]; }));
   merges.forEach(function(m) {
     var t = rootToTrack.get(uf.find(m[0]));
