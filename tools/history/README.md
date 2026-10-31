@@ -97,6 +97,16 @@ Rohn Standard Notation is the guide for *recognising* a song, never a rule for r
 
 **Plays** from different sources within 10 minutes of each other count once (`--window`). ADAM's clock had no time zone, so it's lined up against Last.fm automatically (or set it: `--adam-tz America/Chicago`). A track's first play is its earliest play in any source. When only Last.fm has that play, the date is known but the DJ isn't; `first_known_dj` gives the earliest play with a DJ.
 
+## genres
+Every played track gets up to 3 genres from the room's own list, strongest first, for browsing the library:
+- **Last.fm**: the top tags of each track's artists and of the track itself. A remix leans on its remixer's tags, since a house remix of an indie song is house.
+- **Discogs**: the styles of the releases a track is on, which are the best names for electronic music. Needs the `DISCOGS_TOKEN` secret.
+- **SoundCloud**: the genre the uploader chose, for uploads the room played.
+
+`tools/history/genre-map.csv` turns raw tags into the room's genres (`nu disco,Nu-Disco`). An empty genre ignores a tag (places, decades, "seen live", and the metal tags Last.fm gives artists who share a name with a metal band). `~Electronic` and `~Indie` are fallbacks, used only for a track with nothing more specific. Edit the file to rename, merge or drop genres; `history-data/genre_tags.csv` lists every raw tag weighted by the room's plays, with what it maps to, so new ones are easy to add. `genre-overrides.csv` sets genres by hand: `Artist,Genre|Genre` or `Artist - Title,Genre`.
+
+Each answer is kept, so each artist and track is looked up once. Each run looks up the most played first: Last.fm within 30 minutes (about 4 a second), Discogs 1,200 tracks (60 a minute). The first few weekly runs fill the library in; after that, only new music is looked up. A publish writes `genres` on each track (`globalSongs`) and song (`globalWorks`), and a genre index for browsing: `globalSongsMeta/genres/<genre>` (name, tracks, plays) and `globalSongsMeta/byGenre/<genre>/<track>` = plays. `npm run history -- genres` runs the lookups and assignment on their own; `lookup` shows a track's genres and where they came from.
+
 ## review
 Some pairs only a person can call ("are `Star Rain` and `Star Ruin` the same?"). Two ways to answer:
 - **In chat, by any mod:** `publish` sends up to 300 questions. `!review` shows the next one; answer with `!same 12` or `!different 12`. The next `refresh` uses the answers.
@@ -133,6 +143,7 @@ To run it every Monday at 4:10 on the server (`crontab -e`):
 | `spellings.csv` | every spelling ever seen and the track it belongs to |
 | `lastfm_split.csv` | how Last.fm's count was split across spellings |
 | `tag_fixes.csv` | uploads whose room tags differ from the track's best spelling (`publish --retag` applies them) |
+| `genres.csv` / `genre_tags.csv` | each played track's genres and where they came from / every raw tag by weight, with its genre |
 | `restore_accents.csv` | accents that will be put back (`publish --restore-accents`) |
 | `artist_accents.csv` | artists the logs would put accents on, what YouTube Music writes, and what was done |
 | `dead_uploads.csv` | uploads that are gone, with a working upload of the same track |
