@@ -317,6 +317,15 @@ async function fetchFirebase(db, env, opts, log) {
     }
   }
   try {
+    var archive = require("./archive");
+    var restored = await archive.restoreFiles(db, c, opts.dir || require("os").tmpdir(), function(file, kind) { return importAdam(db, file, kind, log); }, log);
+    var saved = await c.get("historyDecisions");
+    var kept = store.tx(db, function() { return archive.loadDecisions(db, saved); });
+    if (restored || kept) log("  " + restored + " archived files and " + kept + " saved review answers restored");
+  } catch (e) {
+    log("  history archive: skipped (" + e.message + ")");
+  }
+  try {
     var answers = await c.get("tagReview");
     counts.reviewAnswers = store.tx(db, function() { return reviewAnswers(db, answers); });
     if (counts.reviewAnswers) log("  " + counts.reviewAnswers + " tag answers from mods");

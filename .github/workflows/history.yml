@@ -1,0 +1,157 @@
+# Play history (tools/history): rebuilds the room's history from ADAM, Last.fm
+# and the room's database, and publishes it for the bot.
+#   - every Monday: a refresh. It publishes only if the repository variable
+#     HISTORY_AUTO_PUBLISH is "true"; otherwise it's a preview to look at.
+#   - by hand: Actions → Play history → Run workflow (preview or publish, and
+#     a one-time ADAM import from a link)
+# Each run's results are on its summary page (and as downloadable reports in a
+# private repository). Publishing refuses to replace a better history: fewer
+# tracks or plays than last time, mass tag changes, or tracks that joined many
+# artists stop it (tick "force" to send it anyway).
+# Needs these repository secrets (Settings → Secrets and variables → Actions),
+# the same values as the bot's .env: FIREBASE_KEY, FIREBASE_DB, FIRETABLE_USER,
+# FIRETABLE_PASS, LASTFM_APIKEY, LASTFM_USERNAME, YOUTUBE_KEY, SOUNDCLOUD_KEY.
+
+name: Play history
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to the room (unticked: a preview only)"
+        type: boolean
+        default: false
+      restore_accents:
+        description: "Put back accents removed for the old Last.fm bug"
+        type: boolean
+        default: true
+      retag:
+        description: "Also change upload tags to each track's best spelling (see tag_fixes.csv first)"
+        type: boolean
+        default: false
+      force:
+        description: "Publish even if the safety checks fail"
+        type: boolean
+        default: false
+      adam_csv:
+        description: "Once: link to an ADAM sheet tab (shared as 'anyone with the link') to import and keep"
+        type: string
+        default: ""
+      rebuild:
+        description: "Start from scratch instead of from the last run's data"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: play-history
+  cancel-in-progress: false
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+      FIREBASE_DB: ${{ secrets.FIREBASE_DB }}
+      FIRETABLE_USER: ${{ secrets.FIRETABLE_USER }}
+      FIRETABLE_PASS: ${{ secrets.FIRETABLE_PASS }}
+      LASTFM_APIKEY: ${{ secrets.LASTFM_APIKEY }}
+      LASTFM_USERNAME: ${{ secrets.LASTFM_USERNAME }}
+      YOUTUBE_KEY: ${{ secrets.YOUTUBE_KEY }}
+      SOUNDCLOUD_KEY: ${{ secrets.SOUNDCLOUD_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check the secrets
+        run: |
+          missing=""
+          for v in FIREBASE_KEY FIREBASE_DB FIRETABLE_USER FIRETABLE_PASS; do [ -n "${!v}" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then
+            echo "::error::Add these repository secrets (the bot's .env values):$missing"
+            exit 1
+          fi
+          for v in LASTFM_APIKEY LASTFM_USERNAME YOUTUBE_KEY SOUNDCLOUD_KEY; do
+            [ -n "${!v}" ] || echo "::warning::$v isn't set, so that part of the history is skipped"
+          done
+
+      # Only saves time: everything that can't be downloaded again (ADAM's
+      # export, review answers) is kept in the room's database too
+      - name: Last run's data
+        if: ${{ !inputs.rebuild }}
+        uses: actions/cache/restore@v6
+        with:
+          path: history-data
+          key: play-history-${{ github.run_id }}
+          restore-keys: play-history-
+
+      - name: Import ADAM
+        if: ${{ inputs.adam_csv != '' }}
+        env:
+          ADAM_CSV: ${{ inputs.adam_csv }}
+        run: npm run history -- import-adam "$ADAM_CSV" --archive
+
+      - name: Refresh (room database, Last.fm, uploads, matching)
+        run: npm run history -- refresh
+
+      - name: Publish
+        env:
+          PUBLISH: ${{ inputs.publish || (github.event_name == 'schedule' && vars.HISTORY_AUTO_PUBLISH == 'true') }}
+          ACCENTS: ${{ github.event_name == 'schedule' || inputs.restore_accents }}
+          RETAG: ${{ inputs.retag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          args=()
+          [ "$ACCENTS" = "true" ] && args+=(--restore-accents)
+          [ "$RETAG" = "true" ] && args+=(--retag)
+          [ "$FORCE" = "true" ] && args+=(--force)
+          if [ "$PUBLISH" = "true" ]; then
+            npm run history -- publish --write "${args[@]}"
+          else
+            npm run history -- publish "${args[@]}"
+            echo "Preview only: nothing was sent to the room." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Keep this run's data for the next one
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: history-data
+          key: play-history-${{ github.run_id }}
+
+      # Song and DJ names stay off public pages: a public repository gets the
+      # totals only
+      - name: Summary
+        if: always()
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          [ -f history-data/summary.md ] || exit 0
+          if [ "$PRIVATE" = "true" ]; then
+            cat history-data/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            sed -n '1,/^## sources/p' history-data/summary.md | sed '$d' >> "$GITHUB_STEP_SUMMARY"
+            echo "_Song and DJ details are left off because this repository is public; run the toolkit yourself for the full reports._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Reports
+        if: ${{ always() && github.event.repository.private }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: play-history-reports
+          path: |
+            history-data/*.csv
+            history-data/summary.md
+            history-data/publish-preview.json
+          retention-days: 30
+          if-no-files-found: ignore

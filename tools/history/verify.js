@@ -36,7 +36,12 @@ async function verifyUploads(db, env, opts, log) {
   if (todo.yt.length && !env.YOUTUBE_KEY) log("YouTube: skipped (no YOUTUBE_KEY)");
   else if (todo.yt.length) {
     log("YouTube: checking " + Math.min(todo.yt.length, limit) + " uploads...");
+    var maxQuota = Number(opts.maxQuota) || 3000;
     for (var i = 0; i < todo.yt.length && i < limit; i += 50) {
+      if (counts.quotaUsed >= maxQuota) {
+        log("  stopped at " + maxQuota + " YouTube quota units (the bot needs the rest); the next run carries on");
+        break;
+      }
       var ids = todo.yt.slice(i, Math.min(i + 50, limit));
       var url = new URL("https://www.googleapis.com/youtube/v3/videos");
       url.searchParams.set("part", "snippet,contentDetails,status");

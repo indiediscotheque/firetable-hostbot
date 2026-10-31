@@ -172,6 +172,8 @@ await expect("DENIED", "mod logs a tag with extra fields", db("mod1").ref("tagLo
 await expect("DENIED", "mod reads the tag log", db("mod1").ref("tagLog").once("value"));
 await expect("DENIED", "mod answers a tag question directly", db("mod1").ref("tagReview/q1/decision").set("merge"));
 await expect("DENIED", "listener switches the history off", eve.ref("globalSongsMeta/ready").set(false));
+await expect("DENIED", "mod reads the archived ADAM export", db("mod1").ref("historyArchive").once("value"));
+await expect("DENIED", "mod changes a saved review answer", db("mod1").ref("historyDecisions/x").set({ a: "a", b: "b", decision: "merge" }));
 
 console.log("-- play history: normal use (ALLOWED)");
 await expect("ALLOWED", "anyone reads a track's history", eve.ref("globalSongs/t1").once("value"));
@@ -184,6 +186,9 @@ await expect("ALLOWED", "mod fixes tags from the site and logs it, one write", d
 }));
 await expect("ALLOWED", "bot records a mod's answer to a tag question", db("bot").ref("tagReview/q1").update({ decision: "merge", by: "mod1", at: Date.now() }));
 await expect("ALLOWED", "bot reads the open tag questions", db("bot").ref("tagReview").orderByChild("n").limitToFirst(5).once("value"));
+await expect("ALLOWED", "the toolkit archives a file and saves review answers", db("bot").ref().update({
+  "historyArchive/chunks/adam_csv/0": "H4sI", "historyArchive/files/adam_csv": { name: "adam.csv", chunks: 1, at: TS }, "historyDecisions/x": { a: "a", b: "b", decision: "merge" }
+}));
 await expect("ALLOWED", "publish switches the history on", db("bot").ref("globalSongsMeta").update({ ready: true, published_at: TS }));
 
 await env.cleanup();

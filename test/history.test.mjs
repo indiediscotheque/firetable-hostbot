@@ -69,7 +69,7 @@ test("hash is short, stable and safe as a database key", () => {
   assert.match(h, /^[A-Za-z0-9_-]{16}$/);
 });
 
-test("toolkit: ADAM + Last.fm + Firebase become one history", () => {
+test("toolkit: ADAM + Last.fm + Firebase become one history", async () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
   try {
@@ -86,15 +86,27 @@ test("toolkit: ADAM + Last.fm + Firebase become one history", () => {
     assert.match(run("lookup", "Bear Hands - 2AM"), /2 spellings/, "the Sheets-damaged '2:00 AM' joined '2AM'");
     assert.match(run("lookup", "Calvin Harris & Dua Lipa - One Kiss"), /3 spellings/, "feat. and & spellings joined");
     assert.match(run("lookup", "Sigur Ros - Hoppipolla"), /track \S+: Sigur Rós - Hoppípolla/, "accents restored from a playlist and ADAM");
-    const accents = readFileSync(join(dir, "restore_accents.csv"), "utf8");
-    assert.match(accents, /Sigur Ros - Hoppipolla,Sigur Rós - Hoppípolla/);
-    const summary = readFileSync(join(dir, "summary.md"), "utf8");
-    assert.match(summary, /\| plays \| 19 /);
+    assert.match(readFileSync(join(dir, "restore_accents.csv"), "utf8"), /Sigur Ros - Hoppipolla,Sigur Rós - Hoppípolla/);
+    assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /\| plays \| 19 /);
+
     run("publish", "--restore-accents");
     const preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
     assert.equal(preview.counts.accents, 1);
     assert.equal(preview.counts.retags, 0, "no tag is rewritten without --retag");
+    assert.equal(preview.counts.checks, "passed");
     assert.ok(preview.sample.some(([p, v]) => /^globalSongKeys\//.test(p) && /^t/.test(v)));
+
+    // the safety checks: a history with fewer tracks or plays than the one
+    // already published is refused
+    const store = require("../tools/history/store.js");
+    const { publish } = require("../tools/history/publish.js");
+    const db = store.open(dir);
+    const quiet = () => {};
+    const worse = await publish(db, {}, { dir, previous: { tracks: 1000, plays: 99999 } }, quiet);
+    assert.ok(worse.checks.some((p) => /tracks fell/.test(p)) && worse.checks.some((p) => /plays fell/.test(p)), "a worse history fails the checks");
+    const same = await publish(db, {}, { dir, previous: { tracks: 8, plays: 18 } }, quiet); // "Unknown - Intro" is too vague to publish
+    assert.equal(same.checks, "passed");
+    db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

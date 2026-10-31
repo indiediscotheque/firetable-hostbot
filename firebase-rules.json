@@ -232,6 +232,14 @@
         "$other": { ".validate": false }
       }
     },
+    "historyArchive": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
+    "historyDecisions": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
     "tagReview": {
       ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",

@@ -11,6 +11,7 @@ var reconcile = require("./reconcile");
 var report = require("./report");
 var publish = require("./publish");
 var verify = require("./verify");
+var archive = require("./archive");
 var tags = require("../../lib/tags");
 
 var ROOT = path.join(__dirname, "..", "..");
@@ -19,14 +20,18 @@ var HELP = `play history: join ADAM, Last.fm and the room's database into one hi
   npm run history -- <command> [options]
 
 getting the data in
-  import-adam <file.csv> [more.csv]   the ADAM export, one CSV per sheet (TRAX, plays, ...)
+  import-adam <file.csv|link> [more]  the ADAM export, one CSV per sheet (TRAX, plays, ...); a Google
+        Sheets link to a tab works if it's shared as "anyone with the link"
         [--kind tracks|plays|raws|artists|djs]   if it can't tell from the columns
+        [--archive]   keep a copy in the room's database, so any rebuild (e.g. the GitHub Action) has it
   fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot
   import-firebase <export.json>       or a Firebase console export instead
   fetch-lastfm [--user a,b]           every scrobble (default LASTFM_USERNAME); later runs fetch only new ones
   import-lastfm <file.csv> [--user name]   or a CSV export of scrobbles
   enrich [--limit 3000]               ask Last.fm how it spells the most-played artists
-  verify-uploads [--limit N] [--recheck-days 90]   ask YouTube/SoundCloud what each upload is, and if it still exists
+  verify-uploads [--limit N] [--recheck-days 90] [--max-quota 3000]
+        ask YouTube/SoundCloud what each upload is, and if it still exists (YouTube quota is
+        shared with the bot: at most --max-quota units per run, so the room never runs short)
 
 making sense of it
   reconcile [--window 10] [--adam-tz auto|America/Chicago|-6]
@@ -37,6 +42,8 @@ making sense of it
 
 using it
   publish [--write] [--restore-accents] [--retag] [--min-confidence 0.9] [--review-limit 300]
+        refuses when the history got worse (fewer tracks or plays than last time, mass retags,
+        tracks joining many artists); --force sends it anyway
   publish --off                       switch the bot back to the old counts
   refresh [--publish]                 fetch-firebase + fetch-lastfm + verify-uploads + reconcile + report (+ publish --write)
 
@@ -83,10 +90,18 @@ async function main() {
 
   switch (cmd) {
     case "import-adam": {
-      if (!args._.length) throw new Error("which file? import-adam <file.csv>");
+      if (!args._.length) throw new Error("which file? import-adam <file.csv or link>");
       for (var f of args._) {
-        var r = await sources.importAdam(db, f, args.kind, log);
-        log(f + ": " + r.rows + " rows read, " + r.written + " observations" + (r.skipped ? ", " + r.skipped + " empty rows skipped" : ""));
+        var input = await archive.fetchInput(f, dir);
+        var r = await sources.importAdam(db, input.file, args.kind, log);
+        log(input.name + ": " + r.rows + " rows read, " + r.written + " observations" + (r.skipped ? ", " + r.skipped + " empty rows skipped" : ""));
+        if (args.archive) {
+          var saved = await archive.saveFile(require("./firebase").client(env), input.name, input.file, r.kind);
+          // this copy is already imported: don't restore it again
+          store.setState(db, saved.stateKey, true);
+          log("  kept a copy in the room's database (historyArchive), so the history can be rebuilt anywhere");
+        }
+        if (input.file !== f) require("fs").unlinkSync(input.file);
       }
       break;
     }
@@ -96,7 +111,7 @@ async function main() {
       break;
     }
     case "fetch-firebase":
-      log(JSON.stringify(await sources.fetchFirebase(db, env, { only: args.only }, log)));
+      log(JSON.stringify(await sources.fetchFirebase(db, env, { only: args.only, dir: dir }, log)));
       break;
     case "fetch-lastfm": {
       var users = String(args.user || env.LASTFM_USERNAME || "").split(",").filter(Boolean);
@@ -111,7 +126,7 @@ async function main() {
       break;
     }
     case "verify-uploads":
-      await verify.verifyUploads(db, env, { limit: args.limit, recheckDays: args.recheckDays }, log);
+      await verify.verifyUploads(db, env, { limit: args.limit, recheckDays: args.recheckDays, maxQuota: args.maxQuota }, log);
       break;
     case "enrich":
       await sources.enrichArtists(db, env.LASTFM_APIKEY, Number(args.limit) || 3000, log);
@@ -136,24 +151,24 @@ async function main() {
     case "publish":
       await publish.publish(db, env, {
         dir: dir, write: !!args.write, off: !!args.off, retag: !!args.retag, restoreAccents: !!args.restoreAccents,
-        minConfidence: args.minConfidence, existing: args.existing, reviewLimit: args.reviewLimit
+        minConfidence: args.minConfidence, existing: args.existing, reviewLimit: args.reviewLimit, force: !!args.force
       }, log);
       break;
     case "refresh": {
       log("== room database");
-      await sources.fetchFirebase(db, env, {}, log);
+      await sources.fetchFirebase(db, env, { dir: dir }, log);
       if (env.LASTFM_APIKEY && env.LASTFM_USERNAME) {
         log("== Last.fm");
         await sources.fetchLastfm(db, env.LASTFM_APIKEY, env.LASTFM_USERNAME, log);
       }
       log("== uploads");
-      await verify.verifyUploads(db, env, {}, log);
+      await verify.verifyUploads(db, env, { maxQuota: args.maxQuota }, log);
       log("== reconcile");
       reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", log: log });
       report.report(db, dir, log);
       if (args.publish) {
         log("== publish");
-        await publish.publish(db, env, { dir: dir, write: true, restoreAccents: !!args.restoreAccents, retag: !!args.retag, minConfidence: args.minConfidence, reviewLimit: args.reviewLimit }, log);
+        await publish.publish(db, env, { dir: dir, write: true, restoreAccents: !!args.restoreAccents, retag: !!args.retag, minConfidence: args.minConfidence, reviewLimit: args.reviewLimit, force: !!args.force }, log);
       }
       break;
     }

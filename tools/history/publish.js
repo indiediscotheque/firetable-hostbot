@@ -139,22 +139,39 @@ async function publish(db, env, opts, log) {
   });
   Object.keys(existingReview).forEach(function(id) { if (!keep.has(id)) updates["tagReview/" + id] = null; });
 
+  // every review answer, kept with the room's data so a rebuild anywhere has them
+  if (opts.write) Object.assign(updates, require("./archive").decisionUpdates(db));
+
+  var totals = db.prepare("SELECT count(*) tracks, coalesce(sum(plays), 0) plays FROM tracks WHERE confidence > 0").get();
+  counts.plays = totals.plays;
   updates["globalSongsMeta/ready"] = true;
   updates["globalSongsMeta/published_at"] = opts.write ? { ".sv": "timestamp" } : Date.now();
   updates["globalSongsMeta/tracks"] = counts.tracks;
   updates["globalSongsMeta/songs"] = counts.songs;
+  updates["globalSongsMeta/plays"] = counts.plays;
 
+  // safety checks: a run that lost data (a source that failed to download, a
+  // matching change gone wrong) must never replace a better history
+  var previous = opts.write ? ((await c.get("globalSongsMeta")) || {}) : (opts.previous || {});
+  var problems = checks(counts, previous, db);
+  counts.checks = problems.length ? problems : "passed";
   var paths = Object.keys(updates);
   log("would write " + paths.length.toLocaleString("en-US") + " values: " + JSON.stringify(counts));
+  problems.forEach(function(p) { log("  check failed: " + p); });
   if (!opts.write) {
     var file = path.join(opts.dir, "publish-preview.json");
     fs.writeFileSync(file, JSON.stringify({ counts: counts, tagChanges: preview, sample: paths.slice(0, 200).map(function(p) { return [p, updates[p]]; }) }, null, 1));
     log("nothing sent (add --write to publish). Preview: " + file);
     return counts;
   }
+  if (problems.length && !opts.force) {
+    var err = new Error("not published: " + problems.join("; ") + ". Look at the reports; publish --write --force sends it anyway.");
+    err.checks = problems;
+    throw err;
+  }
 
   // ready goes last, so the bot only switches over once everything is there
-  var ready = { "globalSongsMeta/ready": true, "globalSongsMeta/published_at": { ".sv": "timestamp" }, "globalSongsMeta/tracks": counts.tracks, "globalSongsMeta/songs": counts.songs };
+  var ready = { "globalSongsMeta/ready": true, "globalSongsMeta/published_at": { ".sv": "timestamp" }, "globalSongsMeta/tracks": counts.tracks, "globalSongsMeta/songs": counts.songs, "globalSongsMeta/plays": counts.plays };
   paths = paths.filter(function(p) { return p.indexOf("globalSongsMeta/") !== 0; });
   var size = 2500;
   for (var i = 0; i < paths.length; i += size) {
@@ -166,6 +183,22 @@ async function publish(db, env, opts, log) {
   await c.update(ready);
   log("published. The bot now shows true first plays and the room's own play counts (undo with: publish --off)");
   return counts;
+}
+
+function checks(counts, previous, db) {
+  var problems = [];
+  if (!counts.tracks || !counts.plays) problems.push("the history is empty");
+  if (previous.tracks && counts.tracks < previous.tracks * 0.9) {
+    problems.push("tracks fell from " + previous.tracks + " to " + counts.tracks + " (more than 10%)");
+  }
+  if (previous.plays && counts.plays < previous.plays * 0.95) {
+    problems.push("plays fell from " + previous.plays + " to " + counts.plays + " (a source probably didn't download)");
+  }
+  var uploads = db.prepare("SELECT count(*) n FROM uploads WHERE artist IS NOT NULL").get().n;
+  if (counts.retags > Math.max(50, uploads * 0.1)) problems.push(counts.retags + " tag changes is more than 10% of the room's uploads");
+  var crowded = db.prepare("SELECT count(*) n FROM review WHERE kind = 'too-many-artists-in-one-track'").get().n;
+  if (crowded > Math.max(10, counts.tracks * 0.002)) problems.push(crowded + " tracks joined too many different artists (a matching problem)");
+  return problems;
 }
 
 function set(updates, p, v) { updates[p] = v == null || v === "" ? null : v; }

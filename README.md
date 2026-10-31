@@ -143,7 +143,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
 
 ## play history
-`tools/history` joins ADAM, Last.fm and the room's database into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. See [tools/history/README.md](tools/history/README.md); in short: `npm run history -- refresh`, look at `history-data/summary.md`, then `npm run history -- publish --write`.
+`tools/history` joins ADAM, Last.fm and the room's database into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
 
 Once published (deploy `firebase-rules.json` first), for every song the bot:
 - links each upload to its track by its tags (`globalTracks/<upload>/song` → `globalSongs`), so a new copy of an old song shows its real first play

@@ -8,7 +8,24 @@ Runs on Node 22 with nothing to install (SQLite is built in). Run it on the bot 
 npm run history -- help
 ```
 
-## first run
+## as a GitHub Action (no server needed)
+`.github/workflows/history.yml` runs it all on GitHub: every Monday, or by hand from Actions → **Play history** → Run workflow.
+1. Add the bot's `.env` values as repository secrets (Settings → Secrets and variables → Actions): `FIREBASE_KEY`, `FIREBASE_DB`, `FIRETABLE_USER`, `FIRETABLE_PASS`, `LASTFM_APIKEY`, `LASTFM_USERNAME`, `YOUTUBE_KEY`, `SOUNDCLOUD_KEY`.
+2. Deploy `firebase-rules.json`.
+3. **ADAM, once.** In the "ADAM DATA" sheet: File → Make a copy, then share the copy as "Anyone with the link". Open the TRAX tab and copy its address. Run the workflow with that link in **ADAM sheet tab**, leaving **publish** unticked. The import is kept in the room's database (`historyArchive`, readable only by the bot), so unshare the copy afterwards; every later run has it. Repeat for any other tab.
+4. Read the run's summary page and its reports (downloadable in a private repository). When it looks right, run it again with **publish** ticked.
+5. From then on the Monday runs refresh everything and show a preview. To have them publish too, add the repository variable `HISTORY_AUTO_PUBLISH` = `true` (Settings → Secrets and variables → Actions → Variables).
+
+Each run starts from the last run's data, so a refresh takes minutes. The first one downloads every Last.fm scrobble, about an hour for a million. Nothing depends on that saved data: mods' answers and imports are kept in the room's database, so if GitHub clears it, the next run rebuilds everything (or tick **rebuild**). YouTube checks stop at 3,000 quota units a run, so the bot always has enough left for the day.
+
+**Safety checks.** A publish is refused, and the run fails, when:
+- the history has 10% fewer tracks or 5% fewer plays than the last one published (usually a source that didn't download)
+- it would change the tags of more than 10% of uploads
+- many tracks pulled in lots of different artists (a matching problem)
+
+Tick **force** to send it anyway. A preview never writes anything. `publish --off` (or removing `globalSongsMeta/ready`) puts the bot back on the old counts.
+
+## first run (on a computer or the bot server)
 1. **ADAM.** Open the "ADAM DATA" sheet → File → Download → CSV, once per tab (TRAX and any others). Then:
    ```bash
    npm run history -- import-adam ~/Downloads/ADAM\ DATA\ -\ TRAX.csv
@@ -61,9 +78,9 @@ Rohn Standard Notation is the guide for *recognising* a song, never a rule for r
 ## review
 Some pairs only a person can call ("are `Star Rain` and `Star Ruin` the same?"). Two ways to answer:
 - **In chat, by any mod:** `publish` sends up to 300 questions. `!review` shows the next one; answer with `!same 12` or `!different 12`. The next `refresh` uses the answers.
-- **In a spreadsheet:** fill the `decision` column of `history-data/review.csv` with `merge` or `separate`, then `npm run history -- review apply history-data/review.csv` and `reconcile`.
+- **In a spreadsheet** (when running it yourself): fill the `decision` column of `history-data/review.csv` with `merge` or `separate`, then `npm run history -- review apply history-data/review.csv` and `reconcile`.
 
-Answers are kept for good and never asked again.
+Answers are kept for good, in the room's database too (`historyDecisions`), and never asked again.
 
 Two files in `history-data/` cover what the history can't know on its own (`alias,canonical` per line):
 - `artist-aliases.csv`, e.g. `Shiina Ringo,椎名林檎`
