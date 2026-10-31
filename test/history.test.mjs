@@ -180,6 +180,9 @@ test("tidy never loses what a tag says about the song: only upload junk goes, RS
   assert.equal(rsn("Can", "Vitamin C (Live - 2004)"), "Can - Vitamin C (Live - 2004)", "a dash inside brackets stays");
   assert.equal(rsn("Can", "Vitamin C (2004 Remaster)"), "Can - Vitamin C", "same-recording notes go: one track holds them all");
   assert.equal(rsn("Bag Raiders", "Shooting Stars (Radio Edit)"), "Bag Raiders - Shooting Stars");
+  assert.equal(rsn("Lian Ross", "Fantasy (12\" Version)"), "Lian Ross - Fantasy");
+  for (const keep of ["Blood Makes Noise (Remix)", "This Emotion (Rework)", "Time (Vocal Mix)", "Two Of Us (Naked Version / Remastered 2013)", "Song (Club Mix)", "Song (VIP)"])
+    assert.equal(rsn("Artist", keep), "Artist - " + keep, "another version keeps its name: " + keep);
   assert.equal(rsn("Foals", "My Number (Lemaitre Remix)"), "Foals - My Number (Lemaitre Remix)", "a remix is its own track and keeps its name");
   assert.equal(rsn("PREMIERE: Interstate", "Get Down [Play Label Records]"), "Interstate - Get Down", "blog premieres and labels are upload junk");
   assert.equal(junk("Lace", "Can't Play Around ( Mark Curse ReEdit )"), "Lace - Can't Play Around (Mark Curse ReEdit)");
