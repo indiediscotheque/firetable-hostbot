@@ -12,7 +12,7 @@ npm run history -- help
 `.github/workflows/history.yml` runs it all on GitHub: every Monday, or by hand from Actions → **Play history** → Run workflow.
 1. Add the bot's `.env` values as repository secrets (Settings → Secrets and variables → Actions): `FIREBASE_KEY`, `FIREBASE_DB`, `FIRETABLE_USER`, `FIRETABLE_PASS`, `LASTFM_APIKEY`, `LASTFM_USERNAME`, `YOUTUBE_KEY`, `SOUNDCLOUD_KEY`.
 2. Deploy `firebase-rules.json`.
-3. Run the workflow with **publish** unticked. ADAM's history was moved into the room's database years ago (`globalTracks`, `globalTrackRaws`, `globalArtists`, `globalDjs`), so it comes in with everything else. The run's log describes how each of those paths is laid out (fields and kinds of values, no data); if something there isn't read yet, that log line is what to send. The **ADAM sheet tab** field is only for a separate ADAM export, if one ever turns up.
+3. Run the workflow with **publish** unticked. ADAM's history was moved into the room's database in 2023: each upload's first and last play and DJ in `globalTracks` (keyed by type + upload id, so early SoundCloud ids as short as `217819` are read as uploads too). It comes in with everything else. The run's log describes how each path is laid out (fields and kinds of values, no data); if something there isn't read yet, that log line is what to send. ADAM's own ids, raw tags, artists and DJs (`globalTrackRaws`, `globalArtists`, `globalDjs`) are read too if they ever turn up there. The **ADAM sheet tab** field is only for a separate ADAM export, if one ever turns up.
 4. Read the run's summary page and its reports (downloadable in a private repository). When it looks right, run it again with **publish** ticked.
 5. From then on the Monday runs refresh everything and show a preview. To have them publish too, add the repository variable `HISTORY_AUTO_PUBLISH` = `true` (Settings → Secrets and variables → Actions → Variables).
 
@@ -26,7 +26,7 @@ Each run starts from the last run's data, so a refresh takes minutes. The first 
 Tick **force** to send it anyway. A preview never writes anything. `publish --off` (or removing `globalSongsMeta/ready`) puts the bot back on the old counts.
 
 ## first run (on a computer or the bot server)
-1. **ADAM** is already in the room's database (moved there years ago) and comes in with step 2. Only if you have a separate ADAM export (CSV, one per sheet): `npm run history -- import-adam file.csv`. Google Sheets turns some titles into times and numbers (`2:00` becomes `2:00 AM`); those are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`.
+1. **ADAM** is already in the room's database (its first and last plays, in `globalTracks`) and comes in with step 2. Only if you have a separate ADAM export (CSV, one per sheet): `npm run history -- import-adam file.csv`. Google Sheets turns some titles into times and numbers (`2:00` becomes `2:00 AM`); those are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`.
 2. **The room's database**, read as the bot: global tags and ADAM's moved history, Recent, Fresh, every DJ's playlists and queues, the play and tag logs, mods' review answers. `npm run history -- probe` shows how each path is laid out first, without its data.
    ```bash
    npm run history -- fetch-firebase

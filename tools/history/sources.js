@@ -166,10 +166,12 @@ function cidOf(link) {
 // and DJ names by id (globalArtists, globalDjs, users), read first, for
 // entries that only give ids.
 var FIREBASE_PATHS = {
-  // Each upload's tags and first/last play. ADAM's history was moved into the
-  // database years ago, so some entries may be ADAM tracks (keyed by ADAM's
-  // id, dates as text, artists or DJs as ids): all of that is read too.
-  globalTracks: function(node, w, log, ctx) { trackEntries(node, w, "fb:globalTracks", ctx, 4); },
+  // Each upload's tags and first/last play, keyed by type + upload id. The
+  // 2023 global tag system moved ADAM's history here: its first and last
+  // plays (ms, DJ by name, now and then by uid) are these entries' dates.
+  // ADAM-style entries (ADAM's ids as keys, text dates, artists or DJs as
+  // ids) are read too, in case any turn up.
+  globalTracks: function(node, w, log, ctx) { trackEntries(node, w, "fb:globalTracks", ctx, 4, true); },
   songHistory: function(node, w) { plays(node, w, "fb:songHistory"); },
   newMusic: function(node, w) { plays(node, w, "fb:newMusic"); },
   playLog: function(node, w) {
@@ -246,14 +248,25 @@ function timeOf(x) {
   return local == null ? null : { at: local, naive: true };
 }
 // which upload an entry is: from its fields, or a key the bot makes ("1" + a
-// YouTube id, "2" + a SoundCloud id); ADAM's own ids ("27255") are not uploads
-function uploadOf(key, v) {
+// YouTube id, "2" + a SoundCloud id); ADAM's own ids ("27255") are not uploads.
+// `botKeys`: every key is the bot's (globalTracks), so a type field that
+// agrees with the first digit settles it, even for early SoundCloud ids
+// ("217819") that are as short as ADAM's.
+function uploadOf(key, v, botKeys) {
   var type = sourceType(first(v, ["type", "source", "platform"]));
   var cid = first(v, ["cid", "video_id", "vid"]);
   var link = first(v, ["link", "url", "permalink"]);
   if (!cid && link) cid = cidOf(link);
   if (!type && link) type = /soundcloud/i.test(link) ? 2 : /youtu/i.test(link) ? 1 : null;
   if (type && cid) return { type: type, cid: String(cid) };
+  // an old bot bug saved some as "undefined" + the upload's id
+  var lost = key.match(/^undefined([A-Za-z0-9_-]+)$/);
+  if (lost && lost[1] !== "undefined") {
+    if (type) return { type: type, cid: lost[1] };
+    if (/^[A-Za-z0-9_-]{11}$/.test(lost[1])) return { type: 1, cid: lost[1] };
+    if (/^\d{3,}$/.test(lost[1])) return { type: 2, cid: lost[1] };
+  }
+  if (botKeys && type && key.length > 1 && Number(key[0]) === type) return { type: type, cid: key.slice(1) };
   if (/^1[A-Za-z0-9_-]{11}$/.test(key)) return { type: 1, cid: key.slice(1) };
   if (/^2\d{6,}$/.test(key) && (!type || type === 2)) return { type: 2, cid: key.slice(1) };
   if (type && /^[12]/.test(key) && Number(key[0]) === type && key.length > 6) return { type: type, cid: key.slice(1) };
@@ -269,16 +282,16 @@ function djOf(x, ctx) {
   return (ctx && ctx.djs.get(String(x))) || String(x);
 }
 
-function trackEntries(node, w, source, ctx, weight) {
+function trackEntries(node, w, source, ctx, weight, botKeys) {
   ctx = ctx || { artists: new Map(), djs: new Map() };
   each(node, function(key, v) {
     if (!v || typeof v !== "object") return;
-    if (trackEntry(key, v, w, source, ctx, weight)) return;
+    if (trackEntry(key, v, w, source, ctx, weight, null, botKeys)) return;
     // one level of nesting (e.g. raws grouped under their track)
     each(v, function(k2, v2) { if (v2 && typeof v2 === "object") trackEntry(key + "/" + k2, v2, w, source, ctx, weight, key); });
   });
 }
-function trackEntry(key, v, w, source, ctx, weight, parent) {
+function trackEntry(key, v, w, source, ctx, weight, parent, botKeys) {
   var artistId = first(v, ["artist_id", "artistId", "artist_key"]);
   var artist = first(v, ["artist", "artist_name", "artistName"]) || (artistId != null ? ctx.artists.get(String(artistId)) : null);
   var title = first(v, ["title", "track_name", "trackName", "track", "song", "song_title"]);
@@ -290,7 +303,7 @@ function trackEntry(key, v, w, source, ctx, weight, parent) {
     title = sep > 0 ? String(raw).slice(sep + 3) : "";
   }
   if (!artist && !title) return false;
-  var up = uploadOf(key.split("/").pop(), v);
+  var up = uploadOf(key.split("/").pop(), v, botKeys);
   var extra = { id: key };
   var adamId = first(v, ["track_id", "trackId", "adam_id", "adamid"]) || (parent && /^\d+$/.test(parent) ? parent : null) || (!up.type && /^\d+$/.test(key) ? key : null);
   if (adamId != null) extra.adam = String(adamId);
@@ -322,20 +335,28 @@ function namesContext(db, nodes) {
 
 // What a path holds, without its data: how many entries, their fields and
 // what kind of values those are. Printed by fetch-firebase and `probe`.
-function describe(node) {
-  var keys = Object.keys(node || {});
+// `allKeys` (optional): every key of the path, when `node` is only a sample
+function describe(node, allKeys) {
+  node = node || {};
+  var keys = allKeys || Object.keys(node);
   var fields = {};
   var keyKinds = {};
-  var sample = keys.slice(0, 500);
-  sample.forEach(function(k) {
-    var kind = /^1[A-Za-z0-9_-]{11}$/.test(k) ? "1+YouTube id" : /^2\d{6,}$/.test(k) ? "2+SoundCloud id" : /^-[A-Za-z0-9_-]{19}$/.test(k) ? "push id" : /^\d+$/.test(k) ? "number" : "text";
+  keys.forEach(function(k) {
+    var v = node[k];
+    var type = v && typeof v === "object" ? sourceType(v.type) : null;
+    var kind = /^1[A-Za-z0-9_-]{11}$/.test(k) ? "1+YouTube id" : /^2\d{6,}$/.test(k) ? "2+SoundCloud id" : /^-[A-Za-z0-9_-]{19}$/.test(k) ? "push id" :
+      /^undefined/.test(k) ? "undefined+id" : /^\d+$/.test(k) ? "number" : "text";
+    if (kind === "number" && type === Number(k[0])) kind = "number (type agrees)";
     keyKinds[kind] = (keyKinds[kind] || 0) + 1;
+  });
+  var have = Object.keys(node);
+  (have.length > 1000 ? have.slice(0, 500).concat(have.slice(-500)) : have).forEach(function(k) {
     var v = node[k];
     if (!v || typeof v !== "object") { fields["(value)"] = kindOf(v); return; }
     Object.keys(v).forEach(function(f) { if (!fields[f]) fields[f] = kindOf(v[f]); });
   });
   return keys.length + " entries; keys: " + Object.entries(keyKinds).map(function(e) { return e[0] + "×" + e[1]; }).join(", ") +
-    (sample.length < keys.length ? " (of the first " + sample.length + ")" : "") + "; fields: " +
+    "; fields" + (Math.min(have.length, 1000) < keys.length ? " (of " + Math.min(have.length, 1000) + ")" : "") + ": " +
     Object.entries(fields).slice(0, 25).map(function(e) { return e[0] + ":" + e[1]; }).join(", ");
 }
 function kindOf(x) {
@@ -476,9 +497,13 @@ async function probeFirebase(env, paths, log) {
   var c = fb.client(env);
   for (var p of paths) {
     try {
-      var n = (await c.keys(p)).length;
-      var sample = (await c.get(p, { orderBy: '"$key"', limitToFirst: "300" })) || {};
-      log(p + ": " + n + " entries in all. " + describe(sample));
+      // every key, and fields from both ends (numbers sort first, so the
+      // first entries alone can look nothing like the rest)
+      var all = await c.keys(p);
+      var sample = Object.assign({},
+        (await c.get(p, { orderBy: '"$key"', limitToFirst: "300" })) || {},
+        (await c.get(p, { orderBy: '"$key"', limitToLast: "300" })) || {});
+      log(p + ": " + describe(sample, all));
     } catch (e) {
       log(p + ": " + e.message);
     }
