@@ -4,3 +4,5 @@ auto-update.log
 .auto-update-state.*
 # Firebase emulator logs (tests)
 *-debug.log
+# play history toolkit's database and reports (tools/history)
+history-data/

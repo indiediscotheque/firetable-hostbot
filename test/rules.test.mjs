@@ -157,6 +157,35 @@ await expect("ALLOWED", "mod fixes a play's tags (Recent + global, one write)", 
 }));
 await expect("ALLOWED", "delete a playlist", eve.ref("playlists/eve/pl3").remove());
 
+console.log("-- play history: abuse (DENIED)");
+const logEntry = (by, extra) => Object.assign({ k: "1abc", a: "Artist", t: "Song", fa: "Artsit", ft: "Song", by, at: TS }, extra);
+await expect("DENIED", "listener writes the play log", eve.ref("playLog").push({ k: "1abc", w: 1 }));
+await expect("DENIED", "listener reads the play log", eve.ref("playLog").once("value"));
+await expect("DENIED", "listener sets a play count", eve.ref("globalSongs/t1/plays").set(9999));
+await expect("DENIED", "listener points a spelling at another track", eve.ref("globalSongKeys/abc").set("t2"));
+await expect("DENIED", "mod sets a play count", db("mod1").ref("globalSongs/t1/plays").set(9999));
+await expect("DENIED", "listener logs a tag fix", eve.ref("tagLog").push(logEntry("eve")));
+await expect("DENIED", "mod logs a tag fix as someone else", db("mod1").ref("tagLog").push(logEntry("boss")));
+await expect("DENIED", "mod backdates a tag fix", db("mod1").ref("tagLog").push(logEntry("mod1", { at: 1 })));
+await expect("DENIED", "mod logs a 200 KB tag", db("mod1").ref("tagLog").push(logEntry("mod1", { a: big })));
+await expect("DENIED", "mod logs a tag with extra fields", db("mod1").ref("tagLog").push(logEntry("mod1", { junk: 1 })));
+await expect("DENIED", "mod reads the tag log", db("mod1").ref("tagLog").once("value"));
+await expect("DENIED", "mod answers a tag question directly", db("mod1").ref("tagReview/q1/decision").set("merge"));
+await expect("DENIED", "listener switches the history off", eve.ref("globalSongsMeta/ready").set(false));
+
+console.log("-- play history: normal use (ALLOWED)");
+await expect("ALLOWED", "anyone reads a track's history", eve.ref("globalSongs/t1").once("value"));
+await expect("ALLOWED", "bot counts a play", db("bot").ref("globalSongs/t1").transaction((t) => Object.assign(t || {}, { plays: ((t && t.plays) || 0) + 1 })));
+await expect("ALLOWED", "bot links an upload and a spelling", db("bot").ref().update({ "globalTracks/1abc/song": "t1", "globalSongKeys/abc": "t1", "globalWorkKeys/abc": "s1" }));
+await expect("ALLOWED", "bot logs a play", db("bot").ref("playLog").push({ k: "1abc", a: "A", t: "T", w: Date.now(), dj: "eve", sk: false }));
+await expect("ALLOWED", "bot logs a !fixtags fix", db("bot").ref("tagLog").push({ k: "1abc", a: "A", t: "T", by: "mod1", at: Date.now() }));
+await expect("ALLOWED", "mod fixes tags from the site and logs it, one write", db("mod1").ref().update({
+  "globalTracks/1abc/artist": "Artist", "globalTracks/1abc/title": "Song", ["tagLog/" + db("mod1").ref("tagLog").push().key]: logEntry("mod1")
+}));
+await expect("ALLOWED", "bot records a mod's answer to a tag question", db("bot").ref("tagReview/q1").update({ decision: "merge", by: "mod1", at: Date.now() }));
+await expect("ALLOWED", "bot reads the open tag questions", db("bot").ref("tagReview").orderByChild("n").limitToFirst(5).once("value"));
+await expect("ALLOWED", "publish switches the history on", db("bot").ref("globalSongsMeta").update({ ready: true, published_at: TS }));
+
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
 process.exit(failed ? 1 : 0);

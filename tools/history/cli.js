@@ -1,0 +1,208 @@
+#!/usr/bin/env node
+// The room's play history toolkit. Run from the bot's folder:
+//   npm run history -- <command> [options]
+// See tools/history/README.md.
+"use strict";
+var fs = require("fs");
+var path = require("path");
+var store = require("./store");
+var sources = require("./sources");
+var reconcile = require("./reconcile");
+var report = require("./report");
+var publish = require("./publish");
+var verify = require("./verify");
+var tags = require("../../lib/tags");
+
+var ROOT = path.join(__dirname, "..", "..");
+var HELP = `play history: join ADAM, Last.fm and the room's database into one history
+
+  npm run history -- <command> [options]
+
+getting the data in
+  import-adam <file.csv> [more.csv]   the ADAM export, one CSV per sheet (TRAX, plays, ...)
+        [--kind tracks|plays|raws|artists|djs]   if it can't tell from the columns
+  fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot
+  import-firebase <export.json>       or a Firebase console export instead
+  fetch-lastfm [--user a,b]           every scrobble (default LASTFM_USERNAME); later runs fetch only new ones
+  import-lastfm <file.csv> [--user name]   or a CSV export of scrobbles
+  enrich [--limit 3000]               ask Last.fm how it spells the most-played artists
+  verify-uploads [--limit N] [--recheck-days 90]   ask YouTube/SoundCloud what each upload is, and if it still exists
+
+making sense of it
+  reconcile [--window 10] [--adam-tz auto|America/Chicago|-6]
+  report                              summary.md and CSVs in the data folder
+  review apply <review.csv>           save your merge/separate answers, then reconcile again
+  lookup "Artist - Title"             what the history knows about one song
+  status                              what's been imported
+
+using it
+  publish [--write] [--restore-accents] [--retag] [--min-confidence 0.9] [--review-limit 300]
+  publish --off                       switch the bot back to the old counts
+  refresh [--publish]                 fetch-firebase + fetch-lastfm + verify-uploads + reconcile + report (+ publish --write)
+
+options
+  --dir <folder>   where the database and reports live (default: history-data/ in the bot's folder)
+`;
+
+function parseArgs(argv) {
+  var out = { _: [] };
+  for (var i = 0; i < argv.length; i++) {
+    var a = argv[i];
+    if (a.slice(0, 2) === "--") {
+      var eq = a.indexOf("=");
+      var k = (eq === -1 ? a.slice(2) : a.slice(2, eq)).replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+      if (eq !== -1) out[k] = a.slice(eq + 1);
+      else if (argv[i + 1] != null && argv[i + 1].slice(0, 2) !== "--") out[k] = argv[++i];
+      else out[k] = true;
+    } else out._.push(a);
+  }
+  return out;
+}
+
+function loadEnv() {
+  var env = Object.assign({}, process.env);
+  var file = path.join(ROOT, ".env");
+  if (fs.existsSync(file) && typeof process.loadEnvFile === "function") {
+    var before = Object.assign({}, process.env);
+    process.loadEnvFile(file);
+    Object.keys(process.env).forEach(function(k) { if (!(k in before)) env[k] = process.env[k]; });
+  }
+  return env;
+}
+
+function log(s) { console.log(s); }
+
+async function main() {
+  var args = parseArgs(process.argv.slice(2));
+  var cmd = args._.shift();
+  if (!cmd || cmd === "help" || args.help) { console.log(HELP); return; }
+  var dir = path.resolve(args.dir || path.join(ROOT, "history-data"));
+  var env = loadEnv();
+  var db = store.open(dir);
+  var t0 = Date.now();
+
+  switch (cmd) {
+    case "import-adam": {
+      if (!args._.length) throw new Error("which file? import-adam <file.csv>");
+      for (var f of args._) {
+        var r = await sources.importAdam(db, f, args.kind, log);
+        log(f + ": " + r.rows + " rows read, " + r.written + " observations" + (r.skipped ? ", " + r.skipped + " empty rows skipped" : ""));
+      }
+      break;
+    }
+    case "import-firebase": {
+      if (!args._[0]) throw new Error("which file? import-firebase <export.json>");
+      log(JSON.stringify(sources.importFirebaseFile(db, args._[0], log)));
+      break;
+    }
+    case "fetch-firebase":
+      log(JSON.stringify(await sources.fetchFirebase(db, env, { only: args.only }, log)));
+      break;
+    case "fetch-lastfm": {
+      var users = String(args.user || env.LASTFM_USERNAME || "").split(",").filter(Boolean);
+      if (!users.length) throw new Error("which Last.fm user? set LASTFM_USERNAME or pass --user");
+      for (var u of users) log(u + ": " + (await sources.fetchLastfm(db, env.LASTFM_APIKEY, u, log)) + " scrobbles in the history");
+      break;
+    }
+    case "import-lastfm": {
+      if (!args._[0]) throw new Error("which file? import-lastfm <file.csv>");
+      var res = await sources.importLastfmCsv(db, args._[0], args.user || env.LASTFM_USERNAME, log);
+      log(res.rows + " rows, " + res.written + " scrobbles" + (res.skipped ? ", " + res.skipped + " unreadable rows skipped" : ""));
+      break;
+    }
+    case "verify-uploads":
+      await verify.verifyUploads(db, env, { limit: args.limit, recheckDays: args.recheckDays }, log);
+      break;
+    case "enrich":
+      await sources.enrichArtists(db, env.LASTFM_APIKEY, Number(args.limit) || 3000, log);
+      break;
+    case "reconcile":
+      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", log: log });
+      break;
+    case "report":
+      report.report(db, dir, log);
+      break;
+    case "review": {
+      var sub = args._.shift();
+      if (sub === "apply") {
+        if (!args._[0]) throw new Error("which file? review apply <review.csv>");
+        await report.applyReview(db, args._[0], log);
+      } else {
+        var n = report.exportReview(db, path.join(dir, "review.csv"));
+        log(n + " to look at in " + path.join(dir, "review.csv"));
+      }
+      break;
+    }
+    case "publish":
+      await publish.publish(db, env, {
+        dir: dir, write: !!args.write, off: !!args.off, retag: !!args.retag, restoreAccents: !!args.restoreAccents,
+        minConfidence: args.minConfidence, existing: args.existing, reviewLimit: args.reviewLimit
+      }, log);
+      break;
+    case "refresh": {
+      log("== room database");
+      await sources.fetchFirebase(db, env, {}, log);
+      if (env.LASTFM_APIKEY && env.LASTFM_USERNAME) {
+        log("== Last.fm");
+        await sources.fetchLastfm(db, env.LASTFM_APIKEY, env.LASTFM_USERNAME, log);
+      }
+      log("== uploads");
+      await verify.verifyUploads(db, env, {}, log);
+      log("== reconcile");
+      reconcile.reconcile(db, { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", log: log });
+      report.report(db, dir, log);
+      if (args.publish) {
+        log("== publish");
+        await publish.publish(db, env, { dir: dir, write: true, restoreAccents: !!args.restoreAccents, retag: !!args.retag, minConfidence: args.minConfidence, reviewLimit: args.reviewLimit }, log);
+      }
+      break;
+    }
+    case "lookup": {
+      var q = args._.join(" ");
+      var p = tags.parse(q, null);
+      var k = tags.keysOf(p);
+      log("reads as: " + tags.format(p) + "\n  key: " + k.track + (p.weak ? "  (too vague to match on)" : ""));
+      var v = db.prepare("SELECT track_id FROM variants WHERE track_key = ? LIMIT 1").get(k.track) ||
+        db.prepare("SELECT track_id FROM variants WHERE song_key = ? LIMIT 1").get(k.song);
+      if (!v) { log("  not in the history (run reconcile?)"); break; }
+      var t = db.prepare("SELECT * FROM tracks WHERE id = ?").get(v.track_id);
+      var iso = function(ms) { return ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "?"; };
+      log("track " + t.id + ": " + t.artist + " - " + t.title);
+      log("  " + t.plays + " plays (" + t.scrobbles + " on Last.fm), " + t.djs + " DJs, " + t.uploads + " uploads, " + t.spellings + " spellings");
+      log("  first: " + iso(t.first_play_at) + " by " + (t.first_play_dj || "unknown") + (t.first_dj && t.first_dj !== t.first_play_dj ? " (first known DJ: " + t.first_dj + ", " + iso(t.first_dj_at) + ")" : ""));
+      log("  last:  " + iso(t.last_play_at) + " by " + (t.last_play_dj || "unknown"));
+      db.prepare("SELECT artist, title, seen, scrobbles, sources FROM variants WHERE track_id = ? ORDER BY seen DESC LIMIT 25").all(t.id).forEach(function(r) {
+        log("    " + String(r.seen).padStart(6) + "×  " + r.artist + " - " + r.title + "  [" + r.sources + "]");
+      });
+      var s = db.prepare("SELECT * FROM songs WHERE id = ?").get(t.song_id);
+      if (s && s.versions > 1) {
+        log("  all " + s.versions + " versions: " + s.plays + " plays");
+        db.prepare("SELECT artist, title, plays FROM tracks WHERE song_id = ? ORDER BY plays DESC").all(s.id).forEach(function(r) { log("    " + String(r.plays).padStart(6) + "  " + r.artist + " - " + r.title); });
+      }
+      break;
+    }
+    case "status": {
+      var rows = db.prepare("SELECT source, count(*) n, sum(role='play') plays, min(at) f, max(at) l FROM obs GROUP BY source ORDER BY source").all();
+      if (!rows.length) log("nothing imported yet in " + dir);
+      rows.forEach(function(r) {
+        log(r.source.padEnd(22) + String(r.n).padStart(10) + " rows" + String(r.plays || 0).padStart(10) + " plays   " +
+          (r.f ? new Date(r.f).toISOString().slice(0, 10) + " → " + new Date(r.l).toISOString().slice(0, 10) : ""));
+      });
+      var st = store.getState(db, "reconcile");
+      if (st) log("last reconcile: " + new Date(st.at).toISOString() + " (" + st.seconds + "s)");
+      var d = db.prepare("SELECT count(*) n FROM decisions").get().n;
+      if (d) log(d + " review answers saved");
+      break;
+    }
+    default:
+      console.log(HELP);
+      process.exitCode = 1;
+  }
+  if (Date.now() - t0 > 5000) log("done in " + Math.round((Date.now() - t0) / 1000) + "s");
+  db.close();
+}
+
+main().catch(function(e) {
+  console.error("error: " + (e && e.message || e));
+  process.exitCode = 1;
+});
