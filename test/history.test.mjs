@@ -177,7 +177,11 @@ test("tidy never loses what a tag says about the song: only upload junk goes, RS
   assert.equal(junk("#Xinobi#", "#Bmx# [#Moullinex remix#]"), "#Xinobi# - #Bmx# [#Moullinex remix#]", "a title written in hashtags stays");
   assert.equal(junk("Miike Snow", "Paddling Out (Jacques Lu Cont Remix (Audio))"), "Miike Snow - Paddling Out (Jacques Lu Cont Remix)");
   assert.equal(junk("Mitch Murder", "Kiesza - Hideaway (Mitch Murder Remix) FREE DOWNLOAD"), "Mitch Murder - Kiesza - Hideaway (Mitch Murder Remix)", "only the junk at the end goes");
-  assert.equal(rsn("Can", "Vitamin C (2004 - Remaster)"), "Can - Vitamin C (2004 - Remaster)");
+  assert.equal(rsn("Can", "Vitamin C (Live - 2004)"), "Can - Vitamin C (Live - 2004)", "a dash inside brackets stays");
+  assert.equal(rsn("Can", "Vitamin C (2004 Remaster)"), "Can - Vitamin C", "same-recording notes go: one track holds them all");
+  assert.equal(rsn("Bag Raiders", "Shooting Stars (Radio Edit)"), "Bag Raiders - Shooting Stars");
+  assert.equal(rsn("Foals", "My Number (Lemaitre Remix)"), "Foals - My Number (Lemaitre Remix)", "a remix is its own track and keeps its name");
+  assert.equal(rsn("PREMIERE: Interstate", "Get Down [Play Label Records]"), "Interstate - Get Down", "blog premieres and labels are upload junk");
   assert.equal(junk("Lace", "Can't Play Around ( Mark Curse ReEdit )"), "Lace - Can't Play Around (Mark Curse ReEdit)");
   assert.equal(tags.apTitleCase('ACTORS: "In Real Life"'), 'ACTORS: "In Real Life"');
   // upload junk out
@@ -225,7 +229,7 @@ test("a mod's fix sets an artist's capitals everywhere, never their accents (tho
     run("reconcile");
     run("report");
     let preview = readFileSync(join(dir, "tidy_preview.csv"), "utf8");
-    assert.match(preview, /Sebastian - Embody \(Official Video\),SebastiAn - Embody,/, "the mod's 'SebastiAn' reaches the artist's other songs");
+    assert.match(preview, /SebastiAn - Embody \(Official Video\),SebastiAn - Embody,/, "the mod's 'SebastiAn' is the artist's one name, on their other songs too");
     assert.match(preview, /Björk - Jóga \(Official Video\),Björk - Jóga,/, "the mod's 'Bjork' doesn't take the accent out (no YouTube Music answer yet)");
     const store = require("../tools/history/store.js");
     const db = store.open(dir);
@@ -241,6 +245,36 @@ test("a mod's fix sets an artist's capitals everywhere, never their accents (tho
   }
 });
 
+test("one artist, one name: YouTube Music's spelling when well attested; it never takes accents off on one upload's word", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
+  try {
+    const t = (artist, title) => ({ artist, title, type: 1, first_play_date: 1600000000000 });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: {
+      "1lemaitre001": t("Lemâitre", "Cut To Black"), "1lemaitre002": t("Lemâitre", "Coffee Table"), "1lemaitre003": t("lemaitre", "Nishio"),
+      "1evora000001": t("Cesária Évora", "Angola"), "1evora000002": t("Cesária Évora", "Sodade"), "1evora000003": t("Cesaria Evora", "Petit Pays")
+    } }));
+    run("import-firebase", join(dir, "fb.json"));
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const yt = db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('yt', ?, ?, 1)");
+    // the room's uploads came from these Topic channels: Lemaitre three times, Cesaria Evora once
+    yt.run("lemaitre001", JSON.stringify({ title: "Cut To Black", channel: "Lemaitre - Topic" }));
+    yt.run("lemaitre002", JSON.stringify({ title: "Coffee Table", channel: "Lemaitre - Topic" }));
+    yt.run("lemaitre003", JSON.stringify({ title: "Nishio", channel: "Lemaitre - Topic" }));
+    yt.run("evora000003", JSON.stringify({ title: "Petit Pays", channel: "Cesaria Evora - Topic" }));
+    db.close();
+    run("verify-uploads");
+    run("reconcile");
+    const look = (q) => run("lookup", q).split("\n").find((l) => /^track /.test(l));
+    assert.match(look("Lemaitre - Nishio"), /: Lemaitre - Nishio$/, "YouTube Music on 3 uploads: its spelling, capitals included");
+    assert.match(look("Lemaitre - Cut To Black"), /: Lemaitre - Cut To Black$/, "and the room's 'Lemâitre' follows it");
+    assert.match(look("Cesaria Evora - Angola"), /: Cesária Évora - Angola$/, "one upload's auto channel doesn't take the accents off");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and exceptions left alone", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
@@ -250,8 +284,8 @@ test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and ex
     run("reconcile");
     run("report");
     const csvText = readFileSync(join(dir, "tidy_preview.csv"), "utf8");
-    assert.match(csvText, /TameImpalaVEVO - Feels Like We Only Go Backwards \(Official Video\) HD,Tame Impala - Feels Like We Only Go Backwards,/,
-      "junk out, and the artist written the way the room writes it");
+    assert.match(csvText, /Tame Impala - Feels Like We Only Go Backwards \(Official Video\) HD,Tame Impala - Feels Like We Only Go Backwards,/,
+      "junk out, and the artist shown with their one name ('TameImpalaVEVO' is 'Tame Impala')");
     assert.match(csvText, /Daft Punk ft\. Pharrell Williams - Get Lucky \| Columbia Records,Daft Punk ft\. Pharrell Williams - Get Lucky,Daft Punk - Get Lucky feat\. Pharrell Williams,/,
       "junk keeps 'ft.' as typed; rsn lays it out");
     assert.match(csvText, /ODESZA - Say My Name ft\. Zyra \[RL Grime Edit\],.*yes \(a mod's fix/, "a logged mod fix is left alone");
@@ -324,7 +358,7 @@ test("accents: restored when enough logs (or a trusted source) have them, word b
     run("reconcile");
     const look = (q) => run("lookup", q).split("\n").find((l) => /^track /.test(l));
     // an artist's name changes on all their songs only as YouTube Music writes it
-    assert.match(look("Bjork - Hyperballad"), /: Bjrk - Hyperballad$/, "not looked up on YouTube Music yet: the artist is left as it is");
+    assert.match(look("Bjork - Hyperballad"), /: Bjork - Hyperballad$/, "one artist, one name ('Bjrk' is 'Bjork'); accents wait for YouTube Music");
     assert.match(look("Sigur Ros - Saeglopur"), /: Sigur Rós - Sæglópur$/, "an upload's own SoundCloud tags still put the accents on its own track");
     const db2 = store.open(dir);
     const ytm = db2.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('ytm', ?, ?, 1)");
@@ -338,7 +372,7 @@ test("accents: restored when enough logs (or a trusted source) have them, word b
     assert.match(look("Bjork - Hyperballad"), /: Björk - Hyperballad$/, "'Bjrk' (letter dropped) restored");
     assert.match(look("Foals - My Number"), /: Foals - My Number$/, "one odd spelling ('Nümber') isn't enough");
     run("report");
-    assert.match(readFileSync(join(dir, "artist_accents.csv"), "utf8"), /Bjork,Björk \(\d+ logs\),Björk,accents from YouTube Music,Björk/);
+    assert.match(readFileSync(join(dir, "artist_accents.csv"), "utf8"), /Bjork,Björk \(\d+ logs\),Björk \(1\),accents from YouTube Music,Björk/);
     assert.match(look("Gorillaz - Andromeda"), /: Gorillaz - Andromeda feat\. DRÄM$/, "a featured artist's name restored too");
     assert.match(look("Sigur Ros - Saeglopur"), /: Sigur Rós - Sæglópur$/, "SoundCloud's own tags: trusted, restored from one log");
     run("report");

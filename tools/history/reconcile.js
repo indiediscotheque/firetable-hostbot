@@ -637,26 +637,42 @@ function reconcile(db, opts) {
   });
   var artistAccents = []; // artist_accents.csv
   var ytmWanted = [];     // to look up on YouTube Music
+  // One name per artist, shown on every track of theirs. YouTube Music is
+  // the main reference: its spelling, capitals and accents included, when
+  // at least YTM_SURE of the room's uploads came from that Topic channel
+  // ("Lemaitre", "Röyksopp"). Seen less, it can add accents but not take
+  // them away ("Cesária Évora" stays; YouTube's auto channels sometimes drop
+  // them). Otherwise the room's most used spelling. A mod's spelling sets
+  // capitals and punctuation either way.
   bestArtistName.forEach(function(cur, c) {
     var keys = [c].concat((keysOfArtist.get(c) || []).filter(function(k) { return k !== c; }));
-    var pick = null;
+    var pick = null; // what the logs suggest, for the report and check-artists
     keys.forEach(function(k) {
       var p = accents.pick("artist", k, cur.name);
       if (p && (!pick || p.n > pick.n)) pick = p;
     });
     var ref = ytmRef(keys);
-    var out = null;
+    var name = cur.name;
+    var by = null;
+    if (ref && ref.n >= YTM_SURE) { name = ref.name; by = "YouTube Music"; }
+    else if (ref && NON_ASCII_LETTER.test(ref.name)) {
+      var w = withAccentsOf(name, ref.name);
+      if (w && nonAsciiCount(w) > nonAsciiCount(name)) { name = w; by = "YouTube Music"; }
+    }
+    var mine = personSpelling.get(c);
+    var withMine = mine ? withAccentsOf(mine, name) : null;
+    if (withMine && withMine !== name) { name = withMine; by = (by ? by + " and " : "") + "a mod's spelling"; }
+    var accentsChanged = nonAsciiCount(name) !== nonAsciiCount(cur.name) || tags.fold(name) !== tags.fold(cur.name);
     var outcome = null;
-    if (ref) {
-      var w = NON_ASCII_LETTER.test(ref.name) ? withAccentsOf(cur.name, ref.name) : null;
-      if (w && w !== cur.name) { out = { word: w, n: ref.n, trusted: true, by: "YouTube Music" }; outcome = "accents from YouTube Music"; }
-      else if (pick) outcome = "left as it is: YouTube Music writes it " + ref.name;
-    } else if (pick) {
+    if (by && accentsChanged && nonAsciiCount(name) > nonAsciiCount(cur.name)) outcome = "accents from YouTube Music";
+    else if (by && accentsChanged) outcome = "accents taken off: YouTube Music writes it " + ref.name;
+    else if (pick && ref) outcome = "left as it is: YouTube Music writes it " + ref.name;
+    else if (pick) {
       outcome = ytmChecked.has(c) ? "left as it is: not found on YouTube Music" : "left as it is until YouTube Music is checked";
       if (!ytmChecked.has(c)) ytmWanted.push({ key: c, name: cur.name, accented: pick.word, logs: pick.n });
     }
-    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + pick.n + " logs)" : "", youtube_music: ref ? ref.name : "", outcome: outcome, shown_as: out ? out.word : cur.name });
-    if (out) bestArtistName.set(c, { name: out.word, score: cur.score, accent: out });
+    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + pick.n + " logs)" : "", youtube_music: ref ? ref.name + " (" + ref.n + ")" : "", outcome: outcome, shown_as: name });
+    bestArtistName.set(c, { name: name, score: cur.score, by: by || "the room's usual spelling" });
   });
   // YouTube Music's most used spelling of an artist, from any of their keys
   function ytmRef(keys) {
@@ -695,17 +711,27 @@ function reconcile(db, opts) {
   });
 
   // Put each artist name in text back the way the logs write it, accents included
+  // Each artist named in text, written as that artist's one name. Accents
+  // only change as YouTube Music has them; otherwise the text keeps its own
+  // ("Björk" isn't turned into the more common "Bjork").
   function restoreNames(text, why, names) {
     var list = names || tags.splitArtists(tags.parse(text, "x").artist);
+    var whole = !names && list.length === 1 && !tags.parse(text, "x").featured.length;
     list.forEach(function(name) {
       var k = tags.artistKeyOf(name);
       var best = bestArtistName.get(artistMap.get(k) || k);
-      if (!best || !best.accent || nonAsciiCount(best.name) <= nonAsciiCount(name)) return;
-      if (tags.fold(best.name) !== tags.fold(name) && skeleton(best.name) !== tags.squash(name)) return;
+      if (!best) return;
+      var target = /YouTube Music/.test(best.by) ? best.name : withAccentsOf(best.name, name) || best.name;
+      if (whole) {
+        // the whole artist field ("TameImpalaVEVO" -> "Tame Impala")
+        if (target !== text) { why.push(text + "→" + target + " (" + best.by + ")"); text = target; }
+        return;
+      }
+      if (target === name) return;
       var at = text.indexOf(name);
-      if (at === -1) return;
-      text = text.slice(0, at) + best.name + text.slice(at + name.length);
-      why.push(name + "→" + best.name + " (" + (best.accent.by || best.accent.n + " logs" + (best.accent.trusted ? ", trusted source" : "")) + ")");
+      if (at === -1 || /[\p{L}\p{N}]/u.test(text.charAt(at - 1) + text.charAt(at + name.length))) return;
+      text = text.slice(0, at) + target + text.slice(at + name.length);
+      why.push(name + "→" + target + " (" + best.by + ")");
     });
     return text;
   }
@@ -779,27 +805,9 @@ function reconcile(db, opts) {
     // (accents per YouTube Music), or with YouTube Music's accents; otherwise
     // the artist stays as typed
     // ("SebastiAn", "A R I Z O N A", "Tegan and Sara" are left alone)
-    // One way of writing an artist everywhere, starting from the tag as typed:
-    // a mod's spelling sets capitals and punctuation ("SebastiAn"), the room's
-    // usual spelling only puts missing spaces back ("TameImpalaVEVO"), and
-    // YouTube Music sets the accents, in the tag's own capitals. Nothing else
-    // ("MAM", "A R I Z O N A", "For Esmé" stay).
-    var unifyArtist = function(cur) { return cur; };
-    if (chosen.parsed.artists.length === 1) {
-      var ak = artistMap.get(chosen.keys.artist) || chosen.keys.artist;
-      var bn = bestArtistName.get(chosen.keys.artist);
-      var mine = personSpelling.get(ak);
-      var aRef = ytmRef([ak].concat(keysOfArtist.get(ak) || []));
-      var spaces = function(x) { return (x.match(/\s/g) || []).length; };
-      unifyArtist = function(cur) {
-        var r = cur;
-        if (mine) r = withAccentsOf(mine, cur) || (nonAsciiCount(mine) >= nonAsciiCount(cur) ? mine : cur);
-        // a name squashed into one word ("TeslaBoy", "TameImpalaVEVO"); "CeCe Peniston" stays
-        else if (bn && !/\s/.test(cur) && bn.name.replace(/\s+/g, "") === cur && spaces(bn.name) > 0) r = bn.name;
-        if (aRef) r = withAccentsOf(r, aRef.name) || r;
-        return r;
-      };
-    }
+    // tidying can leave a different spelling ("TameImpalaVEVO" -> "TameImpala"):
+    // the artist's one name again
+    var unifyArtist = function(cur) { return restoreNames(cur, []); };
     if (artist !== chosen.artist || title !== chosen.title) accentFixes.push({ from: chosen.artist + " - " + chosen.title, to: artist + " - " + title, why: restoredFrom.join("; ") });
 
     var nonWeak = members.filter(function(si) { return !spellings[si].weak; });
@@ -1032,6 +1040,7 @@ function reconcile(db, opts) {
 // letters). An accented version replaces the plain one when at least
 // accentMin logs have it, or a trusted source does; it doesn't need to beat
 // the plain one, which years of stripping for the old Last.fm bug made common.
+var YTM_SURE = 3; // uploads from an artist's Topic channel that make YouTube Music's spelling theirs
 var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
 function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;
