@@ -666,9 +666,11 @@ function reconcile(db, opts) {
     var outcome = null;
     if (by && accentsChanged && nonAsciiCount(name) > nonAsciiCount(cur.name)) outcome = "accents from YouTube Music";
     else if (by && accentsChanged) outcome = "accents taken off: YouTube Music writes it " + ref.name;
-    else if (pick && ref) outcome = "left as it is: YouTube Music writes it " + ref.name;
+    else if (pick && ref && ref.n >= YTM_SURE) outcome = "left as it is: YouTube Music writes it " + ref.name;
     else if (pick) {
-      outcome = ytmChecked.has(c) ? "left as it is: not found on YouTube Music" : "left as it is until YouTube Music is checked";
+      // not settled: YouTube Music not seen, or on too few uploads; one search
+      outcome = ytmChecked.has(c) ? "left as it is: " + (ref ? "YouTube Music writes it " + ref.name + " on too few uploads" : "not found on YouTube Music")
+        : "left as it is until YouTube Music is checked";
       if (!ytmChecked.has(c)) ytmWanted.push({ key: c, name: cur.name, accented: pick.word, logs: pick.n });
     }
     if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + pick.n + " logs)" : "", youtube_music: ref ? ref.name + " (" + ref.n + ")" : "", outcome: outcome, shown_as: name });
