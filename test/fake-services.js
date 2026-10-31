@@ -80,6 +80,7 @@ global.fetch = function (input, init) {
       : new Response(ARTWORK, { status: 200, headers: { "content-type": "image/png" } }));
   }
   if (host === "ws.audioscrobbler.com" && process.env.LASTFM_SECRET) return lastfm(url, init);
+  if (host === "fcm.googleapis.com" || /push\.apple\.com$/.test(host)) return pushService(url, init);
   return json(500, ""); // deezer, and last.fm unless a scenario sets it up
 };
 
@@ -106,3 +107,24 @@ Module._load = function (name) {
   }
   return m;
 };
+
+// Push services (Google, Apple): checks the VAPID token against the public key
+// the bot published, decrypts the message with the test browser's keys
+// (PUSH_UA_KEY / PUSH_AUTH) and logs it. A path ending in /gone answers 410
+// (the app was removed), as a real push service does.
+function pushService(url, init) {
+  const crypto = require("crypto");
+  const path = new URL(url).pathname;
+  if (path.endsWith("/gone")) return json(410, "");
+  const m = String(init.headers.Authorization).match(/^vapid t=([^.]+)\.([^.]+)\.([^,]+), k=(.+)$/);
+  const pub = Buffer.from(m[4], "base64url");
+  const key = crypto.createPublicKey({ key: { kty: "EC", crv: "P-256", x: pub.subarray(1, 33).toString("base64url"), y: pub.subarray(33).toString("base64url") }, format: "jwk" });
+  const signed = crypto.verify("sha256", Buffer.from(m[1] + "." + m[2]), { key, dsaEncoding: "ieee-p1363" }, Buffer.from(m[3], "base64url"));
+  const aud = JSON.parse(Buffer.from(m[2], "base64url")).aud;
+  const ua = crypto.createECDH("prime256v1");
+  ua.setPrivateKey(Buffer.from(process.env.PUSH_UA_KEY, "base64url"));
+  const msg = JSON.parse(require("http_ece").decrypt(init.body, { version: "aes128gcm", privateKey: ua, authSecret: process.env.PUSH_AUTH }).toString());
+  console.log("fake push " + path + " [" + (signed && aud === new URL(url).origin ? "vapid ok" : "VAPID WRONG") + " ttl=" + init.headers.TTL + "]: " +
+    msg.title + " | " + msg.body + (msg.badge != null ? " | badge=" + msg.badge : ""));
+  return json(201, "");
+}

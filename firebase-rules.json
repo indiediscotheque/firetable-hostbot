@@ -164,6 +164,50 @@
       ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
+    "pushKey": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{86,88}$/)"
+    },
+    "pushVapid": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".validate": "newData.child('publicKey').isString() && newData.child('privateKey').isString()"
+    },
+    "pushSubs": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        ".write": "(auth.uid == $uid && root.child('banned/' + auth.uid).val() != true) || root.child('users/' + auth.uid + '/hostbot').val() == true",
+        "$device": {
+          ".validate": "$device.matches(/^[A-Za-z0-9_-]{8,64}$/) && newData.hasChildren(['endpoint', 'p256dh', 'auth', 'seen'])",
+          "endpoint": {
+            ".validate": "newData.isString() && newData.val().length <= 1024 && newData.val().matches(/^https:\\/\\/(fcm\\.googleapis\\.com|([a-z0-9-]+\\.)*push\\.apple\\.com|([a-z0-9-]+\\.)*push\\.services\\.mozilla\\.com|([a-z0-9-]+\\.)*notify\\.windows\\.com)\\//)"
+          },
+          "p256dh": {
+            ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{86,88}$/)"
+          },
+          "auth": {
+            ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{16,44}$/)"
+          },
+          "key": {
+            ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{86,88}$/)"
+          },
+          "device": {
+            ".validate": "newData.isString() && newData.val().length <= 60"
+          },
+          "everyone": {
+            ".validate": "newData.isBoolean()"
+          },
+          "seen": {
+            ".validate": "newData.val() == now"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
     "autodj": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
