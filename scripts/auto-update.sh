@@ -88,6 +88,15 @@ main() {
   restarted=0
 
   log "updating ${old:0:7} -> ${new:0:7}"
+  # Files the update adds that lie here untracked (an `npm install` on the
+  # server leaves its own package-lock.json): git won't overwrite them, so
+  # they're set aside in .auto-update-aside/ and the update brings its own.
+  git diff --name-only --diff-filter=A -z "$old" "$new" | while IFS= read -r -d '' f; do
+    if [ -e "$f" ] && ! git ls-files --error-unmatch -- "$f" >/dev/null 2>&1; then
+      mkdir -p .auto-update-aside
+      mv -- "$f" ".auto-update-aside/$(basename -- "$f").$(date +%Y%m%d%H%M%S)" && log "set aside the untracked $f (the update brings its own; the old one is in .auto-update-aside/)"
+    fi
+  done
   git merge -q --ff-only "origin/$BRANCH" >> "$LOG" 2>&1 || rollback "git couldn't apply the update"
 
   if ! git diff --quiet "$old" "$new" -- package.json package-lock.json; then

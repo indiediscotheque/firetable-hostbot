@@ -67,5 +67,10 @@ echo "== dependency added with the lockfile"
 (cd "$T/dev" && npm install --no-audit --no-fund --package-lock-only >/dev/null 2>&1); push "lockfile for is-number"; run
 check "installed and restarted" '[ "$(on)" = "lockfile for is-number" ] && [ -d "$T/app/node_modules/is-number" ]'
 
+echo "== a file the update adds already lies here untracked"
+echo '{"left": "by an npm install on the server"}' > "$T/app/server-made.json"
+echo '{"from": "github"}' > "$T/dev/server-made.json"; push "adds server-made.json"; run
+check "set aside, then updated" '[ "$(on)" = "adds server-made.json" ] && grep -q github "$T/app/server-made.json" && ls "$T/app/.auto-update-aside/" | grep -q "^server-made.json\." && logged "set aside the untracked server-made.json"'
+
 [ "$failures" = 0 ] && echo "auto-update: all passed" || echo "$failures AUTO-UPDATE TEST(S) FAILED"
 exit "$failures"

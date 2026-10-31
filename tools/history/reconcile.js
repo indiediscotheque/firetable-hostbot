@@ -238,7 +238,10 @@ function reconcile(db, opts) {
       var d = artistDisplay.get(k);
       // a YouTube channel name ("ArtistVEVO", "Artist - Topic") isn't how the room writes the artist
       var channel = /vevo$|\s-\stopic$/i.test(sp.artist) || onlyFrom(sp, WEAK_PLATFORM);
-      d.set(a, (d.get(a) || 0) + (channel ? 0.1 : sp.seen + sp.maxWeight * 3));
+      // a piece of a collaboration ("the Dove" out of "Niki & the Dove") hardly
+      // counts for how an artist is written: only for one never seen alone
+      var piece = sp.parsed.artists.length > 1;
+      d.set(a, (d.get(a) || 0) + (channel ? 0.1 : piece ? 0.01 : sp.seen + sp.maxWeight * 3));
       // an upload's own YouTube/SoundCloud data is one log, and not a trusted one,
       // for every song by an artist: it can be another artist with the same
       // letters (SoundCloud's "Márina" is not Marina)
@@ -729,6 +732,10 @@ function reconcile(db, opts) {
         if (target !== text) { why.push(text + "→" + target + " (" + best.by + ")"); text = target; }
         return;
       }
+      // a name inside a collaboration or a band name read as one ("Marina" in
+      // "Marina & The Diamonds", "the Dove" in "Niki & the Dove"): only
+      // YouTube Music's accents, never another artist's spelling
+      target = /YouTube Music/.test(best.by) ? withAccentsOf(name, best.name) || name : name;
       if (target === name) return;
       var at = text.indexOf(name);
       if (at === -1 || /[\p{L}\p{N}]/u.test(text.charAt(at - 1) + text.charAt(at + name.length))) return;

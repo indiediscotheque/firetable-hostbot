@@ -2,6 +2,7 @@ node_modules/
 .env
 auto-update.log
 .auto-update-state.*
+.auto-update-aside/
 # Firebase emulator logs (tests)
 *-debug.log
 # play history toolkit's database and reports (tools/history)
