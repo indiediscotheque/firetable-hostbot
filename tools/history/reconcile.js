@@ -794,7 +794,8 @@ function reconcile(db, opts) {
       unifyArtist = function(cur) {
         var r = cur;
         if (mine) r = withAccentsOf(mine, cur) || (nonAsciiCount(mine) >= nonAsciiCount(cur) ? mine : cur);
-        else if (bn && bn.name.replace(/\s+/g, "") === cur.replace(/\s+/g, "") && spaces(bn.name) > spaces(cur)) r = bn.name;
+        // a name squashed into one word ("TeslaBoy", "TameImpalaVEVO"); "CeCe Peniston" stays
+        else if (bn && !/\s/.test(cur) && bn.name.replace(/\s+/g, "") === cur && spaces(bn.name) > 0) r = bn.name;
         if (aRef) r = withAccentsOf(r, aRef.name) || r;
         return r;
       };

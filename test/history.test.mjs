@@ -173,7 +173,8 @@ test("tidy never loses what a tag says about the song: only upload junk goes, RS
   assert.equal(rsn("Major Lazer feat. Amber (of Dirty Projectors)", "Get Free"), "Major Lazer - Get Free feat. Amber (of Dirty Projectors)");
   assert.equal(rsn("September 87", "Bad Dream Baby feat. Dream Fiend (Dream Fiend Cut)"), "September 87 - Bad Dream Baby feat. Dream Fiend (Dream Fiend Cut)");
   assert.equal(junk("MNDR", "#1 in Heaven"), "MNDR - #1 in Heaven", "'#1' is not a hashtag");
-  assert.equal(junk("Artist", "Song #tbt"), "Artist - Song");
+  assert.equal(junk("Artist", "Song #tbt #house"), "Artist - Song");
+  assert.equal(junk("#Xinobi#", "#Bmx# [#Moullinex remix#]"), "#Xinobi# - #Bmx# [#Moullinex remix#]", "a title written in hashtags stays");
   assert.equal(junk("Miike Snow", "Paddling Out (Jacques Lu Cont Remix (Audio))"), "Miike Snow - Paddling Out (Jacques Lu Cont Remix)");
   assert.equal(junk("Mitch Murder", "Kiesza - Hideaway (Mitch Murder Remix) FREE DOWNLOAD"), "Mitch Murder - Kiesza - Hideaway (Mitch Murder Remix)", "only the junk at the end goes");
   assert.equal(rsn("Can", "Vitamin C (2004 - Remaster)"), "Can - Vitamin C (2004 - Remaster)");
