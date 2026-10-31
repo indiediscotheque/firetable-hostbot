@@ -48,6 +48,10 @@ on:
         description: "Start from scratch instead of from the last run's data"
         type: boolean
         default: false
+      undo:
+        description: "UNDO the last publish: switch the history off and put back the upload tags it changed (nothing else runs)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -100,16 +104,25 @@ jobs:
           key: play-history-${{ github.run_id }}
           restore-keys: play-history-
 
+      - name: Undo the last publish
+        if: ${{ inputs.undo }}
+        run: |
+          npm run history -- publish --off
+          npm run history -- undo-tags --write
+          echo "Undone: the bot is back on its old counts and the upload tags the last publish changed are back." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Import ADAM
-        if: ${{ inputs.adam_csv != '' }}
+        if: ${{ inputs.adam_csv != '' && !inputs.undo }}
         env:
           ADAM_CSV: ${{ inputs.adam_csv }}
         run: npm run history -- import-adam "$ADAM_CSV" --archive
 
       - name: Refresh (room database, Last.fm, uploads, matching)
+        if: ${{ !inputs.undo }}
         run: npm run history -- refresh
 
       - name: Publish
+        if: ${{ !inputs.undo }}
         env:
           PUBLISH: ${{ inputs.publish || (github.event_name == 'schedule' && vars.HISTORY_AUTO_PUBLISH == 'true') }}
           ACCENTS: ${{ github.event_name == 'schedule' || inputs.restore_accents }}

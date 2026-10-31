@@ -278,6 +278,54 @@ test("one artist, one name: YouTube Music's spelling when well attested; it neve
   }
 });
 
+test("undo: a publish backs up every upload tag it changes, and undo-tags puts them back (not over a later fix)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  const fb = require("../tools/history/firebase.js");
+  const realClient = fb.client;
+  try {
+    const fixture = JSON.parse(readFileSync(FIX + "firebase-tidy.json", "utf8"));
+    run("import-firebase", FIX + "firebase-tidy.json");
+    run("reconcile");
+    // the room's database, in memory
+    const root = { globalTracks: JSON.parse(JSON.stringify(fixture.globalTracks)) };
+    const at = (p) => p.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), root);
+    const put = (p, v) => {
+      const ks = p.split("/").filter(Boolean);
+      let o = root;
+      ks.slice(0, -1).forEach((k) => { o = o[k] = o[k] && typeof o[k] === "object" ? o[k] : {}; });
+      if (v === null) delete o[ks[ks.length - 1]];
+      else o[ks[ks.length - 1]] = JSON.parse(JSON.stringify(v, (k, x) => (x && x[".sv"] ? Date.now() : x)));
+    };
+    fb.client = () => ({
+      get: async (p) => JSON.parse(JSON.stringify(at(p) ?? null)),
+      getPaged: async (p, size, onPage) => onPage(JSON.parse(JSON.stringify(at(p) || {}))),
+      update: async (u) => Object.entries(u).forEach(([p, v]) => put(p, v)),
+      uid: async () => "bot"
+    });
+    const store = require("../tools/history/store.js");
+    const { publish, undoTags } = require("../tools/history/publish.js");
+    const db = store.open(dir);
+    const quiet = () => {};
+    await publish(db, {}, { dir, write: true, tidy: "junk", restoreAccents: true }, quiet);
+    db.close();
+    assert.equal(root.globalTracks["1eeeeeeeeee"].artist, "Tame Impala", "the publish tidied the upload's tags");
+    const runs = Object.keys(root.historyArchive.tagBackupRuns);
+    assert.equal(runs.length, 1);
+    assert.equal(root.historyArchive.tagBackups[runs[0]]["1eeeeeeeeee"].a, "TameImpalaVEVO", "and kept them as they were");
+    // a mod retags another changed upload afterwards
+    root.globalTracks["1ggggggggggg"].title = "Get Lucky (fixed by a mod)";
+    const r = await undoTags({}, { write: true }, quiet);
+    assert.equal(root.globalTracks["1eeeeeeeeee"].artist, "TameImpalaVEVO", "undo puts the old tags back");
+    assert.equal(root.globalTracks["1eeeeeeeeee"].title, "Feels Like We Only Go Backwards (Official Video) HD");
+    assert.equal(root.globalTracks["1ggggggggggg"].title, "Get Lucky (fixed by a mod)", "a fix made since is left alone");
+    assert.ok(r.restored >= 1 && r.kept === 1);
+  } finally {
+    fb.client = realClient;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("tidy: junk out, RSN layout opt-in, one artist spelling, a mod's fix and exceptions left alone", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });

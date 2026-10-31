@@ -23,7 +23,9 @@ Each run starts from the last run's data, so a refresh takes minutes. The first 
 - it would change the tags of more than 10% of uploads
 - many tracks pulled in lots of different artists (a matching problem)
 
-Tick **force** to send it anyway. A preview never writes anything. `publish --off` (or removing `globalSongsMeta/ready`) puts the bot back on the old counts.
+Tick **force** to send it anyway. A preview never writes anything.
+
+**Undo.** Every publish first saves the old tags of each upload it changes (`historyArchive/tagBackups` in the room's database). To undo the last publish, run the Action with **undo** ticked (or `publish --off` then `undo-tags --write`): the bot goes back on its old counts and the upload tags come back, except on uploads someone has retagged since. `undo-tags --run <id>` undoes an earlier one.
 
 ## first run (on a computer or the bot server)
 1. **ADAM** is already in the room's database (its first and last plays, in `globalTracks`) and comes in with step 2. Only if you have a separate ADAM export (CSV, one per sheet): `npm run history -- import-adam file.csv`. Google Sheets turns some titles into times and numbers (`2:00` becomes `2:00 AM`); those are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`.

@@ -106,6 +106,7 @@ async function publish(db, env, opts, log) {
   });
 
   var preview = [];
+  var tagBackup = {}; // upload -> its tags before and after, to undo with undo-tags
   for (var u of db.prepare(`SELECT u.*, t.artist ta, t.title tt, t.confidence FROM uploads u JOIN tracks t ON t.id = u.track_id`).iterate()) {
     var tid = trackIdMap.get(u.track_id);
     if (!tid) continue;
@@ -122,6 +123,7 @@ async function publish(db, env, opts, log) {
     if (opts.retag || tidied || (opts.restoreAccents && accentOnly)) {
       updates[up + "artist"] = sh.a;
       updates[up + "title"] = sh.t;
+      tagBackup[u.type + "" + u.cid] = { a: u.artist, t: u.title || "", na: sh.a, nt: sh.t };
       var kind = accentOnly ? "accents" : tidied && !opts.retag ? "tidiedUploads" : "retags";
       counts[kind] = (counts[kind] || 0) + 1;
       preview.push({ upload: u.type + u.cid, from: current, to: wanted, why: accentOnly ? "accents" : tidied ? "tidy " + level : "best spelling" });
@@ -184,6 +186,18 @@ async function publish(db, env, opts, log) {
     throw err;
   }
 
+  // every upload tag this run changes, as it was: kept in the room's database
+  // first, so `undo-tags` can put them back (historyArchive is the bot's own)
+  var runId = String(Date.now());
+  var backupKeys = Object.keys(tagBackup);
+  for (var b = 0; b < backupKeys.length; b += 2500) {
+    var part = {};
+    backupKeys.slice(b, b + 2500).forEach(function(k) { part["historyArchive/tagBackups/" + runId + "/" + k] = tagBackup[k]; });
+    await c.update(part);
+  }
+  await c.update({ ["historyArchive/tagBackupRuns/" + runId]: { at: { ".sv": "timestamp" }, uploads: backupKeys.length } });
+  log("  " + backupKeys.length + " upload tags backed up (undo with: undo-tags)");
+
   // ready goes last, so the bot only switches over once everything is there
   var ready = { "globalSongsMeta/ready": true, "globalSongsMeta/published_at": { ".sv": "timestamp" }, "globalSongsMeta/tracks": counts.tracks, "globalSongsMeta/songs": counts.songs, "globalSongsMeta/plays": counts.plays };
   paths = paths.filter(function(p) { return p.indexOf("globalSongsMeta/") !== 0; });
@@ -197,6 +211,40 @@ async function publish(db, env, opts, log) {
   await c.update(ready);
   log("published. The bot now shows true first plays and the room's own play counts (undo with: publish --off)");
   return counts;
+}
+
+// Put back the upload tags a publish changed (the latest, or --run <id>).
+// An upload someone has retagged since keeps its new tags.
+async function undoTags(env, opts, log) {
+  var c = fb.client(env);
+  var runs = (await c.get("historyArchive/tagBackupRuns")) || {};
+  var ids = Object.keys(runs).sort();
+  var id = opts.run ? String(opts.run) : ids[ids.length - 1];
+  if (!id || !runs[id]) throw new Error(ids.length ? "no backup " + opts.run + "; there are: " + ids.join(", ") : "no tag backups yet: nothing to undo");
+  var backup = (await c.get("historyArchive/tagBackups/" + id)) || {};
+  var now = {};
+  await c.getPaged("globalTracks", 20000, function(page) { Object.assign(now, page); });
+  var updates = {};
+  var restored = 0;
+  var kept = 0;
+  Object.keys(backup).forEach(function(up) {
+    var b = backup[up];
+    var cur = now[up] || {};
+    if ((cur.artist || "") !== (b.na || "") || (cur.title || "") !== (b.nt || "")) { kept++; return; }
+    updates["globalTracks/" + up + "/artist"] = b.a;
+    updates["globalTracks/" + up + "/title"] = b.t;
+    restored++;
+  });
+  log(restored + " upload tags " + (opts.write ? "put back" : "would be put back") + " from the publish of " + new Date(Number(id)).toISOString() +
+    "; " + kept + " changed since (left as they are)");
+  if (!opts.write) { log("nothing sent (add --write)"); return { restored: restored, kept: kept }; }
+  var paths = Object.keys(updates);
+  for (var i = 0; i < paths.length; i += 2500) {
+    var chunk = {};
+    paths.slice(i, i + 2500).forEach(function(p) { chunk[p] = updates[p]; });
+    await c.update(chunk);
+  }
+  return { restored: restored, kept: kept };
 }
 
 function checks(counts, previous, db) {
@@ -218,4 +266,4 @@ function checks(counts, previous, db) {
 function set(updates, p, v) { updates[p] = v == null || v === "" ? null : v; }
 function skeletonOf(s) { return tags.squash(String(s).replace(/[^\x00-\x7F]|\?/g, "")); }
 
-module.exports = { publish: publish };
+module.exports = { publish: publish, undoTags: undoTags };

@@ -26,6 +26,8 @@ getting the data in
         [--archive]   keep a copy in the room's database, so any rebuild (e.g. the GitHub Action) has it
   fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot, ADAM's
         moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs)
+  undo-tags [--run <id>] [--write]    put back the upload tags the latest publish (or that run) changed;
+        uploads retagged since are left alone. With publish --off, the room is back as it was
   check-artists [--max-quota 3000]    look up on YouTube Music the artists whose accents the logs
         disagree on (100 quota units each, most played first; refresh does this too). reconcile after
   probe [path ...]                    how each path is laid out (fields and kinds of values, no data)
@@ -139,6 +141,9 @@ async function main() {
     }
     case "verify-uploads":
       await verify.verifyUploads(db, env, { limit: args.limit, recheckDays: args.recheckDays, maxQuota: args.maxQuota }, log);
+      break;
+    case "undo-tags":
+      await publish.undoTags(env, { run: args.run, write: !!args.write }, log);
       break;
     case "check-artists":
       await verify.checkArtists(db, env, { maxQuota: args.maxQuota }, log);
