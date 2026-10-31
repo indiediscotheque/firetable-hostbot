@@ -112,7 +112,14 @@ function report(db, dir, log) {
   add("| spellings joined | " + n(totals.spellings) + " |");
   add("| uploads | " + n(totals.uploads) + " |");
   add("| DJs | " + n(totals.djs) + " |");
-  add("| ADAM clock | " + (st.zone === 0 ? "UTC" : st.zone) + (st.tz ? " (" + st.tz.best.map(function(b) { return b[0] + ": " + b[1]; }).join(", ") + " of " + st.tz.sample + ")" : "") + " |");
+  // st.tz: {kind: {sample, best}}; older runs saved one {sample, best}
+  var tz = st.tz && st.tz.best ? { 1: st.tz } : st.tz || {};
+  var zones = st.zones || { 1: st.zone };
+  var clock = function(z, t) {
+    return (z === 0 || z == null ? "UTC" : z) + (t ? " (" + t.best.map(function(b) { return b[0] + ": " + b[1]; }).join(", ") + " of " + t.sample + " line up)" : "");
+  };
+  if (tz[1] || !tz[2]) add("| ADAM clock (its exports) | " + clock(zones[1], tz[1]) + " |");
+  if (tz[2]) add("| ADAM clock (moved into globalTracks) | " + clock(zones[2], tz[2]) + " |");
   add("| accents restored | " + n(st.accentFixes) + " (restore_accents.csv) |");
   add("| waiting for you | " + n(totals.review) + " (review.csv) |");
   add();

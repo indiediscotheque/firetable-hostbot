@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS obs (
   cid     TEXT,            -- the upload's id
   role    TEXT NOT NULL,   -- play | first | last | tag
   at      INTEGER,         -- ms since 1970 (UTC; see naive_tz)
-  naive_tz INTEGER DEFAULT 0, -- 1: "at" was a local time with no zone (ADAM)
+  naive_tz INTEGER DEFAULT 0, -- 1: "at" was a local time with no zone (ADAM); 2: a UTC time read as local (ADAM, moved into globalTracks)
   dj      TEXT,            -- DJ name or id as the source gave it
   weight  REAL DEFAULT 1,  -- how much this tag counts when picking the best spelling
   extra   TEXT             -- JSON: adam ids, Last.fm mbids, ...
@@ -106,7 +106,7 @@ function obsWriter(db) {
     add: function(o) {
       stmt.run(o.source, String(o.ref), str(o.artist), str(o.title), o.type == null ? null : Number(o.type) || null,
         o.cid == null || o.cid === "" ? null : String(o.cid), o.role || "tag", Number.isFinite(o.at) ? Math.round(o.at) : null,
-        o.naive ? 1 : 0, str(o.dj), o.weight == null ? 1 : o.weight, o.extra ? JSON.stringify(o.extra) : null);
+        o.naive === 2 ? 2 : o.naive ? 1 : 0, str(o.dj), o.weight == null ? 1 : o.weight, o.extra ? JSON.stringify(o.extra) : null);
       n++;
     },
     count: function() { return n; }

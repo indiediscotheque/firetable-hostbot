@@ -87,6 +87,15 @@ function naiveToUtc(ms, zone) {
   var guess = ms - zoneOffsetMs(ms, zone);
   return ms - zoneOffsetMs(guess, zone);
 }
+// The other way round: a UTC time that was read as local time in `zone`
+// (ADAM's dates as moved into globalTracks, read as US Central time)
+function shiftedToUtc(ms, zone) {
+  return zone === 0 ? ms : ms + zoneOffsetMs(ms, zone);
+}
+// naive_tz: 0 exact, 1 local time with no zone, 2 UTC read as local time
+function toUtc(ms, kind, zones) {
+  return kind === 2 ? shiftedToUtc(ms, zones[2]) : kind ? naiveToUtc(ms, zones[1]) : ms;
+}
 var ZONES = ["UTC", "America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Berlin"];
 for (var off = -12; off <= 14; off++) if (off) ZONES.push(off);
 
@@ -442,32 +451,41 @@ function reconcile(db, opts) {
   uploadMain.forEach(function(si, up) { uploadRoot.set(up, uf.find(si)); });
 
   // ---------------------------------------------------------------- tz
-  var zone = opts.adamTz != null && opts.adamTz !== "auto" ? (isNaN(Number(opts.adamTz)) ? opts.adamTz : Number(opts.adamTz)) : null;
-  var precise = new Map(); // root -> sorted times of non-ADAM plays
+  // ADAM's clock, measured against the plays whose time is exact (Last.fm):
+  // the zone that lines up the most stamps. Its own exports had local times
+  // with no zone (1); its history as moved into globalTracks had UTC times
+  // read as local ones (2). Each kind is measured on its own.
+  var given = opts.adamTz != null && opts.adamTz !== "auto" ? (isNaN(Number(opts.adamTz)) ? opts.adamTz : Number(opts.adamTz)) : null;
+  var zones = { 1: given, 2: given };
+  var rootOf = function(o) { return o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]); };
+  var precise = new Map(); // root -> sorted times of exact plays
   obsList.forEach(function(o) {
     if (o[3] || !o[2] || o[1] !== "play") return;
-    var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
-    push(precise, root, o[2]);
+    push(precise, rootOf(o), o[2]);
   });
   precise.forEach(function(l) { l.sort(function(a, b) { return a - b; }); });
-  var tzReport = null;
-  if (zone == null) {
+  var tzReport = {};
+  [1, 2].forEach(function(kind) {
+    if (zones[kind] != null) return;
     var sample = [];
     for (var oi = 0; oi < obsList.length && sample.length < 30000; oi++) {
       var o2 = obsList[oi];
-      if (!o2[3] || !o2[2]) continue;
-      var r2 = uf.find(o2[0]);
+      if (o2[3] !== kind || !o2[2]) continue;
+      var r2 = rootOf(o2);
       if (precise.has(r2)) sample.push([r2, o2[2]]);
     }
+    if (!sample.length) { zones[kind] = 0; return; }
     var scores = ZONES.map(function(z) {
       var hits = 0;
-      sample.forEach(function(s) { if (nearest(precise.get(s[0]), naiveToUtc(s[1], z)) <= 5 * MIN) hits++; });
+      sample.forEach(function(s) { if (nearest(precise.get(s[0]), kind === 2 ? shiftedToUtc(s[1], z) : naiveToUtc(s[1], z)) <= 5 * MIN) hits++; });
       return [z, hits];
     }).sort(function(a, b) { return b[1] - a[1]; });
-    zone = sample.length && scores[0][1] >= 20 ? scores[0][0] : 0;
-    tzReport = { sample: sample.length, best: scores.slice(0, 3), chosen: zone };
-    log("  ADAM clock: " + (zone === 0 ? "UTC (not enough overlap to tell)" : zone) + " (" + (scores[0] ? scores[0][1] : 0) + " of " + sample.length + " stamps line up)");
-  }
+    zones[kind] = scores[0][1] >= 20 ? scores[0][0] : 0;
+    tzReport[kind] = { sample: sample.length, best: scores.slice(0, 3), chosen: zones[kind] };
+    log("  ADAM clock" + (kind === 2 ? " (history moved into globalTracks)" : "") + ": " + (zones[kind] === 0 ? "UTC (not enough overlap to tell)" : zones[kind]) +
+      " (" + scores[0][1] + " of " + sample.length + " stamps line up)");
+  });
+  var zone = zones[1];
 
   // ------------------------------------------------------------ events
   log("lining up plays...");
@@ -528,7 +546,7 @@ function reconcile(db, opts) {
   var events = new Map(); // root -> [[at, src, role, dj, up]]
   obsList.forEach(function(o) {
     if (!o[2] || o[1] === "tag") return;
-    var at = o[3] ? naiveToUtc(o[2], zone) : o[2];
+    var at = toUtc(o[2], o[3], zones);
     var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     var src = sourceNames[o[4]];
     push(events, root, [at, src, o[1], djOf(o[5], src), o[6]]);
@@ -611,6 +629,8 @@ function reconcile(db, opts) {
   }
 
   var accentFixes = [];
+  var uploadOfRoot = new Map(); // a track's first upload, for tracks with only vague tags
+  uploadRoot.forEach(function(r, up) { if (!uploadOfRoot.has(r)) uploadOfRoot.set(r, up); });
   var usedTrackIds = new Set();
   var idClashes = [];
   var idClashCount = 0;
@@ -669,7 +689,7 @@ function reconcile(db, opts) {
 
     var nonWeak = members.filter(function(si) { return !spellings[si].weak; });
     var anchorKey = nonWeak.length ? nonWeak.map(function(si) { return spellings[si].raw.track; }).sort()[0]
-      : "upload:" + (Array.from(uploadRoot.entries()).find(function(e) { return e[1] === root; }) || [spellings[members[0]].raw.track])[0];
+      : "upload:" + (uploadOfRoot.get(root) || spellings[members[0]].raw.track);
     var id = "t" + tags.hash(anchorKey);
     if (usedTrackIds.has(id)) {
       // another track has the same key (vague tags with no upload, or two a
@@ -855,7 +875,7 @@ function reconcile(db, opts) {
       insR.run(r.kind, r.a, r.b, r.a_label, r.b_label, Math.round(r.score * 1000) / 1000, r.evidence);
     });
     store.setState(db, "reconcile", {
-      at: Date.now(), zone: zone, tz: tzReport, window: windowMs / MIN, conflicts: conflicts,
+      at: Date.now(), zone: zone, zones: zones, tz: tzReport, window: windowMs / MIN, conflicts: conflicts,
       accentFixes: accentFixes.length, seconds: Math.round((Date.now() - started) / 1000)
     });
   });
@@ -865,7 +885,7 @@ function reconcile(db, opts) {
   var summary = {
     observations: obsList.length, spellings: spellings.length, tracks: trackRows.length, songs: songMembers.size,
     uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length,
-    artistAliases: aliasReasons.length, review: review.length, accentFixes: accentFixes.length, adamClock: zone,
+    artistAliases: aliasReasons.length, review: review.length, accentFixes: accentFixes.length, adamClock: zone, adamMovedClock: zones[2],
     seconds: Math.round((Date.now() - started) / 1000)
   };
   log("  " + JSON.stringify(summary));
@@ -968,4 +988,4 @@ function nearest(sorted, x) {
   return d;
 }
 
-module.exports = { reconcile: reconcile, naiveToUtc: naiveToUtc, pairKey: pairKey };
+module.exports = { reconcile: reconcile, naiveToUtc: naiveToUtc, shiftedToUtc: shiftedToUtc, pairKey: pairKey };

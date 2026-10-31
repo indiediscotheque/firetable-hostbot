@@ -298,6 +298,42 @@ test("who is who: an account's claimed names are one DJ, shown as the name playe
   }
 });
 
+// When ADAM's history was moved into globalTracks its UTC times were read as
+// US Central time, so they are 5 or 6 hours late; the bot's own, from
+// December 2022, are right.
+test("ADAM's moved dates: the shift is measured against Last.fm and taken off, so plays count once and keep their DJ", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const chicago = (ms) => -Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", timeZoneName: "longOffset" })
+      .formatToParts(new Date(ms)).find((p) => p.type === "timeZoneName").value.match(/GMT-(\d\d)/)[1]) * 3600000;
+    const tracks = {};
+    const scrobbles = ["uts,utc_time,artist,artist_mbid,album,album_mbid,track,track_mbid"];
+    for (let i = 0; i < 24; i++) {
+      const at = Date.UTC(2017, i % 12, 3 + i, 1, 30); // a winter and a summer of plays
+      scrobbles.push(Math.floor(at / 1000) + ",,Shift Act " + i + ",,,,Song " + i + ",");
+      const moved = at - chicago(at); // UTC read as Chicago time: 5 or 6 hours late
+      tracks["1shift" + String(i).padStart(6, "0")] = { artist: "Shift Act " + i, title: "Song " + i, type: 1, first_play_date: moved, first_play_dj: "ana", last_play_date: moved, last_play_dj: "ana" };
+    }
+    // the bot's own date (2023): already right
+    const botAt = Date.UTC(2023, 5, 1, 20, 0);
+    scrobbles.push(Math.floor(botAt / 1000) + ",,Bot Era,,,,Song,");
+    tracks["1botera00000"] = { artist: "Bot Era", title: "Song", type: 1, first_play_date: botAt, first_play_dj: "ben", last_play_date: botAt, last_play_dj: "ben" };
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: tracks }));
+    writeFileSync(join(dir, "lastfm.csv"), scrobbles.join("\n") + "\n");
+    run("import-firebase", join(dir, "fb.json"));
+    run("import-lastfm", join(dir, "lastfm.csv"), "--user", "room");
+    assert.match(run("reconcile"), /ADAM clock \(history moved into globalTracks\): America\/Chicago \(24 of 24 stamps line up\)/);
+    const winter = run("lookup", "Shift Act 0 - Song 0");
+    assert.match(winter, /1 plays \(1 on Last\.fm\)/, "ADAM's play and the scrobble are one play");
+    assert.match(winter, /first: 2017-01-03 01:30 by ana/, "at the scrobble's time, with ADAM's DJ");
+    assert.match(run("lookup", "Shift Act 6 - Song 6"), /1 plays[^]*first: 2017-07-09 01:30 by ana/, "summer time too (5 hours, not 6)");
+    assert.match(run("lookup", "Bot Era - Song"), /1 plays[^]*first: 2023-06-01 20:00 by ben/, "the bot's own dates are left alone");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined' keys, uid DJs, first after last", () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });

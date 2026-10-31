@@ -282,6 +282,9 @@ function djOf(x, ctx) {
   return (ctx && ctx.djs.get(String(x))) || String(x);
 }
 
+// ADAM's last date in globalTracks is 2022-11-11, the bot's first 2022-12-23
+var ADAM_MOVED = Date.UTC(2022, 11, 1);
+
 function trackEntries(node, w, source, ctx, weight, botKeys) {
   ctx = ctx || { artists: new Map(), djs: new Map() };
   each(node, function(key, v) {
@@ -315,6 +318,9 @@ function trackEntry(key, v, w, source, ctx, weight, parent, botKeys) {
   var f = timeOf(first(v, ["first_play_date", "first_play", "first_played", "first_played_at", "created_at", "created"]));
   var l = timeOf(first(v, ["last_play_date", "last_play", "last_played", "last_played_at"]));
   var anchor = { adam: extra.adam };
+  // ADAM's history was moved into globalTracks with its UTC times read as
+  // local ones; the bot's own dates there start in December 2022
+  if (source === "fb:globalTracks") [f, l].forEach(function(t) { if (t && !t.naive && t.at < ADAM_MOVED) t.naive = 2; });
   if (f) w.add({ source: source, ref: key + ":first", artist: artist, title: title, type: up.type, cid: up.cid, role: "first", at: f.at, naive: f.naive, dj: djOf(first(v, ["first_play_dj", "first_dj", "first_dj_name", "first_play_dj_name"]), ctx), extra: anchor });
   if (l && (!f || l.at !== f.at)) w.add({ source: source, ref: key + ":last", artist: artist, title: title, type: up.type, cid: up.cid, role: "last", at: l.at, naive: l.naive, dj: djOf(first(v, ["last_play_dj", "last_dj", "last_dj_name", "last_play_dj_name"]), ctx), extra: anchor });
   // a single play (raws logged per play: song, DJ, when)
