@@ -234,7 +234,10 @@ People who install the site as an app (Add to Home Screen on iPhone/iPad, Instal
 - `PUSH_NOTIFICATIONS=false` turns it off. Sent pushes are logged as `push: mention for <name> to N device(s)`.
 
 ## private notices
-The bot doesn't @ping people in chat. What's meant for one person (you got a card, someone gave you a card, a mod put you on the bus, "are you there?" when you're on deck and went quiet, the track you queued can't play) goes to `notices/<uid>/`: the site shows it as a toast and removes it, and the person also gets a push notification when they're away from the room. Notices left over after a day are cleared. Needs the latest `firebase-rules.json` published; until then the log says so once and the bot pings in chat as before.
+The bot doesn't @ping people in chat. What's meant for one person (someone gave you a card, your GRAB was too late, a mod put you on the bus, "are you there?" when you're on deck and went quiet, the track you queued can't play) goes to `notices/<uid>/`: the site shows it as a toast and removes it, and the person also gets a push notification when they're away from the room. Notices left over after a day are cleared. Needs the latest `firebase-rules.json` published; until then the log says so once and the bot pings in chat as before.
+
+## trading cards
+Now and then (or with a supermod's `!printcard`) the bot prints a card of the song playing. Its chat message carries the card's id (`grab`), and the site shows a big GRAB button under it. The button sends `!grab <card id>` as a hidden bot command; typing `!grab` still works and takes whichever card is up. The first one gets the card and the room sees "<name> grabbed the card!" with the card. Anyone too late, or grabbing a card that a newer one replaced, gets a private notice and their button greys out. Needs the latest `firebase-rules.json` published (the `grab` field on chat messages); until then the log says so once and the bot asks for `!grab` in chat as before.
 
 ## last.fm
 With the `LASTFM_*` settings, each song is sent to last.fm as "now playing" and scrobbled when it ends, or when it's skipped after playing long enough by last.fm's rule (longer than 30 seconds, and played for half its length or 4 minutes).

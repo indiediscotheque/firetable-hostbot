@@ -36,6 +36,9 @@
         "card": {
           ".validate": "(root.child('cards/' + newData.val() + '/owner').val() == auth.uid) || (root.child('users/' + auth.uid + '/hostbot').val() == true)"
         },
+        "grab": {
+          ".validate": "newData.isString() && newData.val().length <= 64 && root.child('users/' + auth.uid + '/hostbot').val() == true"
+        },
         "name": {
           ".validate": "(root.child('users/' + auth.uid + '/username').val() == newData.val()) || (auth.uid == newData.val())"
         },
