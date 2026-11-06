@@ -507,6 +507,14 @@
                 ".validate": false
             }
         },
+        "offlineAt": {
+          ".write": "auth.uid == $uid",
+          ".validate": "newData.isNumber() && newData.val() <= now + 60000"
+        },
+        "closed": {
+          ".write": "auth.uid == $uid",
+          ".validate": "newData.val() == now"
+        },
         "joined": {
           ".write": "auth.uid == $uid",
           ".validate": "newData.val() == now && !data.exists()"

@@ -229,6 +229,46 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async away_djs() {
+    // idle with the room open: stays. Connection dropped (asleep, frozen tab):
+    // stays. Closed the browser: asked, then the bus. Back online: off the bus.
+    const now = Date.now();
+    const seat = (id) => ({ name: id, id, plays: 0 });
+    await put("/", base(Object.assign(nowPlaying("dj1", "cur1"), {
+      users: {
+        [BOT]: { username: "hostbot", hostbot: true, status: true },
+        dj1: { username: "dj1", status: true },
+        idler: { username: "idler", status: true, idle: { isIdle: true, audio: 1, since: now - 3600000 } },
+        sleeper: { username: "sleeper", status: false, offlineAt: now - 60000 },
+        closer: { username: "closer", status: false, offlineAt: now - 60000, closed: now - 60000 },
+        waiter: { username: "waiter", status: false, offlineAt: now - 60000, closed: now - 60000 }
+      },
+      table: [seat("dj1"), seat("idler"), seat("sleeper"), seat("closer")],
+      waitlist: [seat("waiter")]
+    })));
+    const p = startBot("away", { AWAY_CLOSED_MIN: "0.02", AWAY_ANSWER_MIN: "0.05", AWAY_LOST_HOURS: "1" });
+    await waitFor(p, "Listening now.");
+    await waitFor(p, "closer didn't come back", 15000);
+    await sleep(1500);
+    let st = await get("/");
+    const notices = (id) => Object.values((st.notices || {})[id] || {}).map((n) => n.txt);
+    const at = (id) => (st.table || []).find((x) => x && x.id === id);
+    check(notices("closer").some((t) => /^Are you there\?/.test(t)), "closed the browser: asked first");
+    check(at("closer") && at("closer").removeAfter === true && said(st).some((t) => /:bus: closer left, so they're catching the bus after their next song/.test(t)),
+      "then catches the bus: steps down after their next song");
+    check(!(st.waitlist || []).some((x) => x && x.id === "waiter") && said(st).some((t) => /waiter left, so they're off the waitlist/.test(t)), "closed and in the waitlist: out of line");
+    check(at("idler") && !at("idler").removeAfter && !notices("idler").length, "idle with the room open: stays, nothing asked");
+    check(at("sleeper") && !at("sleeper").removeAfter && !notices("sleeper").length, "connection dropped, browser not closed: stays");
+    check(at("dj1") && !at("dj1").removeAfter, "the DJ playing now is left alone");
+    // closer comes back before their turn
+    await put("/users/closer/status", true);
+    await put("/users/closer/closed", null);
+    await waitFor(p, "Welcome back, closer", 8000);
+    st = await get("/");
+    check(at("closer") && at("closer").removeAfter === false && said(st).some((t) => /Welcome back, closer! You're staying on the decks/.test(t)), "back online: off the bus, staying on");
+    await healthy(p);
+    return p;
+  },
   async song_tempo() {
     // an old lookup found nothing; the new one searches plainly, skips the
     // karaoke cover and the version with no tempo, and finds the radio edit's
