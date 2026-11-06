@@ -51,6 +51,7 @@ await expect("DENIED", "re-link someone else's message to a new feed entry", ato
 await expect("DENIED", "extra field in a feed entry", eve.ref("chatFeed/f8").set({ chatID: "evemsg", junk: big }));
 await expect("DENIED", "feed entry chatID that's an object", eve.ref("chatFeed/f7").set({ chatID: { a: 1 } }));
 await expect("DENIED", "message with a card you don't own", eve.ref("chatData/cardx").set({ id: "eve", name: "eve", txt: "x", time: TS, card: "nope" }));
+await expect("DENIED", "message with a GRAB button", atomicChat("eve", "g1", "fg1", { grab: "c1" }));
 
 console.log("-- chat: normal use (ALLOWED)");
 await expect("ALLOWED", "message + feed entry in one write", atomicChat("eve", "a1", "fa1"));
@@ -62,6 +63,7 @@ await expect("ALLOWED", "react to a message", eve.ref("chatData/bobmsg/reactions
 await expect("ALLOWED", "delete own message", eve.ref("chatData/a2").remove());
 await expect("ALLOWED", "mod hides a message", db("mod1").ref("chatFeed/f1/hidden").set(true));
 await expect("ALLOWED", "bot talks in one write", atomicChat("bot", "b1", "fb1"));
+await expect("ALLOWED", "bot prints a card with a GRAB button", atomicChat("bot", "b2", "fb2", { grab: "c1" }));
 
 console.log("-- public data: abuse (DENIED)");
 await expect("DENIED", "selectedList of 200 KB", eve.ref("users/eve/selectedList").set(big));

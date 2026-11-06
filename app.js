@@ -476,7 +476,9 @@ var claimLowercaseNames = function() {
 };
 setInterval(claimLowercaseNames, 6 * 60 * 60 * 1000);
 
-var talk = function(txt, card) {
+// opts.grab: a card id, so the site shows a GRAB button for it (#247); until
+// the database rules allow that, opts.plain is said instead.
+var talk = function(txt, card, opts) {
   txt = fitChat(txt);
   var namebo2 = botid;
   if (users[botid]) {
@@ -491,6 +493,7 @@ var talk = function(txt, card) {
     name: namebo2
   };
   if (card) chooto.card = card;
+  if (opts && opts.grab) chooto.grab = opts.grab;
   // The message and its feed entry in one write; the older three steps until
   // the database rules allow that
   var chatID = chatData.push().key;
@@ -500,6 +503,13 @@ var talk = function(txt, card) {
   updates["chatFeed/" + feedID] = { chatID: chatID };
   firebase.database().ref().update(updates).catch(function(err) {
     if (!/permission/i.test(err.code || err.message)) throw err;
+    if (chooto.grab) {
+      if (!talk.grabWarned) {
+        talk.grabWarned = true;
+        console.log("cards: the database rules don't allow GRAB buttons yet (publish firebase-rules.json); asking for !grab in chat until then.");
+      }
+      return talk(opts.plain || txt, card);
+    }
     var chatItem = chatData.push(chooto, function() {
       var feedItem = chatFeed.push({ chatID: chatItem.key }, function() {
         chatItem.child("feedID").set(feedItem.key);
@@ -1338,20 +1348,32 @@ var printCard = function(newEntry) {
     var cuteCard = ref.push(cardData, function(err) {
       if (err) return console.log("couldn't print a card:", err.message);
       cardForGrabs = cuteCard.key;
-      talk("A new trading card has been printed. Type !grab to grab it for yourself!");
+      talk("A new trading card has been printed!", null, {
+        grab: cuteCard.key,
+        plain: "A new trading card has been printed. Type !grab to grab it for yourself!"
+      });
     });
   }).catch(function(err) {
     console.log("couldn't print a card:", err && err.message);
   });
 };
 
-var giveCard = function(id, name) {
-  if (!cardForGrabs) return;
+// !grab (typed, or the site's GRAB button, which sends "!grab <card id>"):
+// the first one gets the card and the room sees it in chat (#245). A button
+// for a card that's gone (grabbed, or a newer one printed) gets a quiet "too
+// late" that also greys that button out.
+var giveCard = function(id, name, wanted) {
+  if (!cardForGrabs || (wanted && wanted != cardForGrabs)) {
+    if (wanted) notify(id, "Too late, that card's gone. Watch the chat for the next one!", { card: wanted, kind: "grab-missed", name: name });
+    return;
+  }
   var cardid = cardForGrabs;
   cardForGrabs = null;
-  var ref = firebase.database().ref("cards/" + cardid + "/owner");
-  ref.set(id);
-  notify(id, "Good job, you got the card! It's in your card case.", { card: cardid, kind: "card", name: name });
+  firebase.database().ref("cards/" + cardid + "/owner").set(id).then(function() {
+    talk(name + " grabbed the card!", cardid);
+  }, function(err) {
+    console.log("couldn't give a card:", err.message);
+  });
 };
 
 var THEME_MAX_LENGTH = 80;
@@ -2450,7 +2472,8 @@ var handleChat = function(chatID, feedKey) {
             if (chatData.id !== theDJ.id) cardGiftedThisSong = true;
           }
         } else if (command == "grab") {
-          if (cardForGrabs) giveCard(chatData.id, namebo);
+          // the GRAB button names its card; typed, "!grab" takes whichever is up
+          giveCard(chatData.id, namebo, chatData.botCmd ? (args || "").trim().slice(0, 64) : "");
         } else if (command == "upbot") {
           // Stay on the decks (even alone with a crowd) until the next
           // autopilot trigger.

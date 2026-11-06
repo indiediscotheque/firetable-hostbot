@@ -163,6 +163,36 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async card_grabs() {
+    await put("/", base(nowPlaying("dj1", "yt1")));
+    const p = startBot("card_grabs");
+    await waitFor(p, "Listening now.");
+    const grabFor = async (uid, txt) => {
+      const id = await post("/chatData", { id: uid, name: uid, txt, botCmd: true, time: { ".sv": "timestamp" } });
+      await post("/chatFeed", { chatID: id });
+    };
+    await say("dj2", "!grab"); // nothing printed yet
+    await say("boss", "!printcard");
+    await sleep(1500);
+    let st = await get("/");
+    const printed = Object.values(st.chatData).find((c) => c.id === BOT && c.grab);
+    check(printed && printed.txt === "A new trading card has been printed!" && st.cards[printed.grab] && st.cards[printed.grab].owner === false,
+      "a printed card comes with a GRAB button, not \"type !grab\"");
+    await grabFor("dj2", "!grab " + printed.grab);
+    await sleep(800);
+    await grabFor("boss", "!grab " + printed.grab); // a moment too slow
+    await grabFor("dj1", "!grab nope");
+    await sleep(1500);
+    st = await get("/");
+    const announced = Object.values(st.chatData).find((c) => c.id === BOT && c.card === printed.grab);
+    check(st.cards[printed.grab].owner === "dj2" && announced && announced.txt === "dj2 grabbed the card!" && !/@/.test(announced.txt),
+      "the GRAB button gets the card and the room sees who grabbed it, with the card");
+    const missed = (uid) => Object.values((st.notices || {})[uid] || {}).filter((n) => n.kind === "grab-missed");
+    check(missed("boss").length === 1 && missed("boss")[0].card === printed.grab && missed("dj1").length === 1 && !(st.notices || {}).dj2,
+      "a GRAB that's too late (or for another card) gets a quiet notice; the winner gets none");
+    await healthy(p);
+    return p;
+  },
   async titles_long_replies_and_replays() {
     await put("/", base({ queues: { dj1: { k1: yt("yt1", "Art - Song - Live Version") }, dj2: { s1: yt("yt2") } } }));
     const p = startBot("guards");
