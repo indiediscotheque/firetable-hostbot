@@ -82,6 +82,12 @@ await expect("ALLOWED", "status true, then false", eve.ref("users/eve/status").s
 await expect("ALLOWED", "idle {isIdle, audio, since}", eve.ref("users/eve/idle").set({ isIdle: true, audio: 1, since: TS }));
 await expect("ALLOWED", "selectedList '0' and a playlist id", eve.ref("users/eve/selectedList").set("0").then(() => eve.ref("users/eve/selectedList").set("-OabcDEF123456789xyz")));
 await expect("ALLOWED", "joined", eve.ref("users/eve/joined").set(TS));
+await expect("ALLOWED", "offlineAt set when the connection drops, closed when the page closes, both cleared on return",
+  eve.ref("users/eve/offlineAt").onDisconnect().set(TS).then(() => eve.ref("users/eve/closed").set(TS))
+    .then(() => eve.ref("users/eve/closed").remove()).then(() => eve.ref("users/eve/offlineAt").set(TS)));
+await expect("DENIED", "someone else's offlineAt", db("bob").ref("users/eve/offlineAt").set(TS));
+await expect("DENIED", "closed that isn't now", eve.ref("users/eve/closed").set(1));
+await expect("DENIED", "offlineAt in the future", eve.ref("users/eve/offlineAt").set(Date.now() + 86400000));
 await expect("ALLOWED", "avatarStyle", eve.ref("users/eve/avatarStyle").set("robohash:set2"));
 await expect("ALLOWED", "typing, then stop typing", eve.ref("typing/eve").set({ name: "eve", at: TS }).then(() => eve.ref("typing/eve").remove()));
 await expect("ALLOWED", "block and unblock", eve.ref("blocks/eve/bob").set(true).then(() => eve.ref("blocks/eve/bob").remove()));

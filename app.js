@@ -36,7 +36,6 @@ var users = {};
 var botid = null;
 var started = false;
 var queue = [];
-var removalPending = {};
 var queueRef = null;
 var theDJ = null;
 var cardForGrabs = null;
@@ -1036,24 +1035,37 @@ var currentListRef = function() {
 };
 
 // The first track in a list that isn't flagged, in play order (key order).
-// Read a page at a time, so a song costs a few tracks of download instead of
-// the DJ's whole list.
+// One indexed query on flagged/date: unflagged tracks sort first there, in
+// key order, so it costs the same however many flagged tracks sit at the top
+// of the list (DJs keep thousands there). Very old flags without a date look
+// unflagged to the index, so the answer is checked here; if every track it
+// returns is flagged anyway, the list is read in growing pages instead.
 var TRACK_PAGE = 20;
-var firstPlayable = function(listRef, after) {
+var firstUnflagged = function(snap) {
+  var found = null;
+  snap.forEach(function(child) {
+    var track = child.val();
+    if (!found && track && !track.flagged) found = { key: child.key, track: track };
+  });
+  return found;
+};
+var firstPlayableByPage = function(listRef, after, size) {
+  size = size || TRACK_PAGE;
   var query = listRef.orderByKey();
   if (after) query = query.startAfter(after);
-  return query.limitToFirst(TRACK_PAGE).once("value").then(function(snap) {
-    var found = null;
+  return query.limitToFirst(size).once("value").then(function(snap) {
+    var found = firstUnflagged(snap);
     var last = null;
-    var count = 0;
-    snap.forEach(function(child) {
-      count++;
-      last = child.key;
-      var track = child.val();
-      if (!found && track && !track.flagged) found = { key: child.key, track: track };
-    });
-    if (found || count < TRACK_PAGE) return found;
-    return firstPlayable(listRef, last);
+    snap.forEach(function(child) { last = child.key; });
+    if (found || snap.numChildren() < size) return found;
+    return firstPlayableByPage(listRef, last, Math.min(size * 4, 2000));
+  });
+};
+var firstPlayable = function(listRef) {
+  return listRef.orderByChild("flagged/date").endAt(null).limitToFirst(TRACK_PAGE).once("value").then(function(snap) {
+    var found = firstUnflagged(snap);
+    if (found || snap.numChildren() < TRACK_PAGE) return found;
+    return firstPlayableByPage(listRef);
   });
 };
 
@@ -1270,9 +1282,16 @@ end sc check
       }
 
     } else {
-      console.log("no songs in queue... remove this DJ");
+      console.log("nothing playable in " + listRef.toString() + ": " + theDJ.name + " steps down");
       songLoading = false;
-      if (theDJ.id == botid) autoDJ.crateEmpty();
+      if (theDJ.id == botid) {
+        autoDJ.crateEmpty();
+      } else {
+        // never take someone off the decks without saying why
+        talk(theDJ.name + "'s DJ playlist has nothing I can play, so they're off the decks.");
+        notify(theDJ.id, "Your DJ playlist has nothing I can play (it's empty, or every track in it is flagged ⚠), so I took you off the decks. " +
+          "Pick a playlist with playable tracks as your DJ playlist, then hop back on.", { kind: "track", name: theDJ.name });
+      }
       removePerson(theDJ.id);
       nextSong(true);
     }
@@ -3265,37 +3284,105 @@ var pruneChat = function() {
 };
 setInterval(pruneChat, 5 * 60000);
 
-// Every two minutes: anyone on deck or in line who has left gets one "are you
-// there?", then is removed at the next check, unless they were seen online in
-// the last 30 minutes (a quick reconnect).
-var AWAY_GRACE_MS = 30 * 60 * 1000;
-setInterval(function() {
-  // a copy of the ids: removing someone changes the lists
-  var ids = table.concat(queue).map(function(p) { return p && p.id; });
-  ids.forEach(function(id) {
-    if (!id) return;
-    var u = users[id] || {};
-    if (u.status) return;
-    if (lastBlipped[id] && Date.now() - lastBlipped[id] <= AWAY_GRACE_MS) {
-      console.log(id + " saved");
-    } else if (!removalPending[id]) {
-      removalPending[id] = true;
-      console.log(id + " removal pending.");
-      notify(id, "Are you there? You'll be taken off the decks in a couple of minutes unless you come back.",
-        { kind: "away", ttl: 4 * 60, tag: "away", topic: "away", name: u.username || id });
-    } else {
-      removalPending[id] = null;
-      console.log(id + " removed");
-      removeMe(id);
-    }
-  });
-  for (var key in removalPending) {
-    if (removalPending.hasOwnProperty(key) && removalPending[key] && users[key] && users[key].status) {
-      console.log("removal for " + key + " aborted");
-      removalPending[key] = null;
-    }
+// Away DJs. Being idle never costs anyone their seat: you can DJ for as long
+// as the room is open in your browser. When you go offline:
+// - you closed the browser (or the tab, or left the site): the site marks
+//   users/<uid>/closed. After AWAY_CLOSED_MIN minutes you get one "are you
+//   there?" (a notice, and a push if you turned them on); AWAY_ANSWER_MIN
+//   minutes later you catch the bus: you step down after your next song (or
+//   this one, if it's playing), or leave the waitlist.
+// - only the connection dropped (the computer slept, the browser froze the
+//   tab, a phone put the browser away): you keep your seat. Only after
+//   AWAY_LOST_HOURS offline do you get the same question and bus.
+// Coming back online at any point cancels it all, and takes you off a bus
+// this put you on (not one you caught yourself).
+var envNumber = function(name, fallback) {
+  var n = Number(process.env[name]);
+  return process.env[name] && n >= 0 ? n : fallback;
+};
+var AWAY_CLOSED_MS = envNumber("AWAY_CLOSED_MIN", 5) * 60000;
+var AWAY_ANSWER_MS = envNumber("AWAY_ANSWER_MIN", 5) * 60000;
+var AWAY_LOST_MS = envNumber("AWAY_LOST_HOURS", 3) * 3600000;
+var awayCheckStarted = Date.now();
+var awayDJs = {}; // id -> { askedAt, bused }
+// How long someone has been offline: from the database's record of when
+// their connection dropped, else from when the bot saw it (or started)
+var offlineFor = function(id) {
+  var u = users[id] || {};
+  if (typeof u.offlineAt === "number") return serverNow() - u.offlineAt;
+  return Date.now() - Math.max(lastBlipped[id] || 0, awayCheckStarted);
+};
+var seatOf = function(id) {
+  return table.filter(function(p) { return p && p.id == id; })[0] || null;
+};
+var awayName = function(id, fallback) {
+  return (users[id] && users[id].username) || (fallback && fallback.name) || id;
+};
+var busForAway = function(id) {
+  var seat = seatOf(id);
+  var name = awayName(id, seat);
+  if (!seat) {
+    // in the waitlist: there's no song to finish, so just step out of line
+    if (removeMe(id)) talk(":bus: " + name + " left, so they're off the waitlist.");
+    return false;
   }
-}, 2 * 60000);
+  if (seat.removeAfter) return false; // already on a bus of their own
+  var playing = theDJ && theDJ.id == id;
+  seat.removeAfter = true;
+  if (playing) theDJ.removeAfter = true;
+  updateTable();
+  talk(":bus: " + name + " left, so they're catching the bus after " + (playing ? "this song." : "their next song."));
+  return true;
+};
+var welcomeBack = function(id) {
+  var away = awayDJs[id];
+  delete awayDJs[id];
+  if (!away || !away.bused) return;
+  var seat = seatOf(id);
+  if (!seat || !seat.removeAfter) return;
+  seat.removeAfter = false;
+  if (theDJ && theDJ.id == id) theDJ.removeAfter = false;
+  updateTable();
+  talk("Welcome back, " + awayName(id, seat) + "! You're staying on the decks.");
+};
+var checkAway = function() {
+  var ids = table.concat(queue).map(function(p) { return p && p.id; }).filter(function(id) {
+    return id && id != botid;
+  });
+  Object.keys(awayDJs).forEach(function(id) {
+    if (ids.indexOf(id) === -1) delete awayDJs[id]; // stepped down or was removed
+  });
+  ids.forEach(function(id) {
+    var u = users[id] || {};
+    if (u.status) {
+      if (awayDJs[id]) welcomeBack(id);
+      return;
+    }
+    var away = awayDJs[id];
+    if (away && away.bused) return;
+    var closed = typeof u.closed === "number";
+    if (!away) {
+      if (offlineFor(id) < (closed ? AWAY_CLOSED_MS : AWAY_LOST_MS)) return;
+      awayDJs[id] = { askedAt: Date.now(), bused: false };
+      var mins = Math.max(1, Math.round(AWAY_ANSWER_MS / 60000));
+      console.log(id + " is away (" + (closed ? "closed the browser" : "offline") + "): asked");
+      notify(id, "Are you there? You've left the room, so you'll catch the bus in " + mins + " minute" + (mins == 1 ? "" : "s") +
+        " (step down after your next song) unless you come back.",
+        { kind: "away", ttl: Math.round(AWAY_ANSWER_MS / 1000) + 60, tag: "away", topic: "away", name: u.username || id });
+      return;
+    }
+    if (Date.now() - away.askedAt < AWAY_ANSWER_MS) return;
+    console.log(id + " didn't come back: catching the bus");
+    away.bused = busForAway(id);
+    if (!away.bused) delete awayDJs[id];
+  });
+};
+(function awayLoop() {
+  setTimeout(function() {
+    try { checkAway(); } catch (e) { console.log("away check failed:", e); }
+    awayLoop();
+  }, 30000);
+})();
 
 // Sign in; if that fails (network down, Firebase busy, wrong login), keep
 // trying, waiting longer each time up to 5 minutes, instead of sitting idle.

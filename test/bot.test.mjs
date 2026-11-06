@@ -229,6 +229,81 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async broken_tracks_at_the_top() {
+    // DJs park broken tracks at the top of big lists. The bot must find the
+    // first playable one quickly (one indexed read, not hundreds of pages),
+    // skip an old flag that has no date, and say why when there's nothing.
+    const list = {};
+    for (let i = 0; i < 8635; i++) { // the size of a real DJ's list, with its 1,371 flagged tracks on top
+      const key = "-Ok" + String(i).padStart(5, "0");
+      list[key] = Object.assign(yt("yc" + i, "Art - Song " + i), i < 1370 ? { flagged: { date: 1, code: 2 } } : i === 1370 ? { flagged: { code: 8 } } : {});
+    }
+    const dead = { a: Object.assign(yt("dd1"), { flagged: { date: 1, code: 2 } }), b: Object.assign(yt("dd2"), { flagged: { code: 8 } }) };
+    await put("/", base({
+      users: {
+        [BOT]: { username: "hostbot", hostbot: true, status: true },
+        dj1: { username: "dj1", status: true, selectedList: "big" }, dj2: { username: "dj2", status: true },
+        boss: { username: "boss", status: true, mod: true, supermod: true }
+      },
+      playlists: { dj1: { big: { name: "Big", list } } },
+      queues: { dj2: dead }
+    }));
+    const p = startBot("broken_top");
+    await waitFor(p, "Listening now.");
+    let st;
+    for (let i = 0; i < 40; i++) { await sleep(250); st = await get("/songToPlay"); if (st && st.djid === "dj1") break; }
+    check(st && st.djid === "dj1" && st.cid === "yc1371", "1,371 flagged tracks on top, and an old flag with no date: plays the first good one (" + (st && st.cid) + ")");
+    check(!/no answer in|couldn't check the track on that DJ's playlist/.test(p.out), "found well within the time limit");
+    await say("boss", "!skip");
+    await waitFor(p, "nothing playable", 8000);
+    await sleep(1000);
+    st = await get("/");
+    check(!(st.table || []).some((x) => x && x.id === "dj2"), "every track flagged: off the decks");
+    check(said(st).some((t) => /dj2's DJ playlist has nothing I can play, so they're off the decks/.test(t)) &&
+      Object.values((st.notices || {}).dj2 || {}).some((n) => /Your DJ playlist has nothing I can play/.test(n.txt)), "and told why, in chat and privately");
+    await healthy(p);
+    return p;
+  },
+  async away_djs() {
+    // idle with the room open: stays. Connection dropped (asleep, frozen tab):
+    // stays. Closed the browser: asked, then the bus. Back online: off the bus.
+    const now = Date.now();
+    const seat = (id) => ({ name: id, id, plays: 0 });
+    await put("/", base(Object.assign(nowPlaying("dj1", "cur1"), {
+      users: {
+        [BOT]: { username: "hostbot", hostbot: true, status: true },
+        dj1: { username: "dj1", status: true },
+        idler: { username: "idler", status: true, idle: { isIdle: true, audio: 1, since: now - 3600000 } },
+        sleeper: { username: "sleeper", status: false, offlineAt: now - 60000 },
+        closer: { username: "closer", status: false, offlineAt: now - 60000, closed: now - 60000 },
+        waiter: { username: "waiter", status: false, offlineAt: now - 60000, closed: now - 60000 }
+      },
+      table: [seat("dj1"), seat("idler"), seat("sleeper"), seat("closer")],
+      waitlist: [seat("waiter")]
+    })));
+    const p = startBot("away", { AWAY_CLOSED_MIN: "0.02", AWAY_ANSWER_MIN: "0.05", AWAY_LOST_HOURS: "1" });
+    await waitFor(p, "Listening now.");
+    await waitFor(p, "closer didn't come back", 15000);
+    await sleep(1500);
+    let st = await get("/");
+    const notices = (id) => Object.values((st.notices || {})[id] || {}).map((n) => n.txt);
+    const at = (id) => (st.table || []).find((x) => x && x.id === id);
+    check(notices("closer").some((t) => /^Are you there\?/.test(t)), "closed the browser: asked first");
+    check(at("closer") && at("closer").removeAfter === true && said(st).some((t) => /:bus: closer left, so they're catching the bus after their next song/.test(t)),
+      "then catches the bus: steps down after their next song");
+    check(!(st.waitlist || []).some((x) => x && x.id === "waiter") && said(st).some((t) => /waiter left, so they're off the waitlist/.test(t)), "closed and in the waitlist: out of line");
+    check(at("idler") && !at("idler").removeAfter && !notices("idler").length, "idle with the room open: stays, nothing asked");
+    check(at("sleeper") && !at("sleeper").removeAfter && !notices("sleeper").length, "connection dropped, browser not closed: stays");
+    check(at("dj1") && !at("dj1").removeAfter, "the DJ playing now is left alone");
+    // closer comes back before their turn
+    await put("/users/closer/status", true);
+    await put("/users/closer/closed", null);
+    await waitFor(p, "Welcome back, closer", 8000);
+    st = await get("/");
+    check(at("closer") && at("closer").removeAfter === false && said(st).some((t) => /Welcome back, closer! You're staying on the decks/.test(t)), "back online: off the bus, staying on");
+    await healthy(p);
+    return p;
+  },
   async song_tempo() {
     // an old lookup found nothing; the new one searches plainly, skips the
     // karaoke cover and the version with no tempo, and finds the radio edit's

@@ -29,6 +29,7 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `SWAP_HOUR` / `SWAP_MAX_SEARCHES` | optional: the hour the swap search runs (in `TZ`, default `4`) and its search limit per run (default `300`) |
 | `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
+| `AWAY_CLOSED_MIN` / `AWAY_ANSWER_MIN` / `AWAY_LOST_HOURS` | optional: when DJs who left are asked and put on the bus (default `5` / `5` / `3`, see [away DJs](#away-djs)) |
 
 ## hosting (free, always on)
 The bot is a long-running process with no web server, so it needs a host that never sleeps. Oracle Cloud's Always Free tier works and costs nothing.
@@ -162,6 +163,13 @@ Before a publish, or after `publish --off`, the bot works as it did: per-upload 
 
 `!plays` (or `!firstplay`) says what the history knows about the song on the decks. `!review` (mods) asks the next tag question the history couldn't settle; answer with `!same <n>` or `!different <n>`.
 
+## away DJs
+Being idle never costs anyone their seat: you can DJ for as long as the room is open in your browser, whether or not you're at the keyboard or the tab is in the background. While you're on deck or in line, the site keeps Chrome from freezing its tab.
+- **You closed the browser** (or the tab, signed out, or left the site): after `AWAY_CLOSED_MIN` minutes (default 5) you get one "are you there?" (a notice, and a push if you turned them on). `AWAY_ANSWER_MIN` minutes later (default 5) you catch the bus: you step down after your next song (or the one playing), or leave the waitlist. The room sees ":bus: name left, so they're catching the bus…".
+- **Only the connection dropped** (the computer slept, a phone put the browser away, the network went down): you keep your seat. After `AWAY_LOST_HOURS` offline (default 3) you get the same question and bus.
+- Coming back online at any point cancels it and takes you off a bus this put you on (not one you caught yourself).
+- Needs the latest `firebase-rules.json` published (`users/<uid>/closed` and `offlineAt`). Until then the site can't say a browser was closed, so everyone who goes offline keeps their seat for `AWAY_LOST_HOURS`.
+
 ## autopilot DJ
 The bot keeps the music going. When no one is DJing it takes the decks and plays its own DJ playlist; once 3 people are DJing it catches the bus, stepping down after its next song (or after the one it's playing), never mid-song. If the count drops below 3 before it leaves, it stays.
 - `!upbot` (mods): the bot DJs and stays on, even with a crowd. `!downbot` (mods): it leaves and stays off, even when the decks are empty. A mod's `!add` / `!remove` / `!removeafter` / `!dontremove` aimed at the bot work the same way.
@@ -202,6 +210,8 @@ Before a track plays, the bot checks it with the same rules (and flag codes) as 
 
 When YouTube or SoundCloud can't be reached it flags nothing (see the README's soundcloud and troubleshooting notes).
 
+Flagged tracks can stay anywhere in a list (many DJs keep them at the top). The bot finds a DJ's first playable track with one indexed read (`flagged/date`), however many flagged tracks come before it. If a DJ's list has nothing playable (empty, or every track flagged), the bot says so in chat, tells them privately, and takes them off the decks.
+
 ## swap suggestions
 Every night at 4 a.m. (`SWAP_HOUR`, in `TZ`) the bot looks for a working copy of each broken track in people's playlists and saves it with the track; the site shows a ⇄ button on it, and a **Swap all** bar over the list. Nothing in a playlist changes until its owner swaps (and Undo puts it back).
 - **Which tracks:** flagged as gone, private, blocked, not embeddable, age restricted, broken or low audio quality (codes 1–9; not off-theme). YouTube and SoundCloud tracks alike.
@@ -234,7 +244,7 @@ People who install the site as an app (Add to Home Screen on iPhone/iPad, Instal
 - `PUSH_NOTIFICATIONS=false` turns it off. Sent pushes are logged as `push: mention for <name> to N device(s)`.
 
 ## private notices
-The bot doesn't @ping people in chat. What's meant for one person (someone gave you a card, your GRAB was too late, a mod put you on the bus, "are you there?" when you're on deck and went quiet, the track you queued can't play) goes to `notices/<uid>/`: the site shows it as a toast and removes it, and the person also gets a push notification when they're away from the room. Notices left over after a day are cleared. Needs the latest `firebase-rules.json` published; until then the log says so once and the bot pings in chat as before.
+The bot doesn't @ping people in chat. What's meant for one person (someone gave you a card, your GRAB was too late, a mod put you on the bus, "are you there?" when you're on deck and closed the browser, the track you queued can't play) goes to `notices/<uid>/`: the site shows it as a toast and removes it, and the person also gets a push notification when they're away from the room. Notices left over after a day are cleared. Needs the latest `firebase-rules.json` published; until then the log says so once and the bot pings in chat as before.
 
 ## trading cards
 Now and then (or with a supermod's `!printcard`) the bot prints a card of the song playing. Its chat message carries the card's id (`grab`), and the site shows a big GRAB button under it. The button sends `!grab <card id>` as a hidden bot command; typing `!grab` still works and takes whichever card is up. The first one gets the card and the room sees "<name> grabbed the card!" with the card. Anyone too late, or grabbing a card that a newer one replaced, gets a private notice and their button greys out. Needs the latest `firebase-rules.json` published (the `grab` field on chat messages); until then the log says so once and the bot asks for `!grab` in chat as before.
