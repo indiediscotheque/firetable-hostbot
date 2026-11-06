@@ -229,6 +229,41 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async broken_tracks_at_the_top() {
+    // DJs park broken tracks at the top of big lists. The bot must find the
+    // first playable one quickly (one indexed read, not hundreds of pages),
+    // skip an old flag that has no date, and say why when there's nothing.
+    const list = {};
+    for (let i = 0; i < 8635; i++) { // the size of a real DJ's list, with its 1,371 flagged tracks on top
+      const key = "-Ok" + String(i).padStart(5, "0");
+      list[key] = Object.assign(yt("yc" + i, "Art - Song " + i), i < 1370 ? { flagged: { date: 1, code: 2 } } : i === 1370 ? { flagged: { code: 8 } } : {});
+    }
+    const dead = { a: Object.assign(yt("dd1"), { flagged: { date: 1, code: 2 } }), b: Object.assign(yt("dd2"), { flagged: { code: 8 } }) };
+    await put("/", base({
+      users: {
+        [BOT]: { username: "hostbot", hostbot: true, status: true },
+        dj1: { username: "dj1", status: true, selectedList: "big" }, dj2: { username: "dj2", status: true },
+        boss: { username: "boss", status: true, mod: true, supermod: true }
+      },
+      playlists: { dj1: { big: { name: "Big", list } } },
+      queues: { dj2: dead }
+    }));
+    const p = startBot("broken_top");
+    await waitFor(p, "Listening now.");
+    let st;
+    for (let i = 0; i < 40; i++) { await sleep(250); st = await get("/songToPlay"); if (st && st.djid === "dj1") break; }
+    check(st && st.djid === "dj1" && st.cid === "yc1371", "1,371 flagged tracks on top, and an old flag with no date: plays the first good one (" + (st && st.cid) + ")");
+    check(!/no answer in|couldn't check the track on that DJ's playlist/.test(p.out), "found well within the time limit");
+    await say("boss", "!skip");
+    await waitFor(p, "nothing playable", 8000);
+    await sleep(1000);
+    st = await get("/");
+    check(!(st.table || []).some((x) => x && x.id === "dj2"), "every track flagged: off the decks");
+    check(said(st).some((t) => /dj2's DJ playlist has nothing I can play, so they're off the decks/.test(t)) &&
+      Object.values((st.notices || {}).dj2 || {}).some((n) => /Your DJ playlist has nothing I can play/.test(n.txt)), "and told why, in chat and privately");
+    await healthy(p);
+    return p;
+  },
   async away_djs() {
     // idle with the room open: stays. Connection dropped (asleep, frozen tab):
     // stays. Closed the browser: asked, then the bus. Back online: off the bus.

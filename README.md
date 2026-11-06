@@ -210,6 +210,8 @@ Before a track plays, the bot checks it with the same rules (and flag codes) as 
 
 When YouTube or SoundCloud can't be reached it flags nothing (see the README's soundcloud and troubleshooting notes).
 
+Flagged tracks can stay anywhere in a list (many DJs keep them at the top). The bot finds a DJ's first playable track with one indexed read (`flagged/date`), however many flagged tracks come before it. If a DJ's list has nothing playable (empty, or every track flagged), the bot says so in chat, tells them privately, and takes them off the decks.
+
 ## swap suggestions
 Every night at 4 a.m. (`SWAP_HOUR`, in `TZ`) the bot looks for a working copy of each broken track in people's playlists and saves it with the track; the site shows a ⇄ button on it, and a **Swap all** bar over the list. Nothing in a playlist changes until its owner swaps (and Undo puts it back).
 - **Which tracks:** flagged as gone, private, blocked, not embeddable, age restricted, broken or low audio quality (codes 1–9; not off-theme). YouTube and SoundCloud tracks alike.

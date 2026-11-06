@@ -1035,24 +1035,37 @@ var currentListRef = function() {
 };
 
 // The first track in a list that isn't flagged, in play order (key order).
-// Read a page at a time, so a song costs a few tracks of download instead of
-// the DJ's whole list.
+// One indexed query on flagged/date: unflagged tracks sort first there, in
+// key order, so it costs the same however many flagged tracks sit at the top
+// of the list (DJs keep thousands there). Very old flags without a date look
+// unflagged to the index, so the answer is checked here; if every track it
+// returns is flagged anyway, the list is read in growing pages instead.
 var TRACK_PAGE = 20;
-var firstPlayable = function(listRef, after) {
+var firstUnflagged = function(snap) {
+  var found = null;
+  snap.forEach(function(child) {
+    var track = child.val();
+    if (!found && track && !track.flagged) found = { key: child.key, track: track };
+  });
+  return found;
+};
+var firstPlayableByPage = function(listRef, after, size) {
+  size = size || TRACK_PAGE;
   var query = listRef.orderByKey();
   if (after) query = query.startAfter(after);
-  return query.limitToFirst(TRACK_PAGE).once("value").then(function(snap) {
-    var found = null;
+  return query.limitToFirst(size).once("value").then(function(snap) {
+    var found = firstUnflagged(snap);
     var last = null;
-    var count = 0;
-    snap.forEach(function(child) {
-      count++;
-      last = child.key;
-      var track = child.val();
-      if (!found && track && !track.flagged) found = { key: child.key, track: track };
-    });
-    if (found || count < TRACK_PAGE) return found;
-    return firstPlayable(listRef, last);
+    snap.forEach(function(child) { last = child.key; });
+    if (found || snap.numChildren() < size) return found;
+    return firstPlayableByPage(listRef, last, Math.min(size * 4, 2000));
+  });
+};
+var firstPlayable = function(listRef) {
+  return listRef.orderByChild("flagged/date").endAt(null).limitToFirst(TRACK_PAGE).once("value").then(function(snap) {
+    var found = firstUnflagged(snap);
+    if (found || snap.numChildren() < TRACK_PAGE) return found;
+    return firstPlayableByPage(listRef);
   });
 };
 
@@ -1269,9 +1282,16 @@ end sc check
       }
 
     } else {
-      console.log("no songs in queue... remove this DJ");
+      console.log("nothing playable in " + listRef.toString() + ": " + theDJ.name + " steps down");
       songLoading = false;
-      if (theDJ.id == botid) autoDJ.crateEmpty();
+      if (theDJ.id == botid) {
+        autoDJ.crateEmpty();
+      } else {
+        // never take someone off the decks without saying why
+        talk(theDJ.name + "'s DJ playlist has nothing I can play, so they're off the decks.");
+        notify(theDJ.id, "Your DJ playlist has nothing I can play (it's empty, or every track in it is flagged ⚠), so I took you off the decks. " +
+          "Pick a playlist with playable tracks as your DJ playlist, then hop back on.", { kind: "track", name: theDJ.name });
+      }
       removePerson(theDJ.id);
       nextSong(true);
     }
