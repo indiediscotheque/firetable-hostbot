@@ -111,9 +111,30 @@ global.fetch = function (input, init) {
       : new Response(ARTWORK, { status: 200, headers: { "content-type": "image/png" } }));
   }
   if (host === "ws.audioscrobbler.com" && process.env.LASTFM_SECRET) return lastfm(url, init);
+  if (host === "api.deezer.com" && SC === "bpm") return deezer(url);
   if (host === "fcm.googleapis.com" || /push\.apple\.com$/.test(host)) return pushService(url, init);
-  return json(500, ""); // deezer, and last.fm unless a scenario sets it up
+  return json(500, ""); // deezer and last.fm unless a scenario sets them up
 };
+
+// Deezer, the way it answers now: fielded searches (artist:"x") find nothing,
+// and many tracks have no tempo (bpm 0). Logs each search.
+const DEEZER = [
+  { id: 11, title: "Bpm Song", artist: { name: "Bpm Artist" }, bpm: 0 },
+  { id: 12, title: "Bpm Song (Karaoke Version)", artist: { name: "Karaoke Kings" }, bpm: 150 },
+  { id: 13, title: "Bpm Song (Radio Edit)", artist: { name: "Bpm Artist" }, bpm: 122.7 }
+];
+function deezer(url) {
+  const u = new URL(url);
+  if (u.pathname === "/search") {
+    const q = u.searchParams.get("q");
+    console.log("fake deezer: search \"" + q + "\"");
+    if (/\w+:"/.test(q)) return json(200, { data: [], total: 0 });
+    const hits = DEEZER.filter((t) => q.includes(t.title.toLowerCase().replace(/ \(.*$/, ""))).map(({ bpm, ...t }) => t);
+    return json(200, { data: hits, total: hits.length });
+  }
+  const t = DEEZER.find((x) => "/track/" + x.id === u.pathname);
+  return t ? json(200, t) : json(200, { error: { type: "DataException", message: "no data" } });
+}
 
 // Last.fm: checks each signed call the way Last.fm does (UTF-8 MD5 of the
 // sorted name+value pairs and the secret) and says so in the bot's log

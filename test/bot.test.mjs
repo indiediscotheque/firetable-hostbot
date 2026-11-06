@@ -229,6 +229,32 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async song_tempo() {
+    // an old lookup found nothing; the new one searches plainly, skips the
+    // karaoke cover and the version with no tempo, and finds the radio edit's
+    await put("/", base({
+      queues: { dj1: { k1: yt("ytbpm1", "Bpm Artist - Bpm Song (Official Video)") }, dj2: { s1: yt("ytbpm2", "Nobody - Unknown Tune") } },
+      bpm: { "1_ytbpm1": { none: true, at: Date.now() - 1000 } }
+    }));
+    const p = startBot("bpm");
+    await waitFor(p, "Listening now.");
+    await sleep(2500);
+    let st = await get("/");
+    check(/fake deezer: search "bpm artist bpm song"/.test(p.out), "the old \"not found\" is looked up again, with a plain search");
+    check(st.songBpm && st.songBpm.bpm === 122.7 && st.songBpm.src === "deezer" && st.songBpm.started === st.songToPlay.started, "the playing song's tempo is published (" + JSON.stringify(st.songBpm) + ")");
+    check(st.bpm["1_ytbpm1"].bpm === 122.7, "and cached for the track");
+    await say("dj1", "!skip");
+    await sleep(2500);
+    st = await get("/");
+    check(st.songToPlay.cid === "ytbpm2" && st.bpm["1_ytbpm2"] && st.bpm["1_ytbpm2"].none === true && st.bpm["1_ytbpm2"].v === 2, "no tempo found: remembered with the lookup's version");
+    check(!st.songBpm || st.songBpm.started !== st.songToPlay.started, "and nothing published for it");
+    await say("dj2", "!bpm 111");
+    await sleep(1500);
+    st = await get("/");
+    check(st.songBpm && st.songBpm.bpm === 111 && st.songBpm.src === "manual" && st.bpm["1_ytbpm2"].bpm === 111, "the DJ sets it with !bpm 111");
+    await healthy(p);
+    return p;
+  },
   async play_history() {
     // the history was published: "Foals - My Number" is track t1, first played
     // in 2016, 41 plays (60 counting its remix); a DJ brings a new upload of it
