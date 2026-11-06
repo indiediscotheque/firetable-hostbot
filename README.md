@@ -246,7 +246,7 @@ With the `LASTFM_*` settings, each song is sent to last.fm as "now playing" and 
 Song start times (`songToPlay/started`, and the "when" of each play) use the database's clock (`.info/serverTimeOffset`), the same clock firetable-user uses. Every listener's position, the progress bar and the DJ's bop line up even if this server's clock drifts.
 
 ## tempo lookups
-When a song starts, the bot looks up its BPM on Deezer's public API (no key needed). Results, including "not found", are cached per track in `bpm/`, and the playing song's tempo is published as `songBpm`. A tempo set with `!bpm` is never overwritten by a lookup.
+When a song starts, the bot looks up its BPM on Deezer's public API (no key needed): it searches for the artist and title, and tries up to four matching versions of the song, since Deezer has no tempo for many tracks. Results, including "not found", are cached per track in `bpm/`, and the playing song's tempo is published as `songBpm`. A tempo set with `!bpm` is never overwritten by a lookup. "Not found" results from an older version of the lookup are tried again.
 
 ## database rules
 `firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
