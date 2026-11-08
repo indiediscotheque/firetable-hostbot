@@ -57,7 +57,8 @@ function startBot(scenario, env = {}) {
     env: Object.assign({
       PATH: process.env.PATH, HOME: process.env.HOME, SCENARIO: scenario, AUTODJ: "false", TRACKBROKEN_MESSAGES: "true",
       FIRETABLE_USER: "bot@test.dev", FIRETABLE_PASS: "botpass123", FIREBASE_KEY: "fake", FIREBASE_AUTH: "demo-ft.firebaseapp.com",
-      FIREBASE_DB: "http://127.0.0.1:9000?ns=demo-ft", SOUNDCLOUD_KEY: "web-client-id"
+      FIREBASE_DB: "http://127.0.0.1:9000?ns=demo-ft", SOUNDCLOUD_KEY: "web-client-id",
+      YTMUSIC_SYNC: "false" // on in the youtube_music_sync scenario only
     }, env)
   });
   p.out = "";
@@ -670,6 +671,64 @@ const scenarios = {
     check(said(await get("/")).some((t) => /^Swaps \(nightly at 4:00\): .*new swap/.test(t)), "!swaps says how the last run went");
     await healthy(p);
     return p;
+  },
+  async youtube_music_sync() {
+    const k = (n) => "-NA0000000000000000" + n; // push keys from 2023, in order
+    await put("/", base({
+      playlists: { [BOT]: {
+        other: { name: "Crate", list: { x: yt("nogo_other1", "Left - Alone") } },
+        ytm: { name: "YOUTUBE MUSIC", list: {
+          [k(1)]: yt("nogo0000001", "Daft Punk - One More Time"), // gone: replaced
+          [k(2)]: { type: 1, cid: "nogo0000002", name: "Some Band - Off Theme", flagged: { date: 1, code: 10 } }, // someone's flag: left alone
+          [k(3)]: yt("chromeo0001", "Chromeo - 100%"),
+          [k(4)]: yt("chromeo0002", "Chromeo - 100%"), // the same song again, a second longer: goes
+          [k(5)]: yt("lose0000001", "Lose Control"), // saved by title only
+          [k(6)]: yt("nogo0000003", "Nobody - Nothing At All") // gone, no copy: flagged, kept
+        } }
+      } }
+    }));
+    const p = startBot("ytm", { YTMUSIC_SYNC: "true", YTMUSIC_SOURCES: "2001=https://music.youtube.com/playlist?list=PLfakeyear2001&si=x, 2002=PLfakeyear2002, 2003=PLfakemissing1" });
+    // the first look after a start: it has never synced, so it syncs now
+    check(await waitFor(p, "youtube music: ", 30000), "the first sync starts on its own after a start");
+    check(await waitFor(p, "YouTube API unit", 30000), "and finishes");
+    await sleep(500);
+    let st = await get("/");
+    const list = st.playlists[BOT].ytm.list;
+    const byCid = Object.fromEntries(Object.values(list).map((t) => [t.cid, t]));
+    check(byCid.omtstudio01 && byCid.omtstudio01.name === "Daft Punk - One More Time" && !byCid.omtstudio01.flagged &&
+      byCid.omtstudio01.swappedFrom && byCid.omtstudio01.swappedFrom.cid === "nogo0000001", "a broken track is replaced with its YouTube Music copy");
+    check(byCid.nogo0000002 && byCid.nogo0000002.flagged.code === 10, "a track someone flagged stays as it was");
+    check(byCid.nogo0000003 && byCid.nogo0000003.flagged && byCid.nogo0000003.flagged.code === 2, "a broken track with no match stays, flagged");
+    check(byCid.chromeo0001 && !byCid.chromeo0002, "a duplicate goes; the earliest copy stays");
+    check(byCid.newsong0001 && byCid.newsong0001.name === "New Band - New Song" && byCid.newsong0001.duration === 210, "a new song from a year playlist is added");
+    check(!byCid.mixedsong01, "a DJ-mixed compilation track isn't added");
+    check(byCid.lose0000001 && byCid.lose0000001.name === "Young Franco - Lose Control", "a title-only track gets its artist");
+    check(Object.keys(list).length === 6 && Object.values(list).every((t) => t.added > 0), "6 tracks, each knows when it joined");
+    const other = st.playlists[BOT].other;
+    check(other.name === "Crate" && JSON.stringify(other.list) === JSON.stringify({ x: { cid: "nogo_other1", name: "Left - Alone", type: 1 } }), "the bot's other playlists aren't touched");
+    check(st.ytmSync && st.ytmSync.ok === true && st.ytmSync.at > 0, "the sync is remembered in the database");
+    check(/couldn't read the 2003 playlist PLfakemissing1/.test(p.out), "a playlist that can't be read is skipped and logged");
+    // chat: anyone can ask how it went; only mods start one
+    await say("dj1", "!ytmusic");
+    await say("dj1", "!ytsync");
+    await sleep(1200);
+    st = await get("/");
+    check(said(st).some((t) => /^YOUTUBE MUSIC \(synced daily at 5:00\): 6 tracks checked; 1 broken track replaced, 1 with no match yet/.test(t)), "!ytmusic says how the last sync went");
+    check(said(st).some((t) => /^Only mods can start a sync/.test(t)), "!ytsync is for mods");
+    const syncs = () => (p.out.match(/youtube music: \d+ tracks checked[^\n]*/g) || []);
+    await say("boss", "!ytsync");
+    check(await waitFor(p, "Syncing my YOUTUBE MUSIC playlist"), "a mod's !ytsync starts one");
+    for (let i = 0; i < 150 && syncs().length < 2; i++) await sleep(100);
+    check(syncs().length === 2 && /0 broken tracks replaced, 1 with no match yet \(kept\); 0 new songs from 2 year playlists \(1 DJ-mixed skipped\); 0 duplicates removed; shuffled 6/.test(syncs()[1]),
+      "a second sync adds nothing and shuffles again");
+    // a restart soon after doesn't sync again
+    p.kill();
+    await sleep(400);
+    const again = startBot("ytm", { YTMUSIC_SYNC: "true", YTMUSIC_SOURCES: "PLfakeyear2001" });
+    await sleep(15000);
+    check(!/youtube music: \d/.test(again.out), "a restart within a day doesn't sync again");
+    await healthy(again);
+    return again;
   },
   async wrong_password() {
     await put("/", base({}));

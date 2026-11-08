@@ -162,6 +162,17 @@ await expect("DENIED", "people write the search cache", eve.ref("swapCache/abc")
 await expect("ALLOWED", "bot marks people as scanned", db("bot").ref("swapScans").update({ eve: Date.now(), bob: Date.now() }));
 await expect("DENIED", "scan marks that aren't times", db("bot").ref("swapScans/eve").set("yesterday"));
 await expect("DENIED", "people read or change scan marks", eve.ref("swapScans/eve").set(0));
+// the bot's YOUTUBE MUSIC playlist sync (lib/ytmsync.js)
+await expect("ALLOWED", "bot makes its YOUTUBE MUSIC playlist", db("bot").ref("playlists/bot/ytm").set({ name: "YOUTUBE MUSIC" }));
+await expect("ALLOWED", "bot adds a track with its length and when it joined", db("bot").ref("playlists/bot/ytm/list/k1").set({ type: 1, cid: "fa5IWHDbftI",
+  name: "Daft Punk - One More Time", url: "https://www.youtube.com/watch?v=fa5IWHDbftI", duration: 321, added: Date.now() }));
+await expect("ALLOWED", "bot replaces a broken track in place", db("bot").ref("playlists/bot/ytm/list/k1").set({ type: 1, cid: "kpstudio001",
+  name: "Radiohead - Karma Police", url: "https://www.youtube.com/watch?v=kpstudio001", duration: 262, added: 1, swappedFrom: { type: 1, cid: "fa5IWHDbftI", date: Date.now() } }));
+await expect("ALLOWED", "bot saves how the sync went", db("bot").ref("ytmSync").set({ at: Date.now(), ok: true, summary: "2 broken tracks replaced." }));
+await expect("DENIED", "sync state with extra fields", db("bot").ref("ytmSync/junk").set(1));
+await expect("DENIED", "a sync summary that's too long", db("bot").ref("ytmSync/summary").set("x".repeat(1001)));
+await expect("DENIED", "people read the sync state", eve.ref("ytmSync").once("value"));
+await expect("DENIED", "people change the sync state", eve.ref("ytmSync/at").set(0));
 await expect("ALLOWED", "rename a track (bot's tag fix)", db("bot").ref("queues/eve/old2/name").set("Fixed - Name"));
 await expect("ALLOWED", "bot moves a played track to the bottom in one write",
   db("bot").ref("playlists/bot/big/list").update({ k000001: null, zzz: track("v1") }));

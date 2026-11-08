@@ -69,10 +69,26 @@ function soundcloud(url, init) {
 // YouTube's videos.list for many ids at once (the swap checks): one item per
 // known id, with its id. "nogo" ids are unknown (gone), "noembed" ones can't
 // be embedded.
+// YT_VIDEOS: lengths, titles and channels for the playlist sync's tracks.
+const YT_VIDEOS = {
+  omtstudio01: { duration: "PT5M20S", channelTitle: "Daft Punk - Topic", title: "One More Time" },
+  chromeo0001: { duration: "PT4M41S", channelTitle: "Chromeo - Topic", title: "100%" },
+  chromeo0002: { duration: "PT4M42S", channelTitle: "Chromeo - Topic", title: "100%" },
+  newsong0001: { duration: "PT3M30S", channelTitle: "New Band - Topic", title: "New Song" },
+  mixedsong01: { duration: "PT4M", channelTitle: "DJ - Topic", title: "Club Thing (Mixed)" },
+  lose0000001: { duration: "PT2M37S", channelTitle: "Young Franco - Topic", title: "Lose Control" }
+};
 function youtubeBatch(ids) {
   if (SC === "yt_outage") return youtube("x");
-  return json(200, { items: ids.filter((id) => !/nogo/.test(id)).map((id) =>
-    Object.assign(video("https://img.example/x.jpg", /noembed/.test(id) ? { status: { embeddable: false } } : {}).items[0], { id })) });
+  return json(200, { items: ids.filter((id) => !/nogo/.test(id)).map((id) => {
+    const item = Object.assign(video("https://img.example/x.jpg", /noembed/.test(id) ? { status: { embeddable: false } } : {}).items[0], { id });
+    const v = YT_VIDEOS[id];
+    if (v) {
+      item.contentDetails = Object.assign({}, item.contentDetails, { duration: v.duration });
+      item.snippet = Object.assign({}, item.snippet, { channelTitle: v.channelTitle, title: v.title });
+    }
+    return item;
+  }) });
 }
 
 // YouTube Music search: audio tracks (ATV) next to videos (OMV), in the
@@ -85,8 +101,33 @@ const YTM_CATALOG = [
   { cid: "omtstudio01", title: "One More Time", artists: ["Daft Punk"], album: "Discovery", dur: 320 },
   { cid: "omtofficial", title: "One More Time (Official Audio)", artists: ["Daft Punk"], kind: "OMV" }
 ];
-function ytmusic(init) {
+// YouTube Music playlists (the YOUTUBE MUSIC sync's year playlists): two
+// pages each, the way music.youtube.com sends them. Others don't exist.
+const YTM_PLAYLISTS = {
+  PLfakeyear2001: [
+    { cid: "chromeo0001", title: "100%", artists: ["Chromeo"], album: "Fancy Footwork", dur: 281 },
+    { cid: "newsong0001", title: "New Song", artists: ["New Band"], album: "First LP", dur: 210 }
+  ],
+  PLfakeyear2002: [
+    { cid: "mixedsong01", title: "Club Thing (Mixed)", artists: ["DJ"], album: "Ibiza Sessions (Mixed)", dur: 240 },
+    { cid: "chromeo0001", title: "100%", artists: ["Chromeo"], album: "Fancy Footwork", dur: 281 }
+  ]
+};
+function ytmBrowse(body) {
+  const id = body.browseId ? body.browseId.replace(/^VL/, "") : body.continuation.split(":")[0];
+  console.log("fake youtube music: playlist " + id + (body.continuation ? " (page 2)" : ""));
+  const rows = YTM_PLAYLISTS[id];
+  if (!rows) return json(400, { error: { code: 400, message: "Request contains an invalid argument.", status: "INVALID_ARGUMENT" } });
+  const half = Math.ceil(rows.length / 2);
+  const shelf = (body.continuation ? rows.slice(half) : rows.slice(0, half)).map((r) => ytm.row(r));
+  if (body.continuation) return json(200, { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: shelf } }] });
+  shelf.push({ continuationItemRenderer: { continuationEndpoint: { continuationCommand: { token: id + ":2" } } } });
+  return json(200, { header: { musicResponsiveHeaderRenderer: { title: { runs: [{ text: id }] } } },
+    contents: { twoColumnBrowseResultsRenderer: { secondaryContents: { sectionListRenderer: { contents: [{ musicPlaylistShelfRenderer: { contents: shelf } }] } } } } });
+}
+function ytmusic(url, init) {
   const body = JSON.parse(init.body);
+  if (/\/browse/.test(url)) return SC === "ytm_down" ? json(503, "") : ytmBrowse(body);
   console.log("fake youtube music: search \"" + body.query + "\"" + (body.params ? " (songs)" : ""));
   if (SC === "ytm_down") return json(503, "");
   const words = body.query.toLowerCase();
@@ -101,9 +142,10 @@ global.fetch = function (input, init) {
   if (host === "127.0.0.1" || host === "localhost") return realFetch(input, init);
   if (host === "www.googleapis.com") {
     const params = new URL(url).searchParams;
+    if (/playlistItems/.test(url)) return json(404, { error: { code: 404, message: "The playlist identified with the request's playlistId parameter cannot be found." } });
     return params.get("maxResults") ? youtubeBatch(params.get("id").split(",")) : youtube(params.get("id"));
   }
-  if (host === "music.youtube.com") return ytmusic(init);
+  if (host === "music.youtube.com") return ytmusic(url, init);
   if (/soundcloud\.com$/.test(host)) return soundcloud(url, init);
   if (host === "img.example") {
     return Promise.resolve(/bad/.test(url)

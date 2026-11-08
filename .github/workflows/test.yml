@@ -7,7 +7,7 @@
 #     bot write (Firebase emulator)
 #   - the bot itself, against the emulators with fake YouTube / SoundCloud /
 #     push-service answers: outages, broken tracks, skips, commands, names,
-#     push notifications, restarts
+#     push notifications, the YOUTUBE MUSIC playlist sync, restarts
 #   - the auto-update script: updates, rollbacks and dependency installs
 # Run the same on your computer (needs Java 21 for the emulators):
 #   npm ci && cd test && npm ci && npm test

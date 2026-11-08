@@ -26,6 +26,7 @@ var fitChat = text.fitChat;
 var checks = require('./lib/checks');
 var ytmusic = require('./lib/ytmusic');
 var swaps = require('./lib/swaps');
+var ytmsync = require('./lib/ytmsync');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -752,8 +753,10 @@ var flagAndRetry = function(listRef, key, track, code, message) {
   moveToBottom(listRef, key, Object.assign({}, track, {
     flagged: { date: Date.now(), code: code }
   })).then(function(newKey) {
-    // look for a YouTube Music copy right away (one search, no quota)
-    if (swapsOn) setTimeout(function() { swapper().track(djid, listRef, newKey); }, 5000);
+    // the bot's YOUTUBE MUSIC playlist: put a YouTube Music copy in its place
+    // now. Anyone else's list: look for one to suggest (one search, no quota)
+    if (ytmOn && djid === botid && ytmSync().isList(listRef)) setTimeout(function() { ytmSync().track(listRef, newKey); }, 5000);
+    else if (swapsOn) setTimeout(function() { swapper().track(djid, listRef, newKey); }, 5000);
   }, function() {});
   if (theDJ.id !== botid && trackBrokenMessages) notify(theDJ.id, message, { kind: "track", name: theDJ.name });
   retrySameDJ(3000);
@@ -1983,6 +1986,118 @@ var swapper = function() {
   return swapperInstance;
 };
 
+// ─── The bot's YOUTUBE MUSIC playlist (lib/ytmsync.js) ──────────────────────
+// Kept in step with the official Indie Discotheque year playlists every day
+// (YTMUSIC_SYNC_HOUR, 5 a.m. by default, in TZ): broken tracks are replaced
+// with their YouTube Music copy, new songs added, duplicates removed, and the
+// list shuffled. Also right after a start when the last sync is over a day
+// old, and on !ytsync. YTMUSIC_SYNC=false turns it off.
+var ytmOn = process.env.YTMUSIC_SYNC !== "false";
+var YTM_HOUR = parseInt(process.env.YTMUSIC_SYNC_HOUR, 10);
+if (!(YTM_HOUR >= 0 && YTM_HOUR <= 23)) YTM_HOUR = 5;
+var YTM_DUPE_SECONDS = parseFloat(process.env.YTMUSIC_DUPE_SECONDS);
+if (!(YTM_DUPE_SECONDS >= 0 && YTM_DUPE_SECONDS <= 30)) YTM_DUPE_SECONDS = 3;
+
+var isoSeconds = function(d) {
+  var m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(String(d || ""));
+  if (!m) return 0;
+  return Number(m[1] || 0) * 86400 + Number(m[2] || 0) * 3600 + Number(m[3] || 0) * 60 + Number(m[4] || 0);
+};
+
+// What YouTube says about up to 50 videos (1 unit): {id: {problem (flag code,
+// 0 = fine), dur (s), title, channel}}. Ids it doesn't know are left out.
+var youtubeVideos = function(ids) {
+  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
+  url.searchParams.set("part", "snippet,contentDetails,status");
+  url.searchParams.set("id", ids.join(","));
+  url.searchParams.set("maxResults", "50");
+  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
+  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
+  return http(url, { timeout: 30000 }).then(function(res) {
+    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
+      var apiError = res.json && res.json.error;
+      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
+    }
+    var out = {};
+    res.json.items.forEach(function(item) {
+      var sn = item.snippet || {};
+      out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
+        title: String(sn.title || ""), channel: String(sn.channelTitle || "") };
+    });
+    return out;
+  });
+};
+
+// The videos of a playlist from the YouTube Data API (1 unit per 50), for
+// when YouTube Music can't answer.
+var youtubePlaylistItems = function(playlistId) {
+  var ids = [];
+  var page = function(token, n) {
+    var url = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
+    url.searchParams.set("part", "contentDetails");
+    url.searchParams.set("playlistId", playlistId);
+    url.searchParams.set("maxResults", "50");
+    url.searchParams.set("fields", "nextPageToken,items(contentDetails(videoId))");
+    url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
+    if (token) url.searchParams.set("pageToken", token);
+    return http(url, { timeout: 30000 }).then(function(res) {
+      if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
+        var apiError = res.json && res.json.error;
+        throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
+      }
+      res.json.items.forEach(function(it) { if (it.contentDetails && it.contentDetails.videoId) ids.push(it.contentDetails.videoId); });
+      return res.json.nextPageToken && n < 200 ? page(res.json.nextPageToken, n + 1) : ids;
+    });
+  };
+  return page("", 1);
+};
+
+var ytmSyncInstance = null;
+var ytmSync = function() {
+  if (!ytmSyncInstance) {
+    ytmSyncInstance = ytmsync.createSync({
+      db: firebase.database(),
+      botid: function() { return botid; },
+      shallowKeys: shallowKeys,
+      videos: youtubeVideos,
+      playlist: function(id) { return ytmusic.playlistTracks(id); },
+      playlistItems: youtubePlaylistItems,
+      search: ytmusic.searchSongs,
+      log: console.log,
+      listName: process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC",
+      sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
+      dupeSeconds: YTM_DUPE_SECONDS,
+      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 200,
+      delayMs: 2500
+    });
+  }
+  return ytmSyncInstance;
+};
+
+var ytmRanOn = null;
+var ytmChecked = false;
+var ytmTick = function() {
+  if (!ytmOn || !started) return;
+  var d = new Date();
+  if (!ytmChecked) {
+    // first look after a start: catch up if the last sync is over a day old
+    ytmChecked = true;
+    ytmSync().findList().catch(function(err) { console.log("youtube music: couldn't find the playlist:", err.message); });
+    ytmSync().lastRunAt().then(function(at) {
+      if (Date.now() - at > 24 * 60 * 60 * 1000) {
+        ytmRanOn = d.toDateString();
+        ytmSync().run({ reason: at ? "catching up" : "first sync" });
+      }
+    });
+    return;
+  }
+  if (d.getHours() !== YTM_HOUR || ytmRanOn === d.toDateString()) return;
+  ytmRanOn = d.toDateString();
+  ytmSync().run({ reason: "daily" });
+};
+setInterval(ytmTick, 10 * 60 * 1000);
+setTimeout(ytmTick, 3 * 60 * 1000);
+
 var swapRanOn = null;
 var swapTick = function() {
   if (!swapsOn || !started) return;
@@ -2662,6 +2777,22 @@ var handleChat = function(chatID, feedKey) {
           } else {
             var lastRun = swapper().state.last;
             talk(fitChat("Swaps (nightly at " + SWAP_HOUR + ":00): " + (lastRun ? swaps.summary(lastRun) : "no run yet; mods can start one with !swapscan.")));
+          }
+        } else if (command == "ytmusic" || command == "ytsync") {
+          var ytmName = process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC";
+          if (!ytmOn) {
+            talk("The " + ytmName + " playlist sync is off (YTMUSIC_SYNC=false).");
+          } else if (ytmSync().state.running) {
+            talk("Syncing " + ytmName + " right now: " + (ytmSync().state.step || "starting") + " (started " +
+              Math.round((Date.now() - ytmSync().state.startedAt) / 60000) + " min ago).");
+          } else if (command == "ytsync" && senderIsMod) {
+            talk(":arrows_counterclockwise: Syncing my " + ytmName + " playlist with the Indie Discotheque year playlists. !ytmusic says how it went.");
+            ytmSync().run({ reason: "!ytsync" });
+          } else if (command == "ytsync") {
+            talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");
+          } else {
+            var ytmLast = ytmSync().state.last;
+            talk(fitChat(ytmName + " (synced daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.summary(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
           }
         } else if (command == "bpm") {
           if (!song || !song.cid) {
