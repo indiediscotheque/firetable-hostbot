@@ -135,6 +135,14 @@
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$uid": { ".validate": "newData.isNumber()" }
     },
+    "ytmSync": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "at": { ".validate": "newData.isNumber()" },
+      "ok": { ".validate": "newData.isBoolean()" },
+      "summary": { ".validate": "newData.isString() && newData.val().length <= 1000" },
+      "$other": { ".validate": false }
+    },
     "playlistPrefs": {
       "$uid": {
         ".read": "auth.uid == $uid",

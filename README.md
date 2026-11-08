@@ -27,6 +27,8 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `AVATARSET` / `LIGHTS_MONTHS` | optional: force a card avatar set / lights months (e.g. `11,12`) instead of following the site; leave unset |
 | `SWAP_SUGGESTIONS` | nightly YouTube Music swap suggestions for broken tracks, on unless set to `false` (see [swap suggestions](#swap-suggestions)) |
 | `SWAP_HOUR` / `SWAP_MAX_SEARCHES` | optional: the hour the swap search runs (in `TZ`, default `4`) and its search limit per run (default `300`) |
+| `YTMUSIC_SYNC` | the daily sync of the bot's YOUTUBE MUSIC playlist with the Indie Discotheque year playlists, on unless set to `false` (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)) |
+| `YTMUSIC_SYNC_HOUR` / `YTMUSIC_PLAYLIST` / `YTMUSIC_SOURCES` / `YTMUSIC_DUPE_SECONDS` / `YTMUSIC_MAX_SEARCHES` | optional: the hour it runs (in `TZ`, default `5`), the playlist's name (default `YOUTUBE MUSIC`), other year playlists (`year=link`, comma separated; default the official 2001–2026 ones), how close two lengths are for a duplicate (default `3` seconds) and its search limit per sync (default `200`) |
 | `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
 | `AWAY_CLOSED_MIN` / `AWAY_ANSWER_MIN` / `AWAY_LOST_HOURS` | optional: when DJs who left are asked and put on the bus (default `5` / `5` / `3`, see [away DJs](#away-djs)) |
@@ -150,6 +152,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
 - `!pushtest`: send a test push notification to your own devices (the site's Settings has a button for it).
 - `!swaps`: how the last swap search went (see [swap suggestions](#swap-suggestions)). `!swapscan` (mods) runs it now for people seen since their last scan; `!swapscan all` for everyone.
+- `!ytmusic`: how the last sync of the bot's YOUTUBE MUSIC playlist went, or what it's doing now (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)). `!ytsync` (mods) runs one now.
 
 ## play history
 `tools/history` joins the room's database (with ADAM's history, which was moved into it) and Last.fm into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
@@ -230,6 +233,24 @@ The log and `!swaps` say what each run did, including the YouTube units it used.
 
 **Needs the latest `firebase-rules.json` published** (the `flagged/date` index, `swapCache`, `swapScans`). Until then the run stops before reading any playlist and the log says so. YouTube Music's search isn't a public API: if YouTube changes it, searches find nothing (the log says `YouTube Music returned nothing` or `isn't answering`), no suggestions are made and nothing else is affected. If the server's region gets no songs from YouTube Music, the same happens. `SWAP_SUGGESTIONS=false` turns it all off.
 
+## the YOUTUBE MUSIC playlist
+The bot keeps its playlist called **YOUTUBE MUSIC** in step with the official Indie Discotheque year playlists on YouTube Music (2001 to 2026, about 27,000 tracks). Every day at 5 a.m. (`YTMUSIC_SYNC_HOUR`, in `TZ`), and a few minutes after a start when the last sync is more than a day old, it:
+1. **checks every track** in the list with the same rules the bot uses before every song (`lib/checks.js`).
+2. **replaces broken tracks** (gone, private, blocked, not embeddable, age restricted, flagged broken; YouTube and SoundCloud alike) in their place with the same recording from YouTube Music, matched the way [swap suggestions](#swap-suggestions) are (title, artists, version and length) and checked to play here. The track keeps its tags and remembers where it came from (`swappedFrom`). A track with no match **stays in the list**, flagged so the bot skips it, and later syncs keep looking. A track the bot flags while playing from this list is replaced straight away.
+3. **adds new songs** from the year playlists, oldest year first: only tracks that can play here, and **never DJ-mixed compilation tracks** ("(Mixed)" in the title, or an album "Mixed by …", "(Mixed)", "Continuous Mix", "DJ Mix", "Mix Cut"). Remixes, "Unmixed DJ" editions and songs called "Mixed Emotions" are fine.
+4. **removes duplicates**: the same upload twice, or the same song (title, artists and version) within 3 seconds (`YTMUSIC_DUPE_SECONDS`) of the same length. The copy kept is the **earliest one in the list that can play**. Each track saves when it joined (`added`) and its length (`duration`), so "earliest" holds through shuffles and a track that breaks later can still be matched.
+5. **shuffles** the whole list.
+
+**Flags stay.** A track someone flagged for a reason of their own (off-theme, low quality) is never replaced, renamed or unflagged, and no copy of it from the year playlists is added. Tracks flagged as broken stay flagged until a working copy replaces them. When duplicates include such a copy, that copy is the one kept, with its flag.
+
+**Only this playlist changes.** The bot's other lists and everyone else's are never touched. Tracks saved by their title alone ("Lose Control") get their artist from their " - Topic" channel ("Young Franco - Lose Control"), the name the room already shows when they play. Everything is saved in one transaction at the end, so a track the bot plays, moves or flags meanwhile is never lost or doubled, and a sync that stops (YouTube's quota, an outage) changes nothing. If the bot has no playlist by that name, the first sync makes it.
+
+**What it costs:** the year playlists and the searches come from YouTube Music with no key or quota (`lib/ytmusic.js`); when YouTube Music can't answer for a playlist, the bot reads it with the YouTube Data API instead. Checking tracks is 1 YouTube Data API unit per 50: about 550 units a sync for 27,000 tracks, of the 10,000 a day. Searches for broken tracks are shared with swap suggestions in `swapCache/` (30 days), paced and capped (`YTMUSIC_MAX_SEARCHES`).
+
+**A new year:** add its playlist to `SOURCES` in `lib/ytmsync.js`, or set `YTMUSIC_SOURCES` in `.env` (`2027=link, 2026=link, …`; it replaces the built-in list).
+
+`!ytmusic` and the log (`youtube music: …`) say what each sync did. Needs the latest `firebase-rules.json` published (`ytmSync`, where the last sync is remembered); until then the log says so and the bot syncs after every restart. `YTMUSIC_SYNC=false` turns it off.
+
 ## one copy at a time
 Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.
 
@@ -268,7 +289,7 @@ Usernames are unique whatever their case ("Boss" and "boss" are one name): names
 Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working. The bot acts on each message once, and ignores commands more than 2 minutes old (sent before a long disconnect, or a copy of an old message added to the feed again).
 
 ## tests
-`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation), the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+`.github/workflows/test.yml` runs on every push and pull request: ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation; the YOUTUBE MUSIC sync against an in-memory database, with DJ-mix titles from the real year playlists), the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, the YOUTUBE MUSIC sync, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
 ```
 npm ci && cd test && npm ci && npm test
 ```
