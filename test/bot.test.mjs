@@ -683,7 +683,8 @@ const scenarios = {
           [k(3)]: yt("chromeo0001", "Chromeo - 100%"),
           [k(4)]: yt("chromeo0002", "Chromeo - 100%"), // the same song again, a second longer: goes
           [k(5)]: yt("lose0000001", "Lose Control"), // saved by title only
-          [k(6)]: yt("nogo0000003", "Nobody - Nothing At All") // gone, no copy: flagged, kept
+          [k(6)]: yt("nogo0000003", "Nobody - Nothing At All"), // gone, no copy: flagged, kept
+          [k(7)]: yt("mvideo00001", "Radiohead - Karma Police (Official Video)") // a music video: its audio track instead
         } }
       } }
     }));
@@ -703,7 +704,9 @@ const scenarios = {
     check(byCid.newsong0001 && byCid.newsong0001.name === "New Band - New Song" && byCid.newsong0001.duration === 210, "a new song from a year playlist is added");
     check(!byCid.mixedsong01, "a DJ-mixed compilation track isn't added");
     check(byCid.lose0000001 && byCid.lose0000001.name === "Young Franco - Lose Control", "a title-only track gets its artist");
-    check(Object.keys(list).length === 6 && Object.values(list).every((t) => t.added > 0), "6 tracks, each knows when it joined");
+    check(!byCid.mvideo00001 && byCid.kpstudio001 && byCid.kpstudio001.name === "Radiohead - Karma Police" &&
+      byCid.kpstudio001.swappedFrom.cid === "mvideo00001", "a music video is swapped for its YouTube Music audio track");
+    check(Object.keys(list).length === 7 && Object.values(list).every((t) => t.added > 0), "7 tracks, each knows when it joined");
     const other = st.playlists[BOT].other;
     check(other.name === "Crate" && JSON.stringify(other.list) === JSON.stringify({ x: { cid: "nogo_other1", name: "Left - Alone", type: 1 } }), "the bot's other playlists aren't touched");
     check(st.ytmSync && st.ytmSync.ok === true && st.ytmSync.at > 0, "the sync is remembered in the database");
@@ -713,13 +716,13 @@ const scenarios = {
     await say("dj1", "!ytsync");
     await sleep(1200);
     st = await get("/");
-    check(said(st).some((t) => /^YOUTUBE MUSIC \(synced daily at 5:00\): 6 tracks checked; 1 broken track replaced, 1 with no match yet/.test(t)), "!ytmusic says how the last sync went");
+    check(said(st).some((t) => /^YOUTUBE MUSIC \(synced daily at 5:00\): 7 tracks checked; 1 broken track replaced, 1 with no match yet/.test(t)), "!ytmusic says how the last sync went");
     check(said(st).some((t) => /^Only mods can start a sync/.test(t)), "!ytsync is for mods");
     const syncs = () => (p.out.match(/youtube music: \d+ tracks checked[^\n]*/g) || []);
     await say("boss", "!ytsync");
     check(await waitFor(p, "Syncing my YOUTUBE MUSIC playlist"), "a mod's !ytsync starts one");
     for (let i = 0; i < 150 && syncs().length < 2; i++) await sleep(100);
-    check(syncs().length === 2 && /0 broken tracks replaced, 1 with no match yet \(kept\); 0 new songs from 2 year playlists \(1 DJ-mixed skipped\); 0 duplicates removed; shuffled 6/.test(syncs()[1]),
+    check(syncs().length === 2 && /0 broken tracks replaced, 1 with no match yet \(kept\); 0 new songs from 2 year playlists \(1 DJ-mixed skipped\); 0 duplicates removed; shuffled 7/.test(syncs()[1]),
       "a second sync adds nothing and shuffles again");
     // a restart soon after doesn't sync again
     p.kill();

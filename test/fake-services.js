@@ -76,7 +76,9 @@ const YT_VIDEOS = {
   chromeo0002: { duration: "PT4M42S", channelTitle: "Chromeo - Topic", title: "100%" },
   newsong0001: { duration: "PT3M30S", channelTitle: "New Band - Topic", title: "New Song" },
   mixedsong01: { duration: "PT4M", channelTitle: "DJ - Topic", title: "Club Thing (Mixed)" },
-  lose0000001: { duration: "PT2M37S", channelTitle: "Young Franco - Topic", title: "Lose Control" }
+  lose0000001: { duration: "PT2M37S", channelTitle: "Young Franco - Topic", title: "Lose Control" },
+  kpstudio001: { duration: "PT4M22S", channelTitle: "Radiohead - Topic", title: "Karma Police" },
+  mvideo00001: { duration: "PT4M30S", channelTitle: "RadioheadVEVO", title: "Radiohead - Karma Police (Official Video)" }
 };
 function youtubeBatch(ids) {
   if (SC === "yt_outage") return youtube("x");
