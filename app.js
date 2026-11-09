@@ -1988,9 +1988,9 @@ var swapper = function() {
 
 // ─── The bot's YOUTUBE MUSIC playlist (lib/ytmsync.js) ──────────────────────
 // Kept in step with the official Indie Discotheque year playlists every day
-// (YTMUSIC_SYNC_HOUR, 5 a.m. by default, in TZ): broken tracks are replaced
-// with their YouTube Music copy, new songs added, duplicates removed, and the
-// list shuffled. Also right after a start when the last sync is over a day
+// (YTMUSIC_SYNC_HOUR, 5 a.m. by default, in TZ): broken tracks and YouTube
+// videos are replaced with their YouTube Music audio track, new songs added,
+// duplicates removed, and the list shuffled. Also right after a start when the last sync is over a day
 // old, and on !ytsync. YTMUSIC_SYNC=false turns it off.
 var ytmOn = process.env.YTMUSIC_SYNC !== "false";
 var YTM_HOUR = parseInt(process.env.YTMUSIC_SYNC_HOUR, 10);
@@ -2067,7 +2067,7 @@ var ytmSync = function() {
       listName: process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC",
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
       dupeSeconds: YTM_DUPE_SECONDS,
-      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 200,
+      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 400,
       delayMs: 2500
     });
   }

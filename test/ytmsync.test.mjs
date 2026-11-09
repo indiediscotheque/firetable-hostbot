@@ -337,12 +337,14 @@ test("a sync replaces broken tracks, adds new songs, removes duplicates and shuf
   assert.equal(s.flagged, 1);
   assert.equal(s.added, 1);
   assert.equal(s.mixed, 1);
-  assert.equal(s.duplicates, 2);
+  assert.equal(s.duplicates, 1);
+  assert.equal(s.upgraded, 1, "the later One More Time was a video: the audio track already there stands in for it");
+  assert.equal(s.videosLeft, 0);
   assert.equal(s.named, 1);
   assert.equal(s.total, 7);
   assert.equal(s.shuffled, 7);
   assert.ok(!s.failed);
-  assert.match(ytmsync.summary(s), /2 broken tracks replaced, 1 with no match yet \(kept, 1 newly flagged\); 1 new song from 2 year playlists \(1 DJ-mixed skipped\); 2 duplicates removed/);
+  assert.match(ytmsync.summary(s), /2 broken tracks replaced, 1 with no match yet \(kept, 1 newly flagged\); 1 new song from 2 year playlists \(1 DJ-mixed skipped\); 1 video swapped for YouTube Music tracks; 1 duplicate removed/);
   assert.deepEqual(searches.sort(), ["Nobody Unfindable Song", "Radiohead Karma Police", "SC Artist Old Song"]);
 
   // the bot's other playlists aren't touched; the searches are remembered
@@ -449,4 +451,82 @@ test("track(): a track the bot just flagged gets its YouTube Music copy in place
   // someone's own flag isn't touched
   assert.equal(await sync.track(ref, keys.b), false);
   assert.equal(db.get("playlists/" + BOT + "/ytm1/list/" + keys.b).cid, "offtheme001");
+});
+
+test("videos become YouTube Music tracks; a video with none yet stays", async () => {
+  const k = (n) => pushKey(Date.UTC(2022, 0, n));
+  const keys = { mv: k(1), title: k(2), none: k(3), have: k(4), atv: k(5), off: k(6) };
+  const db = fakeDb({ playlists: { [BOT]: { ytm: { name: "YOUTUBE MUSIC", list: {
+    [keys.mv]: { type: 1, cid: "kpvideo0001", name: "Radiohead - Karma Police (Official Video)" }, // a music video: swapped
+    [keys.title]: { type: 1, cid: "omtvideo001", name: "One More Time" }, // a video saved by its title: artist from the channel
+    [keys.none]: { type: 1, cid: "rarevideo01", name: "Tiny Band - Rare Song" }, // no audio track anywhere: stays
+    [keys.have]: { type: 1, cid: "lfvideo0001", name: "Young Franco - Lose Control (Official Video)" }, // its audio track is in the list
+    [keys.atv]: { type: 1, cid: "lose0000001", name: "Young Franco - Lose Control" },
+    [keys.off]: { type: 1, cid: "offvideo001", name: "Radiohead - No Surprises", flagged: { date: 1, code: 10 } } // flagged: left alone
+  } } } } });
+  const videos = {
+    kpvideo0001: VIDEO(290, "RadioheadVEVO", "Radiohead - Karma Police (Official Video)"), // 28 s of intro
+    omtvideo001: VIDEO(330, "DaftPunkVEVO", "Daft Punk - One More Time (Official Video)"),
+    rarevideo01: VIDEO(200, "Tiny Band", "Rare Song"),
+    lfvideo0001: VIDEO(170, "Young Franco", "Lose Control (Official Video)"),
+    lose0000001: VIDEO(157, "Young Franco - Topic", "Lose Control"),
+    offvideo001: VIDEO(229, "Radiohead", "No Surprises"),
+    kpstudio001: VIDEO(262, "Radiohead - Topic", "Karma Police"),
+    omtstudio01: VIDEO(320, "Daft Punk - Topic", "One More Time"),
+    nsstudio001: VIDEO(229, "Radiohead - Topic", "No Surprises"),
+    bvideo00001: VIDEO(250, "BandVEVO", "Band - Hit (Official Video)"),
+    bstudio0001: VIDEO(245, "Band - Topic", "Hit")
+  };
+  const catalog = [
+    { cid: "kpstudio001", title: "Karma Police", artists: ["Radiohead"], album: "OK Computer", dur: 262 },
+    { cid: "omtstudio01", title: "One More Time", artists: ["Daft Punk"], album: "Discovery", dur: 320 },
+    { cid: "nsstudio001", title: "No Surprises", artists: ["Radiohead"], album: "OK Computer", dur: 229 },
+    { cid: "bstudio0001", title: "Hit", artists: ["Band"], album: "LP", dur: 245 },
+    { cid: "lose0000001", title: "Lose Control", artists: ["Young Franco"], album: "Lose Control", dur: 157 }
+  ];
+  const searches = [];
+  const sync = ytmsync.createSync({
+    db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}),
+    videos: async (ids) => Object.fromEntries(ids.filter((id) => videos[id]).map((id) => [id, videos[id]])),
+    playlist: async () => ({ title: "2010", tracks: [{ cid: "bvideo00001", title: "Hit (Official Video)", artist: "Band", album: "", dur: 250 }] }),
+    search: async (q) => {
+      searches.push(q);
+      const all = ytmusic.parseSearch(fixture.answer(catalog.filter((r) => q.toLowerCase().includes(r.title.toLowerCase()))));
+      return { songs: ytmusic.songsOnly(all), any: all.length || 1 };
+    },
+    sources: [{ year: 2010, id: "PL2010" }], delayMs: 0, now: () => T0
+  });
+  const s = await sync.run();
+  const list = db.get("playlists/" + BOT + "/ytm/list");
+  const cids = Object.values(list).map((t) => t.cid).sort();
+  const byCid = Object.fromEntries(Object.values(list).map((t) => [t.cid, t]));
+  assert.deepEqual(cids, ["bstudio0001", "kpstudio001", "lose0000001", "offvideo001", "omtstudio01", "rarevideo01"]);
+  assert.equal(byCid.kpstudio001.name, "Radiohead - Karma Police", "the audio track's own name, without (Official Video)");
+  assert.deepEqual(byCid.kpstudio001.swappedFrom, { type: 1, cid: "kpvideo0001", date: T0 });
+  assert.equal(byCid.kpstudio001.added, ytmsync.pushTime(keys.mv), "it keeps the video's place in time");
+  assert.equal(byCid.omtstudio01.name, "Daft Punk - One More Time");
+  assert.ok(searches.includes("DaftPunk One More Time") || searches.includes("Daft Punk One More Time"));
+  assert.equal(byCid.bstudio0001.name, "Band - Hit", "a video from a year playlist comes in as its audio track");
+  assert.equal(byCid.bstudio0001.swappedFrom, undefined);
+  assert.deepEqual(byCid.offvideo001.flagged, { date: 1, code: 10 }, "a flagged video is left alone");
+  assert.equal(byCid.rarevideo01.name, "Tiny Band - Rare Song", "a video with no audio track stays");
+  assert.equal(s.upgraded, 4);
+  assert.equal(s.videosLeft, 1);
+  assert.match(ytmsync.summary(s), /4 videos swapped for YouTube Music tracks \(1 with none yet\)/);
+});
+
+test("duplicates: a YouTube Music track is kept over an earlier video", () => {
+  const list = [
+    entry("v", "Some Band - Night Drive", 200, { added: 1 }),
+    entry("a", "Some Band - Night Drive", 201, { added: 2, audio: true })
+  ];
+  assert.deepEqual(ytmsync.duplicates(list, 3), ["v"]);
+});
+
+test("channelArtist and isTopic", () => {
+  assert.equal(ytmsync.channelArtist("DaftPunkVEVO"), "DaftPunk");
+  assert.equal(ytmsync.channelArtist("Radiohead - Topic"), "Radiohead");
+  assert.equal(ytmsync.channelArtist("Band Official"), "Band");
+  assert.equal(ytmsync.isTopic("Chromeo - Topic"), true);
+  assert.equal(ytmsync.isTopic("Chromeo"), false);
 });
