@@ -176,4 +176,6 @@ Each publish (and every Monday run, preview or not) also writes the pages for th
 - **years**: each year playlist (read from YouTube Music, no quota) with the room's most played from it and finds not played here yet.
 - **Rising** (most up in plays, the last 4 weeks against the 4 before) and **On this day** (songs first played here on this date in earlier years).
 
+It also counts **how new members found the room**: the Discover page each one first landed on (the site saves it with their account when they join, including pages reached from a search engine), by the month they joined, against everyone who joined that month. It's in `found_via.csv` and a table near the top of `summary.md`. Totals only: DJ pages are counted together, so no one's name shows.
+
 People who turned off "Show my name on public pages" on the site (`users/<uid>/publicName = false`) have no DJ page and show as nobody on every song. The library never changes the bot's counts or any tags. Repository variable `HISTORY_LIBRARY` = `false` stops the Monday runs from publishing it.

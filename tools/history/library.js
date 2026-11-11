@@ -432,6 +432,79 @@ function buildLibrary(db, opts) {
  * Build and (with write) save the library. Reads the room's users, tempos and
  * cards, and the year playlists from YouTube Music (no key or quota).
  */
+/**
+ * How new members found the room: the Discover page each one first landed
+ * on (users/<uid>/foundVia, saved by the site when they join, including the
+ * pages people reach from a search engine), counted by the month they joined.
+ * Totals only: no names leave the run.
+ * @param {Object} users - users/
+ * @param {Object} [genres] - discover/lib/genres, for genre names
+ * @returns {{months: Array<{month, joined, viaDiscover, pages: Array<[string, number]>}>}}
+ */
+function foundViaReport(users, genres) {
+  genres = genres || {};
+  var label = function(route) {
+    var p = String(route || "").replace(/^#/, "").split("/");
+    if (p[0] !== "discover") return "Somewhere else";
+    var sub = p[2] ? decodeURIComponent(p.slice(2).join("/")) : "";
+    switch (p[1] || "home") {
+      case "home": return "Discover home";
+      case "new": return "New releases";
+      case "charts": return "Charts";
+      case "recent": return "Recent plays";
+      case "genres": return sub ? "Genre: " + ((genres[sub] && genres[sub].name) || sub) : "Genres";
+      case "djs": return sub ? "DJ page" : "DJs";
+      case "artist": return "Artist: " + sub;
+      case "years": return sub ? "Year: " + sub : "Years";
+      case "themes": return sub ? "A theme night" : "Theme nights";
+      case "search": return "Search";
+      default: return "Discover: " + p[1];
+    }
+  };
+  var months = new Map();
+  Object.keys(users || {}).forEach(function(uid) {
+    var u = users[uid] || {};
+    if (!u.joined || u.hostbot) return;
+    var d = new Date(u.joined);
+    var m = d.getFullYear() + "-" + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1);
+    if (!months.has(m)) months.set(m, { month: m, joined: 0, viaDiscover: 0, pages: new Map() });
+    var row = months.get(m);
+    row.joined++;
+    if (typeof u.foundVia !== "string" || !u.foundVia) return;
+    row.viaDiscover++;
+    // DJ pages are counted together, so a person's name never shows here
+    var l = label(u.foundVia);
+    row.pages.set(l, (row.pages.get(l) || 0) + 1);
+  });
+  return {
+    months: Array.from(months.values()).sort(function(a, b) { return a.month < b.month ? 1 : -1; }).map(function(r) {
+      return { month: r.month, joined: r.joined, viaDiscover: r.viaDiscover, pages: Array.from(r.pages.entries()).sort(function(a, b) { return b[1] - a[1]; }) };
+    })
+  };
+}
+
+/** found_via.csv, and a table in summary.md (before its details, so a public repository shows it too). */
+function writeFoundVia(dir, report) {
+  if (!dir) return;
+  var csv = require("./csv");
+  var rows = [];
+  report.months.forEach(function(m) { m.pages.forEach(function(p) { rows.push([m.month, p[0], p[1]]); }); });
+  csv.writeCsv(path.join(dir, "found_via.csv"), ["month", "first_page", "members"], rows);
+  var file = path.join(dir, "summary.md");
+  if (!fs.existsSync(file)) return;
+  var recent = report.months.filter(function(m) { return m.viaDiscover; }).slice(0, 3);
+  if (!recent.length) return;
+  var lines = ["## how new members found the room", "The Discover page each new member first landed on, by the month they joined (found_via.csv).", "",
+    "| month | joined | through Discover | top pages |", "|---|---|---|---|"];
+  recent.forEach(function(m) {
+    lines.push("| " + m.month + " | " + m.joined + " | " + m.viaDiscover + " | " + m.pages.slice(0, 5).map(function(p) { return p[0].replace(/\|/g, "/") + " (" + p[1] + ")"; }).join(", ") + " |");
+  });
+  var text = fs.readFileSync(file, "utf8").replace(/## how new members found the room[\s\S]*?(?=\n## |$)/, "").replace(/\n{3,}/g, "\n\n");
+  var at = text.indexOf("## sources");
+  text = at === -1 ? text + "\n" + lines.join("\n") + "\n" : text.slice(0, at) + lines.join("\n") + "\n\n" + text.slice(at);
+  fs.writeFileSync(file, text);
+}
+
 async function publishLibrary(db, env, opts, log) {
   opts = opts || {};
   var c = opts.client || (opts.write ? require("./firebase").client(env) : null);
@@ -464,6 +537,11 @@ async function publishLibrary(db, env, opts, log) {
   }
   var built = buildLibrary(db, { users: users, bpm: bpm, cards: cards, years: years, dir: opts.dir, now: opts.now });
   var updates = built.updates;
+  var found = foundViaReport(users, updates["discover/lib/genres"]);
+  writeFoundVia(opts.dir, found);
+  if (found.months.length && found.months[0].viaDiscover) {
+    log("library: " + found.months[0].month + ": " + found.months[0].joined + " joined, " + found.months[0].viaDiscover + " through Discover (found_via.csv)");
+  }
   log("library: " + built.counts.genres + " genres, " + built.counts.djs + " DJs, " + built.counts.artists + " artists, " + built.counts.years + " years");
   if (!opts.write) {
     if (opts.dir) fs.writeFileSync(path.join(opts.dir, "library-preview.json"), JSON.stringify({ counts: built.counts, sample: Object.keys(updates).slice(0, 50) }, null, 1));
@@ -484,4 +562,4 @@ async function publishLibrary(db, env, opts, log) {
   return built.counts;
 }
 
-module.exports = { buildLibrary: buildLibrary, publishLibrary: publishLibrary, slugOf: slugOf, usualTime: usualTime, readAxis: readAxis };
+module.exports = { buildLibrary: buildLibrary, publishLibrary: publishLibrary, foundViaReport: foundViaReport, writeFoundVia: writeFoundVia, slugOf: slugOf, usualTime: usualTime, readAxis: readAxis };

@@ -892,3 +892,31 @@ test("placeholders, published: named uploads get their real tags, the rest leave
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("how new members found the room: the Discover page they first landed on, by month, totals only", () => {
+  const { foundViaReport, writeFoundVia } = require("../tools/history/library.js");
+  const at = (y, m, d) => new Date(y, m - 1, d, 12).getTime();
+  const report = foundViaReport({
+    a: { joined: at(2026, 11, 2), foundVia: "discover/genres/nu-disco" },
+    b: { joined: at(2026, 11, 5), foundVia: "discover/genres/nu-disco" },
+    c: { joined: at(2026, 11, 6), foundVia: "discover/djs/moonboots" },
+    d: { joined: at(2026, 11, 7) },                                   // joined without Discover
+    e: { joined: at(2026, 10, 30), foundVia: "discover/charts/week/2026-W44" },
+    f: { joined: at(2026, 11, 8), foundVia: "discover", hostbot: true } // the bot isn't a member
+  }, { "nu-disco": { name: "Nu-Disco" } });
+  assert.deepEqual(report.months.map((m) => [m.month, m.joined, m.viaDiscover]), [["2026-11", 4, 3], ["2026-10", 1, 1]]);
+  assert.deepEqual(report.months[0].pages, [["Genre: Nu-Disco", 2], ["DJ page", 1]], "DJ pages are counted together: no names");
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  try {
+    writeFileSync(join(dir, "summary.md"), "# Play history\n\n| | |\n|---|---|\n\n## sources\nrows\n");
+    writeFoundVia(dir, report);
+    writeFoundVia(dir, report); // runs again: one table, not two
+    const summary = readFileSync(join(dir, "summary.md"), "utf8");
+    assert.equal(summary.split("## how new members found the room").length, 2);
+    assert.ok(summary.indexOf("## how new members") < summary.indexOf("## sources"), "before the details, so a public repository shows it");
+    assert.match(summary, /\| 2026-11 \| 4 \| 3 \| Genre: Nu-Disco \(2\), DJ page \(1\) \|/);
+    assert.match(readFileSync(join(dir, "found_via.csv"), "utf8"), /2026-11,Genre: Nu-Disco,2/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
