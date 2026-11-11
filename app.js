@@ -27,6 +27,7 @@ var checks = require('./lib/checks');
 var ytmusic = require('./lib/ytmusic');
 var swaps = require('./lib/swaps');
 var ytmsync = require('./lib/ytmsync');
+var discover = require('./lib/discover');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -987,7 +988,9 @@ var logPlay = function(s, ranOut) {
     p: Math.max(0, Math.round((serverNow() - s.started) / 1000)),
     sk: !ranOut
   };
-  firebase.database().ref("playLog").push(JSON.parse(JSON.stringify(entry))).catch(function(err) {
+  firebase.database().ref("playLog").push(JSON.parse(JSON.stringify(entry))).then(function() {
+    discoverPlayed();
+  }, function(err) {
     console.log("play log error:", err && err.message);
   });
 };
@@ -2028,6 +2031,26 @@ var youtubeVideos = function(ids) {
   });
 };
 
+// Release information for Discover's new releases: each upload's description
+// ("Released on: …" on "Artist - Topic" uploads) and upload date (1 unit per 50).
+var youtubeSnippets = function(ids) {
+  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
+  url.searchParams.set("part", "snippet");
+  url.searchParams.set("id", ids.join(","));
+  url.searchParams.set("maxResults", "50");
+  url.searchParams.set("fields", "items(id,snippet(description,publishedAt))");
+  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
+  return http(url, { timeout: 30000 }).then(function(res) {
+    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
+      var apiError = res.json && res.json.error;
+      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
+    }
+    var out = {};
+    res.json.items.forEach(function(item) { out[item.id] = item.snippet || {}; });
+    return out;
+  });
+};
+
 // The videos of a playlist from the YouTube Data API (1 unit per 50), for
 // when YouTube Music can't answer.
 var youtubePlaylistItems = function(playlistId) {
@@ -2097,6 +2120,66 @@ var ytmTick = function() {
 };
 setInterval(ytmTick, 10 * 60 * 1000);
 setTimeout(ytmTick, 3 * 60 * 1000);
+
+// Discover's public data (lib/discover.js): room charts, new releases and the
+// chat as visitors see it. DISCOVER=false turns it off.
+var discoverOn = process.env.DISCOVER !== "false";
+var discoverInstance = null;
+var discoverer = function() {
+  if (!discoverInstance) {
+    discoverInstance = discover.createDiscover({
+      db: firebase.database(),
+      now: serverNow,
+      hidden: function(uid) { return !!(uid && users[uid] && users[uid].publicName === false); },
+      uidOf: uidLookup,
+      nameOf: function(uid) { return (users[uid] && users[uid].username) || null; },
+      playlist: function(id) { return ytmusic.playlistTracks(id); },
+      snippets: youtubeSnippets,
+      colors: artworkColors,
+      sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
+      feed: function() { return feedEntries; },
+      chatData: function(chatID) {
+        return firebase.database().ref("chatData/" + chatID).once("value").then(function(snap) { return snap.val(); });
+      },
+      log: console.log
+    });
+  }
+  return discoverInstance;
+};
+var discoverDo = function(label, fn) {
+  if (!discoverOn || !started) return;
+  fn(discoverer()).catch(function(err) { console.log("discover: " + label + " error:", err && err.message); });
+};
+// the week's chart a minute after each play (several plays, one rebuild)
+var discoverWeekTimer = null;
+var discoverPlayed = function() {
+  if (discoverWeekTimer) return;
+  discoverWeekTimer = setTimeout(function() {
+    discoverWeekTimer = null;
+    discoverDo("weekly chart", function(d) { return d.refreshPeriod("week"); });
+  }, 60 * 1000);
+};
+// the rest once a day (and a few minutes after a start)
+var discoverRanOn = null;
+var discoverTick = function() {
+  if (!discoverOn || !started) return;
+  var day = new Date().toDateString();
+  if (discoverRanOn === day) return;
+  discoverRanOn = day;
+  discoverDo("charts", function(d) {
+    return d.refreshPeriod("week")
+      .then(function() { return d.refreshPeriod("month"); })
+      .then(function() { return d.refreshPeriod("year"); })
+      .then(function() { return d.refreshAllTime(); });
+  });
+  discoverDo("new releases", function(d) { return d.refreshNew(); });
+  discoverDo("chat peek", function(d) { return d.refreshChat(); });
+};
+setInterval(discoverTick, 30 * 60 * 1000);
+setTimeout(discoverTick, 2 * 60 * 1000);
+var discoverChat = function() {
+  if (discoverOn && started) discoverer().chatChanged();
+};
 
 var swapRanOn = null;
 var swapTick = function() {
@@ -2488,6 +2571,7 @@ var handleChat = function(chatID, feedKey) {
         console.log("ignored a repeated chat message (" + chatID + ")");
         return;
       }
+      if (discoverOn && started && !/^!/.test(chatData.txt.trim()) && !chatData.botCmd) discoverer().noteChat(chatData.time);
       fileMentions(chatID, chatData, namebo);
       push.chat(chatID, chatData, namebo);
       if (typeof chatData.time === "number" && serverNow() - chatData.time > CHAT_MAX_AGE) {
@@ -2979,10 +3063,11 @@ chatFeedRef.once("value").then(function(snap) {
   });
   chatFeedRef.on("child_added", function(childSnapshot) {
     var feedData = childSnapshot.val() || {};
-    feedEntries.push({ key: childSnapshot.key, chatID: feedData.chatID });
+    feedEntries.push({ key: childSnapshot.key, chatID: feedData.chatID, hidden: !!feedData.hidden });
     var n = feedEntries.length;
     if (n > 1 && feedEntries[n - 2].key > childSnapshot.key) feedEntries.sort(function(x, y) { return x.key < y.key ? -1 : 1; });
     if (before[childSnapshot.key]) return;
+    discoverChat();
     if (!feedData.chatID) return;
     if (chatReady) return handleChat(feedData.chatID, childSnapshot.key);
     chatWaiting.push({ chatID: feedData.chatID, feedKey: childSnapshot.key });
@@ -2995,6 +3080,7 @@ chatFeedRef.once("value").then(function(snap) {
         break;
       }
     }
+    discoverChat();
   });
   setTimeout(pruneChat, 5000); // and every 5 minutes, below
 }).catch(function(err) {

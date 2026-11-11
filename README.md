@@ -29,6 +29,7 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `SWAP_HOUR` / `SWAP_MAX_SEARCHES` | optional: the hour the swap search runs (in `TZ`, default `4`) and its search limit per run (default `300`) |
 | `YTMUSIC_SYNC` | the daily sync of the bot's YOUTUBE MUSIC playlist with the Indie Discotheque year playlists, on unless set to `false` (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)) |
 | `YTMUSIC_SYNC_HOUR` / `YTMUSIC_PLAYLIST` / `YTMUSIC_SOURCES` / `YTMUSIC_DUPE_SECONDS` / `YTMUSIC_MAX_SEARCHES` | optional: the hour it runs (in `TZ`, default `5`), the playlist's name (default `YOUTUBE MUSIC`), other year playlists (`year=link`, comma separated; default the official 2001–2026 ones), how close two lengths are for a duplicate (default `3` seconds) and its search limit per sync (default `400`) |
+| `DISCOVER` | the public data for the site's Discover side (charts, new releases, chat peek), on unless set to `false` (see [discover](#discover)) |
 | `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
 | `AWAY_CLOSED_MIN` / `AWAY_ANSWER_MIN` / `AWAY_LOST_HOURS` | optional: when DJs who left are asked and put on the bus (default `5` / `5` / `3`, see [away DJs](#away-djs)) |
@@ -251,6 +252,16 @@ The bot keeps its playlist called **YOUTUBE MUSIC** in step with the official In
 **A new year:** add its playlist to `SOURCES` in `lib/ytmsync.js`, or set `YTMUSIC_SOURCES` in `.env` (`2027=link, 2026=link, …`; it replaces the built-in list).
 
 `!ytmusic` and the log (`youtube music: …`) say what each sync did. Needs the latest `firebase-rules.json` published (`ytmSync`, where the last sync is remembered); until then the log says so and the bot syncs after every restart. `YTMUSIC_SYNC=false` turns it off.
+
+## discover
+The site's Discover side shows the library to everyone, signed in or not. Most of it reads data that's already public (Recent, Fresh, the play history's songs and genres, tempos). The bot publishes the rest under `discover/`, which anyone can read and only the bot writes (`lib/discover.js`):
+- **Room charts** (`discover/charts/<period>/<id>`): this week's (`2026-W45`), month's (`2026-11`) and year's (`2026`) most played songs, from the play log, and the all-time chart from the play history's counts. A play counts when the song ran out or played for 30 seconds; fires never change a chart. Weekly charts show places up or down, new entries, re-entries and weeks in a row. Weeks run Monday to Monday in `TZ`. The week's chart is rebuilt a minute after each play; the others once a day. Each period is finished off once it's over, so old charts stay as they ended, and `discover/chartIds/<period>` lists them.
+- **New releases** (`discover/new`): songs in the current year's playlist (and last year's, January to March) released in the last 90 days, newest first, whether or not the room has played them yet. Songs join the year playlists whenever, so each one's release date is looked up once on YouTube ("Released on" for "Artist - Topic" uploads, otherwise the upload date; 1 quota unit per 50 songs) and kept in `discoverCache/`. Each comes with its room plays, who played it first, and its artwork colour. Once a day.
+- **Chat peek** (`discover/chat`): the last 20 messages for visitors, who can't read the chat itself, without bot commands or hidden messages, and how many messages there were in the last hour.
+
+Members choose whether their name shows on these public pages: `users/<uid>/publicName = false` (a setting on the site) shows them as nobody in charts, new releases and the chat peek. The site also saves which Discover page each new member first came from (`users/<uid>/foundVia`, set once), so you can tell which pages bring people in.
+
+Needs the latest `firebase-rules.json` published (`discover`, `discoverCache`, the two user settings, and indexes on `globalSongs/plays` and `globalTracks/song`); until then the log says once what it couldn't save and the bot carries on. The all-time chart needs the [play history](#play-history) published. `DISCOVER=false` turns it all off.
 
 ## one copy at a time
 Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.

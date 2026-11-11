@@ -5,7 +5,7 @@
   "scripts": {
     "test": "npm run lint && npm run test:unit && npm run test:history && npm run test:rules && npm run test:bot && npm run test:auto-update",
     "lint": "cd .. && test/node_modules/.bin/eslint app.js lib tools",
-    "test:unit": "node --test unit.test.mjs ytmsync.test.mjs",
+    "test:unit": "node --test unit.test.mjs ytmsync.test.mjs discover.test.mjs",
     "test:history": "node --test history.test.mjs",
     "test:rules": "cd .. && firebase emulators:exec --only database,auth --project demo-ft \"node test/rules.test.mjs\"",
     "test:bot": "cd .. && firebase emulators:exec --only database,auth --project demo-ft \"node test/bot.test.mjs\"",

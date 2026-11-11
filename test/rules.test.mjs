@@ -29,6 +29,7 @@ await env.withSecurityRulesDisabled(async (ctx) => {
 
 const db = (uid) => env.authenticatedContext(uid).database();
 const eve = db("eve");
+const bob = () => db("bob");
 let failed = 0;
 const expect = async (want, label, promise) => {
   let got;
@@ -272,6 +273,26 @@ await expect("DENIED", "send someone else a notice", eve.ref("notices/bob/n3").s
 await expect("DENIED", "change a notice", eve.ref("notices/eve/n2/txt").set("changed"));
 await expect("DENIED", "bot notice of 200 KB", db("bot").ref("notices/eve/n4").set(notice({ txt: big })));
 await expect("DENIED", "bot notice with an extra field", db("bot").ref("notices/eve/n4").set(notice({ junk: "x" })));
+
+// Discover (#discover): visitors read the bot's public data; only the bot writes it
+const visitor = env.unauthenticatedContext().database();
+await expect("ALLOWED", "bot saves a chart", db("bot").ref("discover/charts/week/2026-W45").set({ at: 1, rows: [] }));
+await expect("ALLOWED", "a visitor reads the charts", visitor.ref("discover/charts/week/2026-W45").once("value"));
+await expect("ALLOWED", "a visitor reads the chat peek", visitor.ref("discover/chat").once("value"));
+await expect("DENIED", "a member writes a chart", eve.ref("discover/charts/week/2026-W45").set({ rows: [] }));
+await expect("DENIED", "a visitor writes the chat peek", visitor.ref("discover/chat").set({ msgs: [] }));
+await expect("ALLOWED", "bot keeps release dates", db("bot").ref("discoverCache/release/abc").set({ d: "2026-11-01", src: "yt" }));
+await expect("DENIED", "a member reads the bot's Discover cache", eve.ref("discoverCache").once("value"));
+await expect("DENIED", "a visitor reads the play log", visitor.ref("playLog").once("value"));
+await expect("ALLOWED", "a visitor reads the history's songs by plays", visitor.ref("globalSongs").orderByChild("plays").limitToLast(5).once("value"));
+await expect("ALLOWED", "turn off your name on public pages", eve.ref("users/eve/publicName").set(false));
+await expect("ALLOWED", "turn it back on", eve.ref("users/eve/publicName").set(true));
+await expect("DENIED", "publicName that isn't true or false", eve.ref("users/eve/publicName").set("no"));
+await expect("DENIED", "turn off someone else's name", eve.ref("users/bob/publicName").set(false));
+await expect("ALLOWED", "save the page you found the room through", eve.ref("users/eve/foundVia").set("genre/nu-disco"));
+await expect("DENIED", "change it later", eve.ref("users/eve/foundVia").set("charts/2026-W45"));
+await expect("DENIED", "set someone else's", eve.ref("users/bob/foundVia").set("x"));
+await expect("DENIED", "a foundVia of 200 KB", bob().ref("users/bob/foundVia").set(big));
 
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
