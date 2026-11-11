@@ -54,6 +54,20 @@ function readAxis(dir) {
   return out;
 }
 
+/** One line about each genre, from genre-about.csv (a copy in history-data/ wins). */
+function readAbout(dir) {
+  var out = {};
+  [path.join(__dirname, "genre-about.csv"), dir ? path.join(dir, "genre-about.csv") : null].forEach(function(f) {
+    if (!f || !fs.existsSync(f)) return;
+    fs.readFileSync(f, "utf8").split(/\r?\n/).forEach(function(line) {
+      if (!line.trim() || /^#/.test(line) || /^genre,/.test(line)) return;
+      var m = /^([^,]+),\s*"?(.*?)"?\s*$/.exec(line);
+      if (m && m[2]) out[m[1].trim()] = m[2].replace(/""/g, '"').slice(0, 200);
+    });
+  });
+  return out;
+}
+
 function median(list) {
   if (!list.length) return null;
   var s = list.slice().sort(function(a, b) { return a - b; });
@@ -190,6 +204,15 @@ function buildLibrary(db, opts) {
   });
 
   var axis = readAxis(opts.dir);
+  var about = readAbout(opts.dir);
+  // each track's plays by decade, for the sound map's decade filter
+  var trackDecades = new Map(); // track -> {2010: n, ...}
+  db.prepare("SELECT track_id, at FROM plays WHERE at IS NOT NULL").all().forEach(function(p) {
+    var dec = Math.floor(new Date(p.at).getFullYear() / 10) * 10;
+    var m = trackDecades.get(p.track_id);
+    if (!m) trackDecades.set(p.track_id, m = {});
+    m[dec] = (m[dec] || 0) + 1;
+  });
   var genreIdx = new Map(); // name -> {tracks: [], plays, bpms, first, co: Map}
   genreOf.forEach(function(list, id) {
     list.forEach(function(g) {
@@ -215,9 +238,11 @@ function buildLibrary(db, opts) {
     var ids = gi.tracks.slice().sort(byPlays);
     var covers = rows(ids, 4).map(function(r) { return r.type + "_" + r.cid; });
     var next = Array.from(gi.co.entries()).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 4).map(function(e) { return genres.slug(e[0]); });
+    var dec = {};
+    gi.tracks.forEach(function(id) { var m = trackDecades.get(id) || {}; Object.keys(m).forEach(function(d) { dec[d] = (dec[d] || 0) + m[d]; }); });
     genreIndex[sl] = {
       name: name, songs: gi.tracks.length, plays: gi.plays, bpm: median(gi.bpms), first: isFinite(gi.first) ? new Date(gi.first).getFullYear() : null,
-      djs: gi.djs.size, x: axis[name] == null ? 0.5 : axis[name], covers: covers, next: next
+      djs: gi.djs.size, x: axis[name] == null ? 0.5 : axis[name], covers: covers, next: next, dec: dec, about: about[name] || null
     };
     var years = {};
     gi.tracks.forEach(function(id) { var f = tracks.get(id).first_play_at; if (f) { var y = new Date(f).getFullYear(); years[y] = (years[y] || 0) + 1; } });
