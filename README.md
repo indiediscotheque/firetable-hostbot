@@ -29,6 +29,8 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `SWAP_HOUR` / `SWAP_MAX_SEARCHES` | optional: the hour the swap search runs (in `TZ`, default `4`) and its search limit per run (default `300`) |
 | `YTMUSIC_SYNC` | the daily sync of the bot's YOUTUBE MUSIC playlist with the Indie Discotheque year playlists, on unless set to `false` (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)) |
 | `YTMUSIC_SYNC_HOUR` / `YTMUSIC_PLAYLIST` / `YTMUSIC_SOURCES` / `YTMUSIC_DUPE_SECONDS` / `YTMUSIC_MAX_SEARCHES` | optional: the hour it runs (in `TZ`, default `5`), the playlist's name (default `YOUTUBE MUSIC`), other year playlists (`year=link`, comma separated; default the official 2001–2026 ones), how close two lengths are for a duplicate (default `3` seconds) and its search limit per sync (default `400`) |
+| `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | optional: the room's YouTube account, for the [genre playlists on YouTube Music](#genre-playlists-on-youtube-music) (`tools/youtube-auth.js` prints them). Off until all three are set |
+| `YTM_PLAYLIST_HOUR` / `YTM_PLAYLIST_UNITS` / `YTM_GENRE_SONGS` / `YTM_GENRE_PLAYLISTS` | optional: the hour the genre playlists update (in `TZ`, default `6`), the quota units a run may spend (default `4000`), songs per playlist (default `50`), and `false` to turn them off |
 | `DISCOVER` | the public data for the site's Discover side (charts, new releases, chat peek), on unless set to `false` (see [discover](#discover)) |
 | `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
@@ -153,6 +155,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
 - `!pushtest`: send a test push notification to your own devices (the site's Settings has a button for it).
 - `!swaps`: how the last swap search went (see [swap suggestions](#swap-suggestions)). `!swapscan` (mods) runs it now for people seen since their last scan; `!swapscan all` for everyone.
+- `!genrelists`: how the last update of the [genre playlists on YouTube Music](#genre-playlists-on-youtube-music) went. `!genrelists run` (mods) runs one now.
 - `!ytmusic`: how the last sync of the bot's YOUTUBE MUSIC playlist went, or what it's doing now (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)). `!ytsync` (mods) runs one now.
 
 ## play history
@@ -253,11 +256,25 @@ The bot keeps its playlist called **YOUTUBE MUSIC** in step with the official In
 
 `!ytmusic` and the log (`youtube music: …`) say what each sync did. Needs the latest `firebase-rules.json` published (`ytmSync`, where the last sync is remembered); until then the log says so and the bot syncs after every restart. `YTMUSIC_SYNC=false` turns it off.
 
+## genre playlists on YouTube Music
+A public playlist for each genre on the room's YouTube account, **"Indie Discotheque · Nu-Disco"** and so on: the genre's 50 room favorites (its most played YouTube songs here, from the weekly [play history](#play-history)), with the genre's line and a link to its page on the site in the description (`SITE_URL`). The site's genre pages link to them. Genres with fewer than 20 YouTube songs get none. Every day at 6 a.m. (`YTM_PLAYLIST_HOUR`) the bot brings each playlist in step with that week's favorites: songs that dropped out are taken out, new ones added, and a song YouTube won't take (gone, private) is skipped for 30 days with the next one in its place (`lib/ytplaylists.js`).
+
+**What it costs:** adding or taking out a song is 50 of YouTube's 10,000 daily quota units, so a run spends at most 4,000 (`YTM_PLAYLIST_UNITS`), biggest genres first, and stops there: the first fill takes a couple of weeks, after which a day's changes are a few hundred units. `!genrelists` says how the last run went.
+
+**Connect the account (once):**
+1. In the [Google Cloud console](https://console.cloud.google.com/), in the project that has the bot's `YOUTUBE_KEY`: **APIs & Services → OAuth consent screen**: set it up (External), add yourself as a test user, then **Publish app** (a test-mode sign-in stops working after 7 days).
+2. **Credentials → Create credentials → OAuth client ID → Desktop app.** Copy its client ID and secret.
+3. On your computer, in this repository: `node tools/youtube-auth.js <client id> <client secret>`. Sign in as the YouTube account that should own the playlists (Google warns the app isn't verified: **Advanced → Go to …**), and allow it.
+4. Put the three lines it prints in the bot's `.env` and restart the bot. `!genrelists run` (mods) starts the first run straight away.
+
+If the sign-in is ever refused (the account's password changed, access removed), `!genrelists` and the log say so: run step 3 again. A playlist deleted on YouTube is made again the next day.
+
 ## discover
 The site's Discover side shows the library to everyone, signed in or not. Most of it reads data that's already public (Recent, Fresh, the play history's songs and genres, tempos). The bot publishes the rest under `discover/`, which anyone can read and only the bot writes (`lib/discover.js`):
 - **Room charts** (`discover/charts/<period>/<id>`): this week's (`2026-W45`), month's (`2026-11`) and year's (`2026`) most played songs, from the play log, and the all-time chart from the play history's counts. A play counts when the song ran out or played for 30 seconds; fires never change a chart. Weekly charts show places up or down, new entries, re-entries and weeks in a row. Weeks run Monday to Monday in `TZ`. The week's chart is rebuilt a minute after each play; the others once a day. Each period is finished off once it's over, so old charts stay as they ended, and `discover/chartIds/<period>` lists them.
 - **New releases** (`discover/new`): songs in the current year's playlist (and last year's, January to March) released in the last 90 days, newest first, whether or not the room has played them yet. Songs join the year playlists whenever, so each one's release date is looked up once on YouTube ("Released on" for "Artist - Topic" uploads, otherwise the upload date; 1 quota unit per 50 songs) and kept in `discoverCache/`. Each comes with its room plays, who played it first, and its artwork colour. Once a day.
 - **Theme nights** (`discover/themes/index`, `discover/themes/night/<id>`): plays under one room theme, no more than 2 hours apart, with their songs in order, DJs and fires. The bot saves the theme and the `!hot` fires with each play (`playLog` `th` and `f`) since November 2026, so the archive starts there and grows. The latest night is updated a minute after each play, and the whole archive once a day. Nights under 3 songs are left out. Chart rows show their fires too, but fires never change a chart.
+- **Genre playlists** (`discover/ytm/<slug>`): each genre's YouTube Music playlist id, once the bot has made it (see [genre playlists on YouTube Music](#genre-playlists-on-youtube-music)).
 - **Fires earned** (`discover/fires`): each DJ's `!hot` fires since November 2026, how many of their plays got any, and their 10 most-fired songs, plus `index`, every DJ by fires. Rebuilt once a day. DJs who turned off "Show my name on public pages" aren't listed.
 - **Chat peek** (`discover/chat`): the last 20 messages for visitors, who can't read the chat itself, without bot commands or hidden messages, and how many messages there were in the last hour.
 
