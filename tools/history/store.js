@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS merges (track_id TEXT, a TEXT, b TEXT, reason TEXT, s
 CREATE TABLE IF NOT EXISTS review (
   id INTEGER PRIMARY KEY, kind TEXT, a TEXT, b TEXT, a_label TEXT, b_label TEXT, score REAL, evidence TEXT
 );
+-- Uploads tagged with a placeholder (placeholders.js): named or left out
+CREATE TABLE IF NOT EXISTS placeholders (
+  upload TEXT PRIMARY KEY, tag TEXT, action TEXT, artist TEXT, title TEXT, evidence TEXT, suggestion TEXT,
+  logs INTEGER, plays INTEGER, first_at INTEGER, last_at INTEGER, djs TEXT, track_id TEXT
+);
 `;
 
 function open(dir) {

@@ -1,0 +1,6 @@
+artist,title
+# Tags that aren't songs: the room once retagged uploads it wanted skipped
+# with these. The history finds each upload's real name, or leaves it out
+# (placeholders.js). Matching ignores case and punctuation.
+Unavailable,Unavailable
+Advert,Advert;

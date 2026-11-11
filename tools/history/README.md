@@ -107,6 +107,19 @@ Every played track gets up to 3 genres from the room's own list, strongest first
 
 Each answer is kept, so each artist and track is looked up once. Each run looks up the most played first: Last.fm within 30 minutes (about 4 a second), Discogs 1,200 tracks (60 a minute). The first few weekly runs fill the library in; after that, only new music is looked up. A publish writes `genres` on each track (`globalSongs`) and song (`globalWorks`), and a genre index for browsing: `globalSongsMeta/genres/<genre>` (name, tracks, plays) and `globalSongsMeta/byGenre/<genre>/<track>` = plays. `npm run history -- genres` runs the lookups and assignment on their own; `lookup` shows a track's genres and where they came from.
 
+## placeholder tags (Unavailable, Advert)
+Before the bot could tell a broken upload, the room retagged uploads it wanted skipped as `Unavailable - Unavailable` or `Advert - Advert;`. Each was a different song, so their plays piled into two "songs" at the top of every list. The history doesn't count a placeholder as a song (`placeholders.js`). For each upload carrying one, it looks for the real name everywhere else the room logged that upload, and uses the strongest:
+- **an answer in `placeholder-fixes.csv`** (always wins)
+- **the room's own logs:** the name it had before the retag (`tagLog`), DJs' playlists and queues, Recent, the play log, ADAM
+- **YouTube Music or SoundCloud's own song data** (a Topic channel upload, SoundCloud's artist and title)
+- **Last.fm:** at least 2 scrobbles sent within 90 seconds of its plays
+
+A plain YouTube or SoundCloud video title, or a single scrobble, is only a suggestion. It's often a promo reel or the song played next. Uploads named this way keep their plays under the real song, and a publish writes the name into the room's tags. The rest are left out: their plays go, and a publish removes them from the room's tags and deletes the two fake songs. Every change is backed up first, so `undo-tags` puts it all back.
+
+**Auditing:** `placeholder_uploads.csv` in the reports lists every upload: its link, what it was tagged, whether it was named or left out, the name, where the name came from, any suggestion, and its plays, dates and DJs. Open the links to check them. To correct or confirm one, add a line to `placeholder-fixes.csv` (here or in `history-data/`): the upload's id or link, then the artist and title, or `remove`. Then run the Play history workflow again.
+
+More placeholders can go in `placeholder-tags.csv`. The bot reads the same list, so a placeholder-tagged upload played again stays its own track and never piles up again.
+
 ## review
 Some pairs only a person can call ("are `Star Rain` and `Star Ruin` the same?"). Two ways to answer:
 - **In chat, by any mod:** `publish` sends up to 300 questions. `!review` shows the next one; answer with `!same 12` or `!different 12`. The next `refresh` uses the answers.

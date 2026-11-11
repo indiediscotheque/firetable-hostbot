@@ -122,6 +122,16 @@ function report(db, dir, log) {
 
   files["review.csv"] = exportReview(db, path.join(dir, "review.csv"));
 
+  // uploads once tagged "Unavailable" or "Advert" (placeholders.js): what each
+  // was named, from where, or why it was left out
+  var phRows = db.prepare("SELECT * FROM placeholders ORDER BY action, plays DESC").all();
+  files["placeholder_uploads.csv"] = csv.writeCsv(path.join(dir, "placeholder_uploads.csv"),
+    ["upload", "was_tagged", "action", "named", "from", "suggestion", "plays", "logs", "first_play", "last_play", "djs", "track_id"],
+    phRows.map(function(r) {
+      return [uploadUrl(Number(r.upload[0]), r.upload.slice(1)), r.tag, r.action, r.artist ? r.artist + " - " + r.title : "", r.evidence, r.suggestion,
+        r.plays, r.logs, iso(r.first_at), iso(r.last_at), r.djs, r.track_id];
+    }));
+
   // ------------------------------------------------------------- summary
   var q = function(sql) { return db.prepare(sql).get(); };
   var lines = [];
@@ -160,6 +170,11 @@ function report(db, dir, log) {
   add("| RSN title case | " + n(titleCased) + " English titles (tidy_preview.csv, title_case) |");
   var by = function(re) { return artistAccents.filter(function(a) { return re.test(a.outcome); }).length; };
   if (artistAccents.length) add("| artist names (artist_accents.csv) | " + n(by(/^accents from YouTube/)) + " accented as YouTube Music writes them; " + n(by(/YouTube Music writes it/)) + " left plain as YouTube Music writes them; " + n(by(/until YouTube Music is checked|not found/)) + " left as they are until YouTube Music confirms |");
+  if (phRows.length) {
+    var named = phRows.filter(function(r) { return r.action === "renamed"; }).length;
+    add("| placeholder tags (Unavailable, Advert) | " + n(phRows.length) + " uploads: " + n(named) + " named from their other logs, " + n(phRows.length - named) +
+      " left out with their " + n(phRows.filter(function(r) { return r.action !== "renamed"; }).reduce(function(a, r) { return a + (r.plays || 0); }, 0)) + " logged plays (placeholder_uploads.csv; answers go in placeholder-fixes.csv) |");
+  }
   add("| waiting for you | " + n(totals.review) + " (review.csv) |");
   add();
   add("## sources");

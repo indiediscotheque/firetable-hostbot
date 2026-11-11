@@ -1,0 +1,6 @@
+upload,artist,title
+# Answers for uploads that carried a placeholder tag (placeholder-tags.csv),
+# from placeholder_uploads.csv in the history's reports. One upload a line:
+# its id or link, then the real artist and title, or "remove" to leave it out.
+#   https://youtu.be/7aNium-m3l0,MNDR,Stay
+#   2303999483,remove
