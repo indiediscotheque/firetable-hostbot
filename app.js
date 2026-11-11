@@ -975,7 +975,7 @@ var nextSong = function(noPrevPlay) {
 // Every play, for good: Recent keeps only the last 500, so this is the room's
 // history of who played what when (read by tools/history; only the bot can
 // read or write it, so nobody's browser ever downloads it).
-var logPlay = function(s, ranOut) {
+var logPlay = function(s, ranOut, fires) {
   if (!s || !s.cid || !s.started) return;
   var entry = {
     k: s.type + "" + s.cid,
@@ -989,7 +989,9 @@ var logPlay = function(s, ranOut) {
     p: Math.max(0, Math.round((serverNow() - s.started) / 1000)),
     sk: !ranOut,
     // the room's theme when it played, for theme nights in Discover
-    th: typeof theme === "string" && theme ? theme.slice(0, 80) : null
+    th: typeof theme === "string" && theme ? theme.slice(0, 80) : null,
+    // the room's !hot fires on it (Discover shows them; charts never count them)
+    f: fires > 0 ? fires : null
   };
   firebase.database().ref("playLog").push(JSON.parse(JSON.stringify(entry))).then(function() {
     discoverPlayed();
@@ -1091,6 +1093,7 @@ var startSong = function(noPrevPlay) {
     clearTimeout(songTimeout);
     songTimeout = null;
   }
+  var songFires = firelevel.size(firelevel.fires); // before they're cleared, for the play log
   firelevel.clear();
   writeRoomState({ dance: false });
   robotsDancing = false;
@@ -1116,7 +1119,7 @@ var startSong = function(noPrevPlay) {
       if (song.playcount) newEntry.playcount = song.playcount;
       newEntry = JSON.parse(JSON.stringify(newEntry)); // Firebase refuses undefined fields
       recentPlays.add(newEntry);
-      logPlay(song, songRanOut);
+      logPlay(song, songRanOut, songFires);
       var isNew = newMusicCheck(newEntry);
       if (isNew) {
 
@@ -2165,6 +2168,7 @@ var discoverPlayed = function() {
   discoverWeekTimer = setTimeout(function() {
     discoverWeekTimer = null;
     discoverDo("weekly chart", function(d) { return d.refreshPeriod("week"); });
+    discoverDo("theme nights", function(d) { return d.refreshThemes(36); });
   }, 60 * 1000);
 };
 // The rest once a day (and a few minutes after a start). A job only counts
@@ -2191,6 +2195,7 @@ var discoverTick = function() {
   });
   discoverJob("new releases", function(d) { return d.refreshNew(); });
   discoverJob("chat peek", function(d) { return d.refreshChat(); });
+  discoverJob("theme nights", function(d) { return d.refreshThemes(24 * 400); });
 };
 setInterval(discoverTick, 30 * 60 * 1000);
 setTimeout(discoverTick, 2 * 60 * 1000);

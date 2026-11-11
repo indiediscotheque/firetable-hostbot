@@ -240,3 +240,44 @@ test("new releases: a year playlist that can't be read fails, so the bot tries a
   await assert.rejects(d.refreshNew(), /couldn't read this year's playlist/);
   assert.equal(db.get("discover/new"), null);
 });
+
+test("fires: summed on each chart row, never part of the ranking", () => {
+  const chart = discover.buildChart([
+    play("A", 1, { f: 3 }), play("A", 2, { f: 2 }),
+    play("B", 3), play("B", 4), play("B", 5)
+  ]);
+  assert.deepEqual(chart.rows.map((r) => [r.key, r.plays, r.fires]), [["B", 3, null], ["A", 2, 5]]);
+});
+
+test("theme nights: one theme, plays no more than 2 hours apart; short ones and opted-out names left out", () => {
+  const H = 3600000, T = local(2026, 11, 6, 20);
+  const plays = [
+    play("A", T, { th: "Italo Night", f: 2 }), play("B", T + 0.1 * H, { th: "Italo Night", djid: "u3", dj: "quiet" }), play("C", T + 0.2 * H, { th: "Italo Night" }),
+    play("D", T + 0.3 * H, { th: "Italo Night", sk: true, p: 5 }),        // a skip doesn't count
+    play("E", T + 3 * H, { th: "Italo Night" }),                          // 2+ hours later: another night (too short)
+    play("F", T + 3.1 * H, { th: "Synth Sunday" }), play("G", T + 3.2 * H, { th: "Synth Sunday" }), play("H", T + 3.3 * H, { th: "Synth Sunday" }),
+    play("I", T + 3.4 * H)                                                // no theme saved
+  ];
+  const nights = discover.themeNights(plays, { hidden: (uid) => uid === "u3" });
+  assert.deepEqual(nights.map((n) => [n.theme, n.n]), [["Italo Night", 3], ["Synth Sunday", 3]]);
+  assert.equal(nights[0].id, "n" + T.toString(36), "the id is the night's first play: it never changes as the night grows");
+  assert.deepEqual(nights[0].djs, ["dj1"]);
+  assert.equal(nights[0].rows[1].dj, null, "opted out");
+  assert.equal(nights[0].rows[0].f, 2);
+});
+
+test("theme nights are published with their songs, and a night cut by the window is left to the daily run", async () => {
+  const H = 3600000;
+  const now = local(2026, 11, 10, 23);
+  const playLog = {};
+  let n = 0;
+  const add = (s, w, th) => { playLog["p" + String(n++).padStart(3, "0")] = play(s, w, { th }); };
+  add("A", now - 35 * H, "Cut Off"); add("B", now - 34.9 * H, "Cut Off"); add("C", now - 34.8 * H, "Cut Off"); // starts at the window's edge
+  add("D", now - 3 * H, "Italo Night"); add("E", now - 2.9 * H, "Italo Night"); add("F", now - 2.8 * H, "Italo Night");
+  const { db, d } = setup({ playLog }, { now: () => now });
+  await d.refreshThemes(36);
+  const index = db.get("discover/themes/index");
+  assert.deepEqual(Object.values(index).map((x) => x.theme), ["Italo Night"]);
+  const id = Object.keys(index)[0];
+  assert.equal(db.get("discover/themes/night/" + id).rows.length, 3);
+});
