@@ -281,3 +281,28 @@ test("theme nights are published with their songs, and a night cut by the window
   const id = Object.keys(index)[0];
   assert.equal(db.get("discover/themes/night/" + id).rows.length, 3);
 });
+
+test("fires earned: each DJ's fires and most-fired songs; opted-out names, skips and plays without fires left out", () => {
+  const T = local(2026, 11, 6, 20);
+  const plays = [
+    play("A", T, { f: 3 }), play("A", T + 1, { f: 2 }), play("B", T + 2, { f: 4 }), play("C", T + 3),
+    play("D", T + 4, { f: 5, djid: "u3", dj: "quiet" }),          // opted out: not listed (still counts for "since")
+    play("E", T + 5, { f: 9, sk: true, p: 5 }),                   // a skip doesn't count
+    play("F", T + 6, { f: 1, djid: "u2", dj: "dj2" })
+  ];
+  const got = discover.djFires(plays, { hidden: (uid) => uid === "u3" });
+  assert.equal(got.since, T);
+  assert.deepEqual(Object.keys(got.djs).sort(), ["u1", "u2"]);
+  assert.deepEqual([got.djs.u1.fires, got.djs.u1.plays], [9, 3]);
+  assert.deepEqual(got.djs.u1.songs.map((r) => [r.key, r.fires, r.plays, r.top]), [["A", 5, 2, 3], ["B", 4, 1, 4]]);
+  assert.deepEqual(got.index.map((x) => [x.djid, x.fires]), [["u1", 9], ["u2", 1]]);
+});
+
+test("fires earned are published under discover/fires", async () => {
+  const now = local(2026, 11, 10, 23);
+  const { db, d } = setup({ playLog: { p1: play("A", now - 3600000, { f: 2 }), p2: play("B", local(2026, 10, 20), { f: 7 }) } }, { now: () => now });
+  await d.refreshFires();
+  const fires = db.get("discover/fires");
+  assert.equal(fires.djs.u1.fires, 2, "the log before November 2026 has no fires: not read");
+  assert.equal(fires.index[0].djid, "u1");
+});

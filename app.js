@@ -2196,6 +2196,7 @@ var discoverTick = function() {
   discoverJob("new releases", function(d) { return d.refreshNew(); });
   discoverJob("chat peek", function(d) { return d.refreshChat(); });
   discoverJob("theme nights", function(d) { return d.refreshThemes(24 * 400); });
+  discoverJob("fires", function(d) { return d.refreshFires(); });
 };
 setInterval(discoverTick, 30 * 60 * 1000);
 setTimeout(discoverTick, 2 * 60 * 1000);
