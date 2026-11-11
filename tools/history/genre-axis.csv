@@ -1,0 +1,41 @@
+genre,axis
+# Where each of the room's genres sits on Discover's sound map, across: 0 is
+# band-made (guitars, drums, voices), 1 is machine-made (synths, drum
+# machines, samples). The other axis is each genre's usual tempo, worked out
+# from the bot's tempo lookups. Change a number to move a genre; a genre not
+# listed sits in the middle (0.5).
+Rock,0.06
+Folk,0.05
+Jazz & Swing,0.04
+Funk,0.12
+Indie Rock,0.14
+Soul & R&B,0.17
+Psych,0.22
+Reggae & Dancehall,0.26
+Indie Pop,0.28
+Disco,0.30
+Dream Pop,0.34
+Post-Punk & Darkwave,0.36
+Hip Hop,0.42
+Pop,0.44
+New Wave,0.46
+Indie,0.5
+Chillwave,0.56
+Indie Dance,0.58
+Synthpop,0.60
+Nu-Disco,0.64
+Downtempo,0.64
+Electronica,0.70
+Electronic,0.72
+Ambient,0.73
+Deep House,0.74
+Synthwave,0.78
+French House,0.80
+House,0.84
+UK Garage,0.82
+Future Funk,0.82
+Electro,0.88
+Breaks & Bass,0.90
+Tech House,0.92
+Techno,0.95
+EDM,0.97

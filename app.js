@@ -986,7 +986,9 @@ var logPlay = function(s, ranOut) {
     w: s.started,
     d: s.duration || null,
     p: Math.max(0, Math.round((serverNow() - s.started) / 1000)),
-    sk: !ranOut
+    sk: !ranOut,
+    // the room's theme when it played, for theme nights in Discover
+    th: typeof theme === "string" && theme ? theme.slice(0, 80) : null
   };
   firebase.database().ref("playLog").push(JSON.parse(JSON.stringify(entry))).then(function() {
     discoverPlayed();
@@ -1106,7 +1108,8 @@ var startSong = function(noPrevPlay) {
         colors: { color: colors.color, txt: colors.txt },
         when: song.started,
         postedDate: song.postedDate,
-        img: song.image
+        img: song.image,
+        theme: typeof theme === "string" && theme ? theme.slice(0, 80) : null
       };
       if (song.adamid) newEntry.adamid = song.adamid;
       if (song.playcount) newEntry.playcount = song.playcount;
@@ -1324,7 +1327,8 @@ var printCard = function(newEntry) {
         colors: { color: colors.color, txt: colors.txt },
         when: song.started,
         postedDate: song.postedDate,
-        img: song.image
+        img: song.image,
+        theme: typeof theme === "string" && theme ? theme.slice(0, 80) : null
       };
   }
   var now = Date.now();
