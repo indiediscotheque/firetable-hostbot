@@ -29,6 +29,7 @@ var ytmusic = require('./lib/ytmusic');
 var swaps = require('./lib/swaps');
 var ytmsync = require('./lib/ytmsync');
 var discover = require('./lib/discover');
+var ytplaylists = require('./lib/ytplaylists');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -2200,6 +2201,45 @@ var discoverTick = function() {
 };
 setInterval(discoverTick, 30 * 60 * 1000);
 setTimeout(discoverTick, 2 * 60 * 1000);
+// Genre playlists on YouTube Music (lib/ytplaylists.js), daily at
+// YTM_PLAYLIST_HOUR, once the bot can sign in to the room's YouTube account
+// (YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REFRESH_TOKEN; see
+// tools/youtube-auth.js). YTM_GENRE_PLAYLISTS=false turns it off.
+var YTM_PLAYLIST_HOUR = parseInt(process.env.YTM_PLAYLIST_HOUR, 10);
+if (!(YTM_PLAYLIST_HOUR >= 0 && YTM_PLAYLIST_HOUR <= 23)) YTM_PLAYLIST_HOUR = 6;
+var genrePlaylistsOn = process.env.YTM_GENRE_PLAYLISTS !== "false" &&
+  !!(process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET && process.env.YOUTUBE_REFRESH_TOKEN);
+var genrePlaylistsRanOn = null;
+var genrePlaylistsRunning = false;
+var genrePlaylists = function() {
+  if (genrePlaylistsRunning) return Promise.resolve(null);
+  genrePlaylistsRunning = true;
+  return ytplaylists.createGenrePlaylists({
+    db: firebase.database(),
+    http: http,
+    auth: { clientId: process.env.YOUTUBE_CLIENT_ID, clientSecret: process.env.YOUTUBE_CLIENT_SECRET, refreshToken: process.env.YOUTUBE_REFRESH_TOKEN },
+    site: process.env.SITE_URL,
+    units: parseInt(process.env.YTM_PLAYLIST_UNITS, 10) || 4000,
+    songs: parseInt(process.env.YTM_GENRE_SONGS, 10) || 50,
+    now: serverNow,
+    log: console.log
+  }).run().catch(function(err) {
+    console.log("youtube music playlists error:", err && err.message);
+    return null;
+  }).then(function(sum) {
+    genrePlaylistsRunning = false;
+    return sum;
+  });
+};
+var genrePlaylistsTick = function() {
+  if (!genrePlaylistsOn || !discoverOn || !started) return;
+  var d = new Date();
+  if (d.getHours() !== YTM_PLAYLIST_HOUR || genrePlaylistsRanOn === d.toDateString()) return;
+  genrePlaylistsRanOn = d.toDateString();
+  genrePlaylists();
+};
+setInterval(genrePlaylistsTick, 10 * 60 * 1000);
+
 var discoverChat = function() {
   if (discoverOn && started) discoverer().chatChanged();
 };
@@ -2900,6 +2940,22 @@ var handleChat = function(chatID, feedKey) {
           } else {
             var ytmLast = ytmSync().state.last;
             talk(fitChat(ytmName + " (synced daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.summary(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
+          }
+        } else if (command == "genrelists") {
+          if (!genrePlaylistsOn) {
+            talk("Genre playlists on YouTube Music are off: the bot needs the room's YouTube account connected first (see the README).");
+          } else if (genrePlaylistsRunning) {
+            talk("Updating the genre playlists on YouTube Music right now. !genrelists says how it went.");
+          } else if (args == "run" && senderIsMod) {
+            talk(":arrows_counterclockwise: Updating the genre playlists on YouTube Music. !genrelists says how it went.");
+            genrePlaylists();
+          } else {
+            firebase.database().ref("discoverCache/ytPlaylistsRun").once("value").then(function(snap) {
+              var r = snap.val();
+              talk(fitChat("Genre playlists on YouTube Music (daily at " + YTM_PLAYLIST_HOUR + ":00): " + (r
+                ? r.done + " in step, " + r.created + " made, " + r.added + " songs added, " + r.removed + " taken out" + (r.stopped ? "; stopped: " + r.stopped : "") + "."
+                : "no run yet; mods can start one with !genrelists run.")));
+            }, function() { talk("I couldn't read the last run."); });
           }
         } else if (command == "bpm") {
           if (!song || !song.cid) {
