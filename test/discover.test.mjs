@@ -232,3 +232,9 @@ test("the chat peek is written only when it changes, with the hour's count", asy
   await d.refreshChat();
   assert.deepEqual(db.get("discover/chat").msgs.map((m) => m.txt), ["hi", "yo"]);
 });
+
+test("new releases: a year playlist that can't be read fails, so the bot tries again later", async () => {
+  const { db, d } = setup({}, { playlist: async () => { throw new Error("YouTube Music is down"); } });
+  await assert.rejects(d.refreshNew(), /couldn't read this year's playlist/);
+  assert.equal(db.get("discover/new"), null);
+});
