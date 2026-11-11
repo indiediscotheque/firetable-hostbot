@@ -262,7 +262,7 @@ The site's Discover side shows the library to everyone, signed in or not. Most o
 
 Members choose whether their name shows on these public pages: `users/<uid>/publicName = false` (a setting on the site) shows them as nobody in charts, new releases and the chat peek. The site also saves which Discover page each new member first came from (`users/<uid>/foundVia`, set once), so you can tell which pages bring people in.
 
-Needs the latest `firebase-rules.json` published (`discover`, `discoverCache`, the two user settings, and indexes on `globalSongs/plays` and `globalTracks/song`); until then the log says once what it couldn't save and the bot carries on. The all-time chart needs the [play history](#play-history) published. `DISCOVER=false` turns it all off.
+Needs the latest `firebase-rules.json` published (`discover`, `discoverCache`, the user settings, including `users/<uid>/featured`, the up to 6 cards a member picks for their DJ page, and indexes on `globalSongs/plays` and `globalTracks/song`); until then the log says once what it couldn't save and the bot carries on. The all-time chart needs the [play history](#play-history) published. `DISCOVER=false` turns it all off.
 
 ## one copy at a time
 Only one copy of the bot runs the room. The running copy holds `botLock` in the database; another copy (say, one started on a laptop with the live `.env`) logs `another copy of the bot is running` and waits, taking over only if the first stops. A copy that loses the lock to another stops itself (pm2 then restarts it, and it waits). Needs the latest `firebase-rules.json` published; before that the log says so and the bot runs as before.

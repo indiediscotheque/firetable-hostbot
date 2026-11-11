@@ -559,6 +559,12 @@
           ".write": "auth.uid == $uid && !data.exists()",
           ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 200"
         },
+        "featured": {
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          "$slot": {
+            ".validate": "$slot.matches(/^[0-5]$/) && newData.isString() && newData.val().length <= 40 && root.child('cards/' + newData.val() + '/owner').val() == auth.uid"
+          }
+        },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
           ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[1-4]|dicebear:[a-z0-9-]{1,32})$/)"

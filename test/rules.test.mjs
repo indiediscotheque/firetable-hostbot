@@ -17,7 +17,7 @@ await env.withSecurityRulesDisabled(async (ctx) => {
       left: { username: "renamed" }
     },
     nameClaim: { boss: "boss", eve: "eve", bob: "bob", mod1: "mod1", oldname: "left" },
-    cards: { c1: { owner: "eve" } },
+    cards: { c1: { owner: "eve" }, c2: { owner: "eve" }, c3: { owner: "bob" } },
     chatData: {
       bobmsg: { id: "bob", name: "Bob", txt: "hi", feedID: "f1", time: 1 },
       evemsg: { id: "eve", name: "eve", txt: "yo", time: 1 },
@@ -90,6 +90,11 @@ await expect("DENIED", "someone else's offlineAt", db("bob").ref("users/eve/offl
 await expect("DENIED", "closed that isn't now", eve.ref("users/eve/closed").set(1));
 await expect("DENIED", "offlineAt in the future", eve.ref("users/eve/offlineAt").set(Date.now() + 86400000));
 await expect("ALLOWED", "avatarStyle", eve.ref("users/eve/avatarStyle").set("robohash:set2"));
+await expect("ALLOWED", "feature two of my cards on my DJ page, then none", eve.ref("users/eve/featured").set(["c2", "c1"]).then(() => eve.ref("users/eve/featured").remove()));
+await expect("DENIED", "feature someone else's card", eve.ref("users/eve/featured").set(["c3"]));
+await expect("DENIED", "feature a card that doesn't exist", eve.ref("users/eve/featured").set(["nope"]));
+await expect("DENIED", "feature a 7th card", eve.ref("users/eve/featured").set({ 0: "c1", 6: "c2" }));
+await expect("DENIED", "set someone else's featured cards", db("bob").ref("users/eve/featured").set(["c1"]));
 await expect("ALLOWED", "typing, then stop typing", eve.ref("typing/eve").set({ name: "eve", at: TS }).then(() => eve.ref("typing/eve").remove()));
 await expect("ALLOWED", "block and unblock", eve.ref("blocks/eve/bob").set(true).then(() => eve.ref("blocks/eve/bob").remove()));
 await expect("ALLOWED", "supermod mods and unmods", db("boss").ref("users/eve/mod").set(true).then(() => db("boss").ref("users/eve/mod").set(false)));
