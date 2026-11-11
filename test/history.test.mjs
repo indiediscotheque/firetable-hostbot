@@ -731,6 +731,9 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.ok(u["discover/lib/genres"]["nu-disco"].songs >= 2, "every track in its genres");
     assert.deepEqual(u["discover/lib/genres"]["indie-dance"].next, ["nu-disco"], "next door: genres that share songs");
     assert.equal(u["discover/lib/genres"]["nu-disco"].x, 0.64, "the sound map position from genre-axis.csv");
+    assert.match(u["discover/lib/genres"]["nu-disco"].about, /^Disco's grooves/, "one line about it, from genre-about.csv");
+    const dec = u["discover/lib/genres"]["nu-disco"].dec;
+    assert.ok(Object.keys(dec).length && Object.keys(dec).every((d) => /^\d{3}0$/.test(d)) && Object.values(dec).reduce((a, b) => a + b, 0) > 0, "plays by decade, for the sound map (" + JSON.stringify(dec) + ")");
     const fav = u["discover/lib/genre/nu-disco"].fav;
     assert.ok(fav.length && fav[0].cid && fav[0].a && typeof fav[0].plays === "number", "rows can be played: an upload, tags and plays");
     assert.ok(fav.every((r, i) => i === 0 || fav[i - 1].plays >= r.plays), "favorites: most played first");
