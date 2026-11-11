@@ -757,3 +757,138 @@ test("Discover's library: when a DJ usually plays", () => {
   assert.equal(library.usualTime(times), "Friday nights");
   assert.equal(library.usualTime(times.slice(0, 5)), null, "too few plays to say");
 });
+
+test("placeholder tags ('Unavailable', 'Advert;') aren't songs: each upload gets its real name from its other logs, or is left out", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const T = 1600000000000, MIN = 60000;
+    const U = { artist: "unavailable", title: "Unavailable", type: 1 };
+    const play = (cid, at, dj, a = "unavailable", t = "Unavailable") => ({ artist: a, title: t, type: 1, cid, when: at, dj });
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({
+      globalTracks: {
+        "1stay0000001": { ...U, first_play_date: T, first_play_dj: "eve" },   // a DJ's playlist still has its name
+        "1retag000002": { ...U },                                             // the tag before the retag (tagLog)
+        "1scrob000003": { ...U },                                             // two scrobbles sent as it played
+        "1promo000004": { artist: "Advert", title: "Advert;", type: 1 },      // only YouTube's title: left out
+        "1fixed000005": { ...U },                                             // answered by hand
+        "1onesc000006": { ...U }                                              // one scrobble: only a suggestion
+      },
+      songHistory: {
+        h1: play("stay0000001", T, "eve"), h2: play("stay0000001", T + 60 * MIN, "eve"),
+        h3: play("retag000002", T + 120 * MIN, "chris"),
+        h4: play("scrob000003", T + 180 * MIN, "eve"), h5: play("scrob000003", T + 300 * MIN, "eve"),
+        h6: play("promo000004", T + 400 * MIN, "chris", "Advert", "Advert;"),
+        h7: play("fixed000005", T + 500 * MIN, "eve"),
+        h8: play("onesc000006", T + 600 * MIN, "eve")
+      },
+      playlists: { eve: { p: { name: "x", list: { a: { name: "MNDR - Stay", type: 1, cid: "stay0000001" } } } } },
+      tagLog: { l1: { k: "1retag000002", a: "unavailable", t: "Unavailable", fa: "Popular Computer", ft: "Lointain (Robotaki Remix)", by: "chris", at: T } }
+    }));
+    writeFileSync(join(dir, "scrobbles.csv"), "artist,track,uts\n" +
+      ["Max Essa,M.O.D.F.D.M.V.," + (T + 180 * MIN + 30000) / 1000, "Max Essa,M.O.D.F.D.M.V.," + (T + 300 * MIN - 20000) / 1000,
+        "Someone,Next Song," + (T + 600 * MIN + 40000) / 1000].join("\n"));
+    writeFileSync(join(dir, "placeholder-fixes.csv"), "upload,artist,title\nhttps://youtu.be/fixed000005,Satin Jackets,You Make Me Feel Good\n");
+    run("import-firebase", join(dir, "fb.json"));
+    run("import-lastfm", join(dir, "scrobbles.csv"), "--user", "room");
+    // YouTube's answer for the promo reel: a title, not a song the room logged
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(join(dir, "history.db"));
+    db.prepare("INSERT INTO obs (source, ref, artist, title, type, cid, role, weight) VALUES ('yt', 'promo000004', ?, NULL, 1, 'promo000004', 'tag', 0.3)").run("New Collaboration Album 'Far Far Away' Previews");
+    db.close();
+    run("reconcile");
+    run("report");
+
+    const tracks = readFileSync(join(dir, "tracks.csv"), "utf8");
+    assert.doesNotMatch(tracks, /,Unavailable,|,Advert;,/i, "no placeholder song");
+    assert.match(run("lookup", "MNDR - Stay"), /2 plays/, "named from a DJ's playlist, both plays");
+    assert.match(run("lookup", "Popular Computer - Lointain (Robotaki Remix)"), /1 plays/, "named from the tag before the retag");
+    assert.match(run("lookup", "Max Essa - M.O.D.F.D.M.V."), /2 plays/, "named from two scrobbles sent as it played");
+    assert.match(run("lookup", "Satin Jackets - You Make Me Feel Good"), /1 plays/, "answered in placeholder-fixes.csv");
+
+    const audit = readFileSync(join(dir, "placeholder_uploads.csv"), "utf8").trim().split("\n");
+    const row = (cid) => audit.find((l) => l.includes(cid)) || "";
+    assert.equal(audit.length, 7, "every placeholder upload is listed");
+    assert.match(row("stay0000001"), /renamed,MNDR - Stay,DJs' playlists/);
+    assert.match(row("retag000002"), /renamed,Popular Computer - Lointain \(Robotaki Remix\),the name before the retag/);
+    assert.match(row("scrob000003"), /renamed,Max Essa - M\.O\.D\.F\.D\.M\.V\.,Last\.fm at play time ×2/);
+    assert.match(row("promo000004"), /removed,,only YouTube's title/);
+    assert.match(row("fixed000005"), /renamed,Satin Jackets - You Make Me Feel Good,placeholder-fixes\.csv/);
+    assert.match(row("onesc000006"), /removed,,only Last\.fm at play time \(not enough to go on\),Someone - Next Song/);
+    assert.match(readFileSync(join(dir, "summary.md"), "utf8"), /6 uploads: 4 named from their other logs, 2 left out/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("placeholders: tags match whatever the case and punctuation; uploads are read from ids and links", () => {
+  const ph = require("../tools/history/placeholders.js");
+  const p = ph.load();
+  assert.ok(p.is("Unavailable", "Unavailable") && p.is("unavailable", "UNAVAILABLE") && p.is("Advert", "Advert;") && p.is("ADVERT", "advert"));
+  assert.ok(!p.is("Unavailable", "Song") && !p.is("Foals", "My Number") && !p.is("", ""));
+  assert.equal(ph.uploadOf("https://youtu.be/7aNium-m3l0"), "17aNium-m3l0");
+  assert.equal(ph.uploadOf("https://www.youtube.com/watch?v=7aNium-m3l0&t=3"), "17aNium-m3l0");
+  assert.equal(ph.uploadOf("https://api.soundcloud.com/tracks/303999483"), "2303999483");
+  assert.equal(ph.uploadOf("2303999483"), "2303999483");
+});
+
+test("placeholders, published: named uploads get their real tags, the rest leave the room's tags with the fake songs, and undo-tags puts them back", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  const fb = require("../tools/history/firebase.js");
+  const realClient = fb.client;
+  try {
+    const T = 1600000000000;
+    const fakeKey = tags.hash(tags.keysOf(tags.parse("unavailable", "Unavailable")).track);
+    const fakeWork = tags.hash(tags.keysOf(tags.parse("unavailable", "Unavailable")).song);
+    const room = {
+      globalTracks: {
+        "1stay0000001": { artist: "unavailable", title: "Unavailable", type: 1, song: "tFAKE", first_play_date: T, first_play_dj: "eve" },
+        "1gone0000002": { artist: "unavailable", title: "Unavailable", type: 1, song: "tFAKE", first_play_date: T + 1000, first_play_dj: "eve" }
+      },
+      songHistory: { h1: { artist: "unavailable", title: "Unavailable", type: 1, cid: "stay0000001", when: T, dj: "eve" },
+        h2: { artist: "unavailable", title: "Unavailable", type: 1, cid: "gone0000002", when: T + 1000, dj: "eve" } },
+      playlists: { eve: { p: { name: "x", list: { a: { name: "MNDR - Stay", type: 1, cid: "stay0000001" } } } } }
+    };
+    writeFileSync(join(dir, "fb.json"), JSON.stringify(room));
+    run("import-firebase", join(dir, "fb.json"));
+    run("reconcile");
+    const root = { globalTracks: JSON.parse(JSON.stringify(room.globalTracks)),
+      globalSongs: { tFAKE: { artist: "unavailable", title: "Unavailable", plays: 205, work: "sFAKE" } }, globalWorks: { sFAKE: { plays: 205 } },
+      globalSongKeys: { [fakeKey]: "tFAKE" }, globalWorkKeys: { [fakeWork]: "sFAKE" } };
+    const at = (p) => p.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), root);
+    const put = (p, v) => {
+      const ks = p.split("/").filter(Boolean);
+      let o = root;
+      ks.slice(0, -1).forEach((k) => { o = o[k] = o[k] && typeof o[k] === "object" ? o[k] : {}; });
+      if (v === null) delete o[ks[ks.length - 1]];
+      else o[ks[ks.length - 1]] = JSON.parse(JSON.stringify(v, (k, x) => (x && x[".sv"] ? Date.now() : x)));
+    };
+    fb.client = () => ({
+      get: async (p) => JSON.parse(JSON.stringify(at(p) ?? null)),
+      getPaged: async (p, size, onPage) => onPage(JSON.parse(JSON.stringify(at(p) || {}))),
+      update: async (u) => { Object.entries(u).forEach(([p, v]) => put(p, v)); },
+      uid: async () => "bot"
+    });
+    const store = require("../tools/history/store.js");
+    const { publish, undoTags } = require("../tools/history/publish.js");
+    const db = store.open(dir);
+    const counts = await publish(db, {}, { dir, write: true }, () => {});
+    db.close();
+    assert.equal(root.globalTracks["1stay0000001"].artist, "MNDR", "named: its real tags, without --retag");
+    assert.equal(root.globalTracks["1stay0000001"].title, "Stay");
+    assert.notEqual(root.globalTracks["1stay0000001"].song, "tFAKE");
+    assert.equal(root.globalTracks["1gone0000002"], undefined, "no name anywhere: out of the room's tags");
+    assert.equal(root.globalSongs.tFAKE, undefined, "the fake song goes");
+    assert.equal(root.globalWorks.sFAKE, undefined);
+    assert.equal(root.globalSongKeys[fakeKey], undefined);
+    assert.equal(counts.placeholdersNamed, 1);
+    assert.equal(counts.placeholdersRemoved, 1);
+    await undoTags({}, { write: true }, () => {});
+    assert.equal(root.globalTracks["1stay0000001"].artist, "unavailable", "undo puts the old tags back...");
+    assert.equal(root.globalTracks["1gone0000002"].first_play_dj, "eve", "...and a removed upload back whole");
+  } finally {
+    fb.client = realClient;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

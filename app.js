@@ -21,6 +21,7 @@ var http = require('./lib/http').http;
 var artworkColors = require('./lib/colors').artworkColors;
 var text = require('./lib/text');
 var tags = require('./lib/tags');
+var placeholderTags = require('./tools/history/placeholders').load(); // tags that aren't songs
 var splitTags = text.splitTags;
 var fitChat = text.fitChat;
 var checks = require('./lib/checks');
@@ -3274,15 +3275,18 @@ var gts = {
     }
     var p = tags.parse(artist, title);
     var keys = tags.keysOf(p);
-    // too vague to match ("Unknown - Intro"): this upload is its own track
-    var keyHash = p.weak ? null : tags.hash(keys.track);
-    var workHash = p.weak ? null : tags.hash(keys.song);
+    // too vague to match ("Unknown - Intro"), or a placeholder that isn't a
+    // song ("Unavailable - Unavailable", tools/history/placeholder-tags.csv):
+    // this upload is its own track, so they never pile up into one
+    var vague = p.weak || placeholderTags.is(artist, title);
+    var keyHash = vague ? null : tags.hash(keys.track);
+    var workHash = vague ? null : tags.hash(keys.song);
     var found = keyHash ? db.ref("globalSongKeys/" + keyHash).once("value").then(function(snap) { return snap.val(); }) : Promise.resolve(null);
     return found.then(function(id) {
       if (id) {
         return db.ref("globalSongs/" + id + "/work").once("value").then(function(w) { return { id: id, work: w.val(), known: true }; });
       }
-      id = "t" + tags.hash(p.weak ? "upload:" + upKey : keys.track);
+      id = "t" + tags.hash(vague ? "upload:" + upKey : keys.track);
       var work = workHash ? db.ref("globalWorkKeys/" + workHash).once("value").then(function(snap) { return snap.val() || "s" + workHash; }) : Promise.resolve("s" + tags.hash("track:" + id));
       return work.then(function(workId) {
         var updates = {};
@@ -3340,7 +3344,7 @@ var gts = {
     var updates = {};
     updates["globalSongs/" + trackId + "/artist"] = artist;
     updates["globalSongs/" + trackId + "/title"] = title;
-    if (!p.weak) updates["globalSongKeys/" + tags.hash(tags.keysOf(p).track)] = trackId;
+    if (!p.weak && !placeholderTags.is(artist, title)) updates["globalSongKeys/" + tags.hash(tags.keysOf(p).track)] = trackId;
     return firebase.database().ref().update(updates);
   },
   lastTrack: function(s) {

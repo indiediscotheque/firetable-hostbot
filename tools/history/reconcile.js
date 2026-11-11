@@ -163,6 +163,17 @@ function reconcile(db, opts) {
   });
   var ytmChecked = new Set(db.prepare("SELECT query FROM lookups WHERE kind = 'ytm'").all().map(function(r) { return r.query; }));
 
+  // uploads once tagged "Unavailable - Unavailable" or "Advert - Advert;":
+  // named from their other logs, or left out (placeholders.js)
+  var placeholders = require("./placeholders");
+  var ph = placeholders.load(opts.dir);
+  var phPlan = placeholders.plan(db, ph);
+  if (phPlan.size) {
+    var phNamed = 0;
+    phPlan.forEach(function(p) { if (p.action === "renamed") phNamed++; });
+    log("  " + phPlan.size + " uploads with placeholder tags: " + phNamed + " named, " + (phPlan.size - phNamed) + " left out");
+  }
+
   var rows = db.prepare("SELECT source, artist, title, type, cid, role, at, naive_tz, dj, weight, extra FROM obs ORDER BY id").iterate();
   var pendingAdamPlays = [];
   for (var row of rows) {
@@ -184,6 +195,17 @@ function reconcile(db, opts) {
     if (row.source === "fb:globalTracks" && row.role === "tag" && up) {
       uploadCurrent.set(up, { artist: row.artist || "", title: row.title || "" });
     }
+    var plan = up && phPlan.get(up);
+    if (plan) {
+      if (plan.action !== "renamed") continue; // left out: none of its logs count
+      if (ph.is(row.artist, row.title)) {
+        if (row.role === "tag") continue;
+        // a play logged under the placeholder is a play of the upload's real song
+        row = Object.assign({}, row, { artist: plan.artist, title: plan.title });
+      }
+    } else if (ph.is(row.artist, row.title)) {
+      continue; // a placeholder logged without an upload (a scrobble): nothing to go on
+    }
     if (extra && extra.isrc && up) {
       if (!isrcUploads.has(extra.isrc)) isrcUploads.set(extra.isrc, new Set());
       isrcUploads.get(extra.isrc).add(up);
@@ -196,7 +218,7 @@ function reconcile(db, opts) {
   }
   pendingAdamPlays.forEach(function(p) {
     var t = adamTags.get(String(JSON.parse(p[0].extra).adam));
-    if (!t) return;
+    if (!t || ph.is(t[0], t[1])) return;
     p[0].artist = t[0]; p[0].title = t[1];
     addObs(p[0], p[1]);
   });
@@ -963,7 +985,12 @@ function reconcile(db, opts) {
   });
 
   store.tx(db, function() {
-    ["variants", "tracks", "songs", "uploads", "plays", "djs", "merges", "review"].forEach(function(t) { db.exec("DELETE FROM " + t); });
+    ["variants", "tracks", "songs", "uploads", "plays", "djs", "merges", "review", "placeholders"].forEach(function(t) { db.exec("DELETE FROM " + t); });
+    var insPh = db.prepare("INSERT INTO placeholders (upload, tag, action, artist, title, evidence, suggestion, logs, plays, first_at, last_at, djs, track_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    phPlan.forEach(function(p, up) {
+      var t = uploadRoot.has(up) ? rootToTrack.get(uploadRoot.get(up)) : null;
+      insPh.run(up, p.tag, p.action, p.artist, p.title, p.evidence, p.suggestion, p.logs, p.plays, p.first, p.last, Array.from(p.djs).join(" | "), t ? t.id : null);
+    });
     var insV = db.prepare("INSERT INTO variants (artist, title, track_key, song_key, track_id, seen, plays, scrobbles, sources, weak, suspect) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
     spellings.forEach(function(sp, i) {
       insV.run(sp.artist, sp.title, sp.raw.track, sp.keys.song, spellingTrack[i], sp.seen, sp.plays, sp.scrobbles, Array.from(sp.sources).sort().join(","), sp.weak ? 1 : 0, sp.parsed.suspect);

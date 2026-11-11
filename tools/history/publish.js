@@ -149,6 +149,7 @@ async function publish(db, env, opts, log) {
 
   var preview = [];
   var tagBackup = {}; // upload -> its tags before and after, to undo with undo-tags
+  var ph = require("./placeholders").load(opts.dir);
   for (var u of db.prepare(`SELECT u.*, t.artist ta, t.title tt, t.confidence FROM uploads u JOIN tracks t ON t.id = u.track_id`).iterate()) {
     var tid = trackIdMap.get(u.track_id);
     if (!tid) continue;
@@ -162,16 +163,48 @@ async function publish(db, env, opts, log) {
     var wanted = sh.a + " - " + sh.t;
     if (current === wanted) continue;
     var accentOnly = tags.fold(current) === tags.fold(wanted) || skeletonOf(wanted) === tags.squash(current);
-    if (opts.retag || tidied || (opts.restoreAccents && accentOnly)) {
+    // an upload still tagged "Unavailable" or "Advert" gets its real name
+    var placeholder = ph.is(u.artist, u.title);
+    if (opts.retag || tidied || placeholder || (opts.restoreAccents && accentOnly)) {
       // the rules take an upload's artist and title as text of 500 characters
       // at most: a story pasted in as a title stays as it is
       if (!fits(sh.a) || !fits(sh.t)) { counts.tooLong = (counts.tooLong || 0) + 1; continue; }
       updates[up + "artist"] = sh.a;
       updates[up + "title"] = sh.t;
       tagBackup[u.type + "" + u.cid] = { a: u.artist, t: u.title || "", na: sh.a, nt: sh.t };
-      var kind = accentOnly ? "accents" : tidied && !opts.retag ? "tidiedUploads" : "retags";
+      var kind = placeholder ? "placeholdersNamed" : accentOnly ? "accents" : tidied && !opts.retag ? "tidiedUploads" : "retags";
       counts[kind] = (counts[kind] || 0) + 1;
-      preview.push({ upload: u.type + u.cid, from: current, to: wanted, why: accentOnly ? "accents" : tidied ? "tidy " + level : "best spelling" });
+      preview.push({ upload: u.type + u.cid, from: current, to: wanted, why: placeholder ? "placeholder, named from its logs" : accentOnly ? "accents" : tidied ? "tidy " + level : "best spelling" });
+    }
+  }
+
+  // uploads with a placeholder tag and no real name: out of the room's tags
+  // (backed up first, so undo-tags puts them back), and the placeholder
+  // "songs" they piled into go
+  var leftOut = db.prepare("SELECT upload, tag FROM placeholders WHERE action <> 'renamed'").all();
+  for (var lo of leftOut) {
+    var entry = opts.write ? await c.get("globalTracks/" + lo.upload) : null;
+    if (opts.write && !entry) continue; // gone already
+    updates["globalTracks/" + lo.upload] = null;
+    tagBackup[lo.upload] = { removed: true, entry: entry || null, a: entry ? entry.artist || "" : "", t: entry ? entry.title || "" : "", na: null, nt: null };
+    counts.placeholdersRemoved = (counts.placeholdersRemoved || 0) + 1;
+    preview.push({ upload: lo.upload, from: lo.tag, to: null, why: "placeholder, no real name found: removed" });
+  }
+  var usedSongs = new Set(trackIdMap.values());
+  var usedWorks = new Set(workIdMap.values());
+  for (var pt of ph.list) {
+    var pk = tags.keysOf(tags.parse(pt[0], pt[1]));
+    var songId = existingSongKeys[tags.hash(pk.track)];
+    if (songId && !usedSongs.has(songId)) {
+      updates["globalSongKeys/" + tags.hash(pk.track)] = null;
+      var old = opts.write ? (await c.get("globalSongs/" + songId)) || {} : {};
+      updates["globalSongs/" + songId] = null;
+      counts.placeholderSongs = (counts.placeholderSongs || 0) + 1;
+      var workId = old.work || existingWorkKeys[tags.hash(pk.song)];
+      if (workId && !usedWorks.has(workId)) {
+        updates["globalWorks/" + workId] = null;
+        if (existingWorkKeys[tags.hash(pk.song)] === workId) updates["globalWorkKeys/" + tags.hash(pk.song)] = null;
+      }
     }
   }
   // questions for the mods (!review in chat), most useful first; answered ones
@@ -275,6 +308,14 @@ async function undoTags(env, opts, log) {
     var kept = 0;
     Object.keys(backup).forEach(function(up) {
       var b = backup[up];
+      if (b.removed) {
+        // an upload a publish removed (a placeholder tag): back whole, unless it's back already
+        if (now[up]) { kept++; return; }
+        updates["globalTracks/" + up] = b.entry || { artist: b.a, title: b.t };
+        now[up] = b.entry || { artist: b.a, title: b.t };
+        restored++;
+        return;
+      }
       var cur = now[up] || {};
       if ((cur.artist || "") !== (b.na || "") || (cur.title || "") !== (b.nt || "")) { kept++; return; }
       updates["globalTracks/" + up + "/artist"] = b.a;
