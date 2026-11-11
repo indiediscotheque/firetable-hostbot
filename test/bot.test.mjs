@@ -733,6 +733,28 @@ const scenarios = {
     await healthy(again);
     return again;
   },
+  async discover() {
+    // the song on the decks when the bot starts has ended: its play is logged
+    await put("/", base({ queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") } },
+      users: Object.assign(base({}).users, { quiet: { username: "quiet", status: true, publicName: false } }) }));
+    const p = startBot("discover", { YTMUSIC_SOURCES: "2026=PLfakeyear2001" });
+    check(await waitFor(p, "Listening now."), "bot says Listening now.");
+    await say("dj1", "this one is great");
+    await say("quiet", "hello from someone private");
+    await say("dj1", "!plays");
+    await sleep(12000);
+    const st = await get("/");
+    const week = Object.values((st.discover && st.discover.charts && st.discover.charts.week) || {}).find((c) => !c.final) || {};
+    check((week.rows || []).some((r) => r.cid === "old" && r.plays === 1 && r.dj === "dj2"), "the week's chart counts the play that just ended");
+    check(st.discover && st.discover.chartIds && st.discover.chartIds.week && Object.keys(st.discover.chartIds.week).length >= 2, "last week's chart is finished off too");
+    const msgs = (st.discover && st.discover.chat && st.discover.chat.msgs) || [];
+    check(msgs.some((m) => m.txt === "this one is great" && m.n === "dj1"), "the chat peek shows messages with names");
+    check(msgs.some((m) => m.txt === "hello from someone private" && !m.n && !m.uid), "someone who turned off their public name shows as nobody");
+    check(!msgs.some((m) => /^!/.test(m.txt)), "bot commands stay out of the chat peek");
+    check(st.discover && st.discover.new && Array.isArray(st.discover.new.tracks || []), "new releases are published");
+    await healthy(p);
+    return p;
+  },
   async wrong_password() {
     await put("/", base({}));
     const p = startBot("login", { FIRETABLE_PASS: "wrong" });

@@ -260,6 +260,7 @@
     "globalTracks": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".indexOn": ["song"],
       "$trackid":{
         "artist":{
           ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/mod').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true",
@@ -277,7 +278,8 @@
     },
     "globalSongs": {
       ".read": true,
-      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".indexOn": ["plays"]
     },
     "globalWorks": {
       ".read": true,
@@ -293,6 +295,14 @@
     },
     "globalSongsMeta": {
       ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
+    "discover": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
+    "discoverCache": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
     "playLog": {
@@ -540,6 +550,14 @@
         "selectedList": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
           ".validate": "(newData.isString() && newData.val().length <= 40) || newData.val() == 0"
+        },
+        "publicName": {
+          ".write": "auth.uid == $uid",
+          ".validate": "newData.isBoolean()"
+        },
+        "foundVia": {
+          ".write": "auth.uid == $uid && !data.exists()",
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 200"
         },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
