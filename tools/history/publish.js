@@ -343,4 +343,4 @@ function checks(counts, previous, db) {
 function set(updates, p, v) { updates[p] = v == null || v === "" ? null : v; }
 function skeletonOf(s) { return tags.squash(String(s).replace(/[^\x00-\x7F]|\?/g, "")); }
 
-module.exports = { publish: publish, undoTags: undoTags };
+module.exports = { publish: publish, undoTags: undoTags, writeAll: writeAll };

@@ -162,7 +162,7 @@ test("the weekly chart: this week, last week finished first, with movement", asy
   const add = (s, w, x) => { playLog["p" + String(n++).padStart(3, "0")] = play(s, w, x); };
   add("A", W44); add("B", W44); add("B", W44 + 1);
   add("A", W45); add("A", W45 + 1); add("C", W45 + 2, { djid: "u3", dj: "quiet" });
-  const { db, d } = setup({ playLog }, { now: () => local(2026, 11, 5) });
+  const { db, d } = setup({ playLog, globalSongs: { A: { genres: ["Nu-Disco", "Disco"] } } }, { now: () => local(2026, 11, 5) });
   await d.refreshPeriod("week");
   const last = db.get("discover/charts/week/2026-W44");
   assert.equal(last.final, true);
@@ -171,6 +171,7 @@ test("the weekly chart: this week, last week finished first, with movement", asy
   assert.equal(now.final, false);
   assert.deepEqual(now.rows.map((r) => [r.key, r.plays, r.mv, r.wks]), [["A", 2, 1, 2], ["C", 1, "new", 1]]);
   assert.equal(now.rows[1].dj, null); // opted out
+  assert.deepEqual(now.rows.map((r) => r.g || null), ["Nu-Disco", null], "each song's main genre, when the history knows it");
   assert.equal(db.get("discover/chartIds/week/2026-W45"), true);
   assert.ok(db.get("discoverCache/seen/2026-W45").B, "songs ever on the chart are kept for re-entries");
   assert.equal(JSON.stringify(now).includes("seen"), false, "visitors don't download that list");
@@ -178,13 +179,14 @@ test("the weekly chart: this week, last week finished first, with movement", asy
 
 test("the all-time chart: the history's counts, each with a playable upload", async () => {
   const { db, d } = setup({
-    globalSongs: { s1: { artist: "A", title: "One", plays: 50, first_play_dj: "dj1", first_play_date: 5 }, s2: { artist: "B", title: "Two", plays: 80 }, s3: { artist: "C", title: "Three", plays: 9 } },
+    globalSongs: { s1: { artist: "A", title: "One", plays: 50, first_play_dj: "dj1", first_play_date: 5 }, s2: { artist: "B", title: "Two", plays: 80, genres: ["House"] }, s3: { artist: "C", title: "Three", plays: 9 } },
     globalTracks: { "1aaa": { song: "s1" }, "1bbb": { song: "s2" } }
   });
   await d.refreshAllTime();
   const all = db.get("discover/charts/all/all");
   assert.deepEqual(all.rows.map((r) => r.key + ":" + r.cid + ":" + r.plays), ["s2:bbb:80", "s1:aaa:50"]);
   assert.equal(all.rows[1].djid, "u1");
+  assert.equal(all.rows[0].g, "House");
 });
 
 test("new releases: release dates looked up once, room plays and colours added", async () => {

@@ -154,3 +154,13 @@ To run it every Monday at 4:10 on the server (`crontab -e`):
 | `rsn_suggestions.csv` | RSN versions, by RSN's strictest reading (drops notes like "Radio Edit"); for a look only |
 
 `history-data/` is ignored by git; back up `history.db` if you've saved review answers in it.
+
+## Discover's library
+Each publish (and every Monday run, preview or not) also writes the pages for the site's Discover side under `discover/lib/` (`tools/history/library.js`; `npm run history -- library --write` on its own):
+- **genres**: each of the room's genres with its songs, plays, usual tempo (from the bot's tempo lookups), first year, DJs, sound map position and the genres next door (those sharing the most songs), and per genre its room favorites, newest here, deep cuts (played once or twice), plays by year and who plays it most. `genre-axis.csv` places each genre across the sound map (0 band-made, 1 machine-made); a copy in `history-data/` wins.
+- **DJs** with 25 or more plays: their taste (plays by genre), most played, songs they brought here first, the DJs with the most similar plays, when they usually play (in `TZ`; set the repository variable `TZ` to the bot's), their recent sets and cards.
+- **artists**: the 5,000 most played, with their songs here, first play and who plays them most.
+- **years**: each year playlist (read from YouTube Music, no quota) with the room's most played from it and finds not played here yet.
+- **Rising** (most up in plays, the last 4 weeks against the 4 before) and **On this day** (songs first played here on this date in earlier years).
+
+People who turned off "Show my name on public pages" on the site (`users/<uid>/publicName = false`) have no DJ page and show as nobody on every song. The library never changes the bot's counts or any tags. Repository variable `HISTORY_LIBRARY` = `false` stops the Monday runs from publishing it.

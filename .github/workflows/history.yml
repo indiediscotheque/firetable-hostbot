@@ -75,6 +75,9 @@ jobs:
       YOUTUBE_KEY: ${{ secrets.YOUTUBE_KEY }}
       SOUNDCLOUD_KEY: ${{ secrets.SOUNDCLOUD_KEY }}
       DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}
+      # the room's time zone, for "usually plays Friday nights" on DJ pages
+      # (repository variable TZ, e.g. America/Chicago; the same as the bot's .env)
+      TZ: ${{ vars.TZ || 'UTC' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -131,6 +134,7 @@ jobs:
           RETAG: ${{ inputs.retag }}
           FORCE: ${{ inputs.force }}
           TIDY: ${{ inputs.tidy || vars.HISTORY_TIDY || 'rsn' }}
+          LIBRARY: ${{ vars.HISTORY_LIBRARY }}
         run: |
           args=()
           [ "$TIDY" = "junk" ] || [ "$TIDY" = "rsn" ] && args+=(--tidy "$TIDY")
@@ -141,7 +145,14 @@ jobs:
             npm run history -- publish --write "${args[@]}"
           else
             npm run history -- publish "${args[@]}"
-            echo "Preview only: nothing was sent to the room." >> "$GITHUB_STEP_SUMMARY"
+            echo "Preview only: the history wasn't sent to the room." >> "$GITHUB_STEP_SUMMARY"
+            # Discover's library pages only show the history; they never change
+            # the bot's counts, so they're published on every run (repository
+            # variable HISTORY_LIBRARY = false turns that off)
+            if [ "$LIBRARY" != "false" ]; then
+              npm run history -- library --write
+              echo "Discover's library pages were published." >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
       - name: Keep this run's data for the next one

@@ -703,3 +703,57 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Discover's library: genres, DJs, artists, years, Rising and On this day, and names hidden on request", () => {
+  const dir = mkdtempSync(join(tmpdir(), "library-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    run("import-adam", FIX + "adam-trax.csv");
+    run("import-lastfm", FIX + "lastfm.csv", "--user", "room");
+    run("import-firebase", FIX + "firebase.json");
+    run("reconcile");
+    const store = require("../tools/history/store.js");
+    const library = require("../tools/history/library.js");
+    const db = store.open(dir);
+    // genres as the genres step would leave them
+    db.exec("CREATE TABLE IF NOT EXISTS track_genres (track_id TEXT PRIMARY KEY, genres TEXT, why TEXT)");
+    const ids = db.prepare("SELECT id, artist FROM tracks WHERE plays > 0 ORDER BY plays DESC").all();
+    ids.forEach((t, i) => db.prepare("INSERT OR REPLACE INTO track_genres VALUES (?, ?, '')").run(t.id, JSON.stringify(i % 2 ? ["Nu-Disco", "Disco"] : ["Indie Dance", "Nu-Disco"])));
+    const djs = db.prepare("SELECT name FROM djs ORDER BY plays DESC").all().map((d) => d.name);
+    const upload = db.prepare("SELECT cid FROM uploads WHERE type = 1 AND cid IS NOT NULL LIMIT 1").get();
+    const users = { u1: { username: djs[0] }, u2: { username: djs[1], publicName: false } };
+    const built = library.buildLibrary(db, {
+      users, bpm: {}, cards: { c1: { owner: "u1" } },
+      years: { 2017: [{ cid: upload.cid, artist: "A", title: "B" }, { cid: "notplayed01", artist: "New", title: "Find" }] },
+      now: Date.UTC(2026, 10, 11)
+    });
+    const u = built.updates;
+    assert.ok(u["discover/lib/genres"]["nu-disco"].songs >= 2, "every track in its genres");
+    assert.deepEqual(u["discover/lib/genres"]["indie-dance"].next, ["nu-disco"], "next door: genres that share songs");
+    assert.equal(u["discover/lib/genres"]["nu-disco"].x, 0.64, "the sound map position from genre-axis.csv");
+    const fav = u["discover/lib/genre/nu-disco"].fav;
+    assert.ok(fav.length && fav[0].cid && fav[0].a && typeof fav[0].plays === "number", "rows can be played: an upload, tags and plays");
+    assert.ok(fav.every((r, i) => i === 0 || fav[i - 1].plays >= r.plays), "favorites: most played first");
+    assert.ok(Object.values(u).every((v) => !JSON.stringify(v).includes('"' + djs[1] + '"')), "a DJ who hid their name shows nowhere");
+    assert.ok(!Object.keys(u["discover/lib/djs"]).some((k) => u["discover/lib/djs"][k].name === djs[1]), "and has no DJ page");
+    const year = u["discover/lib/year/2017"];
+    assert.equal(year.more[0].cid, "notplayed01", "a year's songs not played here yet are its finds");
+    assert.equal(u["discover/lib/years"][2017].songs, 2);
+    assert.ok(Object.keys(u).some((k) => /^discover\/lib\/onThisDay\/\d\d-\d\d$/.test(k)), "On this day, by date");
+    assert.ok(Object.keys(u["discover/lib/artistIndex"]).length > 0, "artist pages");
+    assert.equal(library.slugOf("Röyksopp & Robyn"), "royksopp-and-robyn");
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Discover's library: when a DJ usually plays", () => {
+  const library = require("../tools/history/library.js");
+  const fri = (h, w) => new Date(2026, 9, 2 + 7 * w, h).getTime(); // Fridays
+  const times = [];
+  for (let w = 0; w < 6; w++) [21, 22, 23].forEach((h) => times.push(fri(h, w)));
+  for (let w = 0; w < 6; w++) times.push(new Date(2026, 9, 3 + 7 * w, 1).getTime()); // 1am Saturday: still Friday night
+  assert.equal(library.usualTime(times), "Friday nights");
+  assert.equal(library.usualTime(times.slice(0, 5)), null, "too few plays to say");
+});

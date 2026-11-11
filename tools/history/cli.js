@@ -13,6 +13,7 @@ var publish = require("./publish");
 var verify = require("./verify");
 var genres = require("./genres");
 var archive = require("./archive");
+var library = require("./library");
 var tags = require("../../lib/tags");
 
 var ROOT = path.join(__dirname, "..", "..");
@@ -60,6 +61,8 @@ using it
         refuses when the history got worse (fewer tracks or plays than last time, mass retags,
         tracks joining many artists); --force sends it anyway
   publish --off                       switch the bot back to the old counts
+  library [--write] [--no-years]      Discover's library pages (genres, DJs, artists, years, Rising, On this
+        day); publish --write does this too. Reads the year playlists from YouTube Music (no quota)
   refresh [--publish]                 fetch-firebase + fetch-lastfm + verify-uploads + reconcile + report (+ publish --write)
 
 options
@@ -182,6 +185,11 @@ async function main() {
         dir: dir, write: !!args.write, off: !!args.off, retag: !!args.retag, restoreAccents: !!args.restoreAccents,
         minConfidence: args.minConfidence, existing: args.existing, reviewLimit: args.reviewLimit, force: !!args.force, tidy: args.tidy
       }, log);
+      // Discover's library pages go with every publish
+      if (args.write && !args.off) await library.publishLibrary(db, env, { dir: dir, write: true }, log);
+      break;
+    case "library":
+      await library.publishLibrary(db, env, { dir: dir, write: !!args.write, fetchYears: !args.noYears }, log);
       break;
     case "refresh": {
       log("== room database");
@@ -207,6 +215,8 @@ async function main() {
       if (args.publish) {
         log("== publish");
         await publish.publish(db, env, { dir: dir, write: true, restoreAccents: !!args.restoreAccents, retag: !!args.retag, minConfidence: args.minConfidence, reviewLimit: args.reviewLimit, force: !!args.force, tidy: args.tidy }, log);
+        log("== Discover's library");
+        await library.publishLibrary(db, env, { dir: dir, write: true }, log);
       }
       break;
     }
