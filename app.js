@@ -2147,8 +2147,11 @@ var discoverer = function() {
   return discoverInstance;
 };
 var discoverDo = function(label, fn) {
-  if (!discoverOn || !started) return;
-  fn(discoverer()).catch(function(err) { console.log("discover: " + label + " error:", err && err.message); });
+  if (!discoverOn || !started) return Promise.resolve(false);
+  return fn(discoverer()).then(function() { return true; }, function(err) {
+    console.log("discover: " + label + " error:", err && err.message);
+    return false;
+  });
 };
 // the week's chart a minute after each play (several plays, one rebuild)
 var discoverWeekTimer = null;
@@ -2159,21 +2162,30 @@ var discoverPlayed = function() {
     discoverDo("weekly chart", function(d) { return d.refreshPeriod("week"); });
   }, 60 * 1000);
 };
-// the rest once a day (and a few minutes after a start)
-var discoverRanOn = null;
+// The rest once a day (and a few minutes after a start). A job only counts
+// as done for the day when it worked; one that failed (the database rules not
+// published yet, YouTube or the network down) is tried again within 30 minutes.
+var discoverDone = {};
+var discoverRunning = {};
+var discoverJob = function(name, fn) {
+  var day = new Date().toDateString();
+  if (discoverDone[name] === day || discoverRunning[name]) return;
+  discoverRunning[name] = true;
+  discoverDo(name, fn).then(function(ok) {
+    discoverRunning[name] = false;
+    if (ok) discoverDone[name] = day;
+  });
+};
 var discoverTick = function() {
   if (!discoverOn || !started) return;
-  var day = new Date().toDateString();
-  if (discoverRanOn === day) return;
-  discoverRanOn = day;
-  discoverDo("charts", function(d) {
+  discoverJob("charts", function(d) {
     return d.refreshPeriod("week")
       .then(function() { return d.refreshPeriod("month"); })
       .then(function() { return d.refreshPeriod("year"); })
       .then(function() { return d.refreshAllTime(); });
   });
-  discoverDo("new releases", function(d) { return d.refreshNew(); });
-  discoverDo("chat peek", function(d) { return d.refreshChat(); });
+  discoverJob("new releases", function(d) { return d.refreshNew(); });
+  discoverJob("chat peek", function(d) { return d.refreshChat(); });
 };
 setInterval(discoverTick, 30 * 60 * 1000);
 setTimeout(discoverTick, 2 * 60 * 1000);
