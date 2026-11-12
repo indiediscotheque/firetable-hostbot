@@ -155,6 +155,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!review`, `!same <n>`, `!different <n>` (mods): answer the play history's tag questions, a few at a time.
 - `!pushtest`: send a test push notification to your own devices (the site's Settings has a button for it).
 - `!swaps`: how the last swap search went (see [swap suggestions](#swap-suggestions)). `!swapscan` (mods) runs it now for people seen since their last scan; `!swapscan all` for everyone.
+- `!ytmtest Artist - Title` (mods): what YouTube Music answers the bot's server for that song (songs, artist videos, fan uploads, the best match), to tell a missing song from a catalog that isn't answering.
 - `!genrelists`: how the last update of the [genre playlists on YouTube Music](#genre-playlists-on-youtube-music) went. `!genrelists run` (mods) runs one now.
 - `!ytmusic`: how the last sync of the bot's YOUTUBE MUSIC playlist went, or what it's doing now (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)). `!ytsync` (mods) runs one now.
 
@@ -224,6 +225,9 @@ Every night at 4 a.m. (`SWAP_HOUR`, in `TZ`) the bot looks for a working copy of
 - **Which tracks:** flagged as gone, private, blocked, not embeddable, age restricted, broken or low audio quality (codes 1–9; not off-theme). YouTube and SoundCloud tracks alike.
 - **What counts as a match:** YouTube Music's audio tracks only (the labels' "Artist - Topic" uploads). Music videos, "Official Audio" uploads and fan uploads are never suggested. The title, the artists (featured artists may sit in either field) and the version must match: a remix never stands in for the original, live never for studio. A known length must be within 15%. Each match is checked with the same rules the bot uses before every song (`lib/checks.js`), so a swapped track plays.
 - **A track the bot flags while playing** is looked up straight away (one search).
+- **Playlist formats:** on the site each playlist can be set to YouTube Music, YouTube videos or SoundCloud (saved in `playlistPrefs/<uid>/format/<listID>`, `0` being the built-in list). Swaps are YouTube Music audio tracks, so playlists set to **YouTube videos** or **SoundCloud** are skipped: not read and not searched for. Playlists set to YouTube Music, or not set at all, get YouTube Music swaps.
+- **When the song catalog doesn't answer:** from some servers YouTube Music's Songs search says "No results" for everything. Until a search in a run has come back with songs, an answer without songs isn't trusted and nothing is saved for it. After three, the bot searches a song YouTube Music certainly has (`YTMUSIC_CANARY`, default "Daft Punk One More Time"). If that has no songs either, the run stops and says so; nothing is remembered as "no match", so those tracks are searched again next time. "No match" answers saved before this check existed (they carry no `v: 2`) are ignored and searched again.
+- **`!ytmtest Artist - Title`** (mods) shows what YouTube Music answers the bot's server for a song: the Songs search's results, the full search's songs, artist videos and fan uploads, and the best match.
 - **The owner** gets one private notice (toast, and a push when away) when new swaps are ready. "Not this one" on the site keeps that match from being suggested again for 90 days.
 
 **What it costs each night:**
@@ -235,7 +239,7 @@ Every night at 4 a.m. (`SWAP_HOUR`, in `TZ`) the bot looks for a working copy of
 
 The log and `!swaps` say what each run did, including the YouTube units it used.
 
-**Needs the latest `firebase-rules.json` published** (the `flagged/date` index, `swapCache`, `swapScans`). Until then the run stops before reading any playlist and the log says so. YouTube Music's search isn't a public API: if YouTube changes it, searches find nothing (the log says `YouTube Music returned nothing` or `isn't answering`), no suggestions are made and nothing else is affected. If the server's region gets no songs from YouTube Music, the same happens. `SWAP_SUGGESTIONS=false` turns it all off.
+**Needs the latest `firebase-rules.json` published** (the `flagged/date` index, `swapCache`, `swapScans`, and the bot reading `playlistPrefs/<uid>/format`; until that last one is published every playlist counts as YouTube Music). Until then the run stops before reading any playlist and the log says so. YouTube Music's search isn't a public API: if YouTube changes it, searches find nothing (the log says `YouTube Music returned nothing` or `isn't answering`), no suggestions are made and nothing else is affected. If the server's region gets no songs from YouTube Music, the same happens. `SWAP_SUGGESTIONS=false` turns it all off.
 
 ## the YOUTUBE MUSIC playlist
 The bot keeps its playlist called **YOUTUBE MUSIC** in step with the official Indie Discotheque year playlists on YouTube Music (2001 to 2026, about 27,000 tracks). Every day at 5 a.m. (`YTMUSIC_SYNC_HOUR`, in `TZ`), and a few minutes after a start when the last sync is more than a day old, it:

@@ -759,7 +759,8 @@ var flagAndRetry = function(listRef, key, track, code, message) {
     // the bot's YOUTUBE MUSIC playlist: put a YouTube Music copy in its place
     // now. Anyone else's list: look for one to suggest (one search, no quota)
     if (ytmOn && djid === botid && ytmSync().isList(listRef)) setTimeout(function() { ytmSync().track(listRef, newKey); }, 5000);
-    else if (swapsOn) setTimeout(function() { swapper().track(djid, listRef, newKey); }, 5000);
+    // (the list's id says whether it's kept to SoundCloud or videos: no swaps there)
+    else if (swapsOn) setTimeout(function() { swapper().track(djid, listRef, newKey, listRef.key === "list" && listRef.parent ? listRef.parent.key : "0"); }, 5000);
   }, function() {});
   if (theDJ.id !== botid && trackBrokenMessages) notify(theDJ.id, message, { kind: "track", name: theDJ.name });
   retrySameDJ(3000);
@@ -2905,6 +2906,29 @@ var handleChat = function(chatID, feedKey) {
                 console.log("flagplay error:", err);
               });
             }
+          }
+        } else if (command == "ytmtest") {
+          // !ytmtest Artist - Title (mods): what YouTube Music answers this
+          // server, to tell a missing song from a catalog that isn't answering
+          if (!senderIsMod) {
+            talk("Only mods can run !ytmtest, " + namebo + ".");
+          } else if (!(args || "").trim()) {
+            talk("Use !ytmtest Artist - Title");
+          } else {
+            var ytmName2 = String(args).trim().slice(0, 200);
+            var ytmQuery = swaps.queryFor(ytmName2) || ytmName2;
+            ytmusic.diagnose(ytmQuery).then(function(d) {
+              var best = swaps.rankMatches(ytmName2, d.songs)[0];
+              var k = d.kinds;
+              var line = ":mag: YouTube Music for \"" + ytmQuery + "\" from my server: Songs search " +
+                (d.catalog ? d.catalog + (d.catalog === 1 ? " result" : " results") + " (" + d.catalogSongs + " songs)" : "NO RESULTS (the song catalog isn't answering me)") +
+                "; full search " + k.songs + " songs, " + k.videos + " artist videos, " + k.uploads + " fan uploads" + (k.other ? ", " + k.other + " other" : "") +
+                ". " + (best ? "Best match: " + best.title + " · " + best.artist + (best.dur ? " (" + Math.floor(best.dur / 60) + ":" + String(best.dur % 60).padStart(2, "0") + ")" : "") + " youtu.be/" + best.cid
+                  : d.songs.length ? "None of the " + d.songs.length + " songs is the same recording." : "No songs to match.");
+              talk(fitChat(line));
+            }, function(err) {
+              talk("YouTube Music didn't answer: " + (err && err.message));
+            });
           }
         } else if (command == "swaps" || command == "swapscan") {
           if (!swapsOn) {
