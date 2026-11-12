@@ -1914,34 +1914,129 @@ var flagTrackForDJ = function(djid, cid, type, flag) {
 
 // ─── Swap suggestions for broken tracks (lib/swaps.js) ──────────────────────
 // Every night (SWAP_HOUR, 4 a.m. by default, in TZ) the bot looks through
-// everyone's playlists for flagged tracks, finds the same recording among
-// YouTube Music's audio tracks (no API quota) and saves it with the track as
-// a suggestion; the site shows a swap button. A track the bot flags while
-// playing is looked up straight away. SWAP_SUGGESTIONS=false turns it off.
+// everyone's playlists for flagged tracks, finds the same recording (a
+// YouTube Music audio track; a video for lists kept to videos) and saves it
+// with the track as a suggestion; the site shows a swap button. Free sources
+// first: other uploads the room has played, the year playlists, YouTube
+// Music's and YouTube's searches. Songs none of them has get the YouTube
+// Data API's search, within SWAP_API_UNITS a day (1,000 by default: 10
+// searches; 0 turns it off). A track the bot flags while playing is looked up
+// straight away (free sources only). SWAP_SUGGESTIONS=false turns it off.
 var swapsOn = process.env.SWAP_SUGGESTIONS !== "false";
 var SWAP_HOUR = parseInt(process.env.SWAP_HOUR, 10);
 if (!(SWAP_HOUR >= 0 && SWAP_HOUR <= 23)) SWAP_HOUR = 4;
-var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 300;
+var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 600;
+var SWAP_API_UNITS = parseInt(process.env.SWAP_API_UNITS, 10);
+if (!(SWAP_API_UNITS >= 0)) SWAP_API_UNITS = 1000;
 
-// Can these YouTube videos play here? One videos.list call (1 unit) for up
-// to 50. Resolves {id: flag code (0 = fine)}; ids YouTube doesn't know are
-// left out (gone). Rejects when YouTube can't answer (quota, key, network).
+// Can these YouTube videos play here, and are they YouTube Music audio
+// tracks? One videos.list call (1 unit) for up to 50. Resolves {id: {problem
+// (flag code, 0 = fine), audio, dur}}; ids YouTube doesn't know are left out
+// (gone). Rejects when YouTube can't answer (quota, key, network).
 var youtubeProblems = function(ids) {
   var url = new URL("https://www.googleapis.com/youtube/v3/videos");
   url.searchParams.set("part", "snippet,contentDetails,status");
   url.searchParams.set("id", ids.join(","));
   url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(liveBroadcastContent),contentDetails(regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
+  url.searchParams.set("fields", "items(id,snippet(channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
   url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-  return http(url).then(function(res) {
+  return http(url, { timeout: 30000 }).then(function(res) {
     if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
       var apiError = res.json && res.json.error;
       throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
     }
     var out = {};
-    res.json.items.forEach(function(item) { out[item.id] = checks.youtubeProblem(item); });
+    res.json.items.forEach(function(item) {
+      var sn = item.snippet || {};
+      out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
+        audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }) };
+    });
     return out;
   });
+};
+
+// The YouTube Data API's search (100 units): videos for a song (with their
+// channel and the start of their description), or playlists. Only for songs
+// whose free search didn't answer (lib/swaps.js keeps it within
+// SWAP_API_UNITS a day).
+var htmlText = function(s) {
+  return String(s || "").replace(/&(#\d+|#x[0-9a-f]+|amp|lt|gt|quot|apos);/gi, function(m, e) {
+    var named = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" }[e.toLowerCase()];
+    if (named) return named;
+    var n = e.charAt(1).toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+    return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+  });
+};
+var youtubeSearch = function(query, type) {
+  var url = new URL("https://www.googleapis.com/youtube/v3/search");
+  url.searchParams.set("part", "snippet");
+  url.searchParams.set("type", type || "video");
+  if (!type) url.searchParams.set("videoCategoryId", "10"); // Music
+  url.searchParams.set("maxResults", "25");
+  url.searchParams.set("q", query);
+  url.searchParams.set("fields", "items(id(videoId,playlistId),snippet(title,channelTitle,description))");
+  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
+  return http(url, { timeout: 30000 }).then(function(res) {
+    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
+      var apiError = res.json && res.json.error;
+      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
+    }
+    return res.json.items.map(function(it) {
+      var sn = it.snippet || {};
+      var id = it.id || {};
+      if (type === "playlist") return { id: id.playlistId, title: htmlText(sn.title) };
+      return { cid: id.videoId, title: htmlText(sn.title), channel: htmlText(sn.channelTitle), description: htmlText(sn.description) };
+    }).filter(function(v) { return v.cid || v.id; });
+  });
+};
+
+// Other uploads of the same song the room has played: globalTracks links
+// every upload to its song (once the play history is published), and has
+// each one's tags. Up to 25 a song, YouTube ones only.
+var songSiblings = function(uploads) {
+  var db = firebase.database();
+  var seen = {};
+  return Promise.all((uploads || []).map(function(u) {
+    return db.ref("globalTracks/" + u.type + u.cid + "/song").once("value").then(function(s) { return s.val(); }, function() { return null; });
+  })).then(function(songs) {
+    songs = songs.filter(function(id, i) { return id && songs.indexOf(id) === i; });
+    return Promise.all(songs.map(function(id) {
+      return db.ref("globalTracks").orderByChild("song").equalTo(id).limitToFirst(25).once("value").then(function(snap) {
+        var out = [];
+        snap.forEach(function(c) {
+          var v = c.val() || {};
+          if (c.key.charAt(0) !== "1" || seen[c.key]) return;
+          seen[c.key] = true;
+          out.push({ cid: c.key.slice(1), artist: String(v.artist || ""), title: String(v.title || "") });
+        });
+        return out;
+      }, function() { return []; });
+    }));
+  }).then(function(lists) { return [].concat.apply([], lists); });
+};
+
+// A YouTube Music playlist's tracks (no quota), remembered for 3 hours, so
+// the swap search, the YOUTUBE MUSIC sync and Discover read each year
+// playlist once a night instead of three times.
+var playlistMemo = {};
+var cachedPlaylist = function(id) {
+  var m = playlistMemo[id];
+  if (m && Date.now() - m.at < 3 * 60 * 60 * 1000) return m.p;
+  var p = ytmusic.playlistTracks(id);
+  playlistMemo[id] = { at: Date.now(), p: p };
+  p.catch(function() { if (playlistMemo[id] && playlistMemo[id].p === p) delete playlistMemo[id]; });
+  return p;
+};
+// Every track of the year playlists, for the swap search to look songs up in.
+var yearPlaylistTracks = function() {
+  var all = [];
+  return ytmsync.parseSources(process.env.YTMUSIC_SOURCES).reduce(function(p, src) {
+    return p.then(function() {
+      return cachedPlaylist(src.id).then(function(r) { all = all.concat(r.tracks); }, function(err) {
+        console.log("swaps: couldn't read the " + (src.year || "") + " playlist:", err && err.message);
+      });
+    });
+  }, Promise.resolve()).then(function() { return all; });
 };
 
 // The flagged tracks of one list, and nothing else: an indexed query on
@@ -1987,6 +2082,14 @@ var swapper = function() {
       shallowKeys: shallowKeys,
       flagged: flaggedTracks,
       search: ytmusic.searchSongs,
+      webSearch: ytmusic.webSearch,
+      playlistSearch: ytmusic.webPlaylists,
+      playlist: function(id) { return ytmusic.playlistTracks(id, { maxPages: 1 }); },
+      siblings: songSiblings,
+      library: yearPlaylistTracks,
+      apiSearch: function(q) { return youtubeSearch(q); },
+      apiPlaylistSearch: function(q) { return youtubeSearch(q, "playlist"); },
+      apiUnits: SWAP_API_UNITS,
       verify: youtubeProblems,
       notify: notify,
       users: function() { return users; },
@@ -2093,7 +2196,7 @@ var ytmSync = function() {
       botid: function() { return botid; },
       shallowKeys: shallowKeys,
       videos: youtubeVideos,
-      playlist: function(id) { return ytmusic.playlistTracks(id); },
+      playlist: cachedPlaylist,
       playlistItems: youtubePlaylistItems,
       search: ytmusic.searchSongs,
       log: console.log,
@@ -2143,7 +2246,7 @@ var discoverer = function() {
       hidden: function(uid) { return !!(uid && users[uid] && users[uid].publicName === false); },
       uidOf: uidLookup,
       nameOf: function(uid) { return (users[uid] && users[uid].username) || null; },
-      playlist: function(id) { return ytmusic.playlistTracks(id); },
+      playlist: cachedPlaylist,
       snippets: youtubeSnippets,
       colors: artworkColors,
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
@@ -2252,7 +2355,7 @@ var swapTick = function() {
   var today = d.toDateString();
   if (d.getHours() !== SWAP_HOUR || swapRanOn === today) return;
   swapRanOn = today;
-  swapper().run({ reason: "nightly" });
+  swapper().run({ reason: "nightly", paid: true });
 };
 setInterval(swapTick, 10 * 60 * 1000);
 
@@ -2917,14 +3020,18 @@ var handleChat = function(chatID, feedKey) {
           } else {
             var ytmName2 = String(args).trim().slice(0, 200);
             var ytmQuery = swaps.queryFor(ytmName2) || ytmName2;
+            var webAnswer = ytmusic.webSearch(ytmQuery).catch(function() { return null; });
             ytmusic.diagnose(ytmQuery).then(function(d) {
+              return webAnswer.then(function(w) { d.web = w; return d; });
+            }).then(function(d) {
               var best = swaps.rankMatches(ytmName2, d.songs)[0];
               var k = d.kinds;
               var line = ":mag: YouTube Music for \"" + ytmQuery + "\" from my server: Songs search " +
                 (d.catalog ? d.catalog + (d.catalog === 1 ? " result" : " results") + " (" + d.catalogSongs + " songs)" : "NO RESULTS (the song catalog isn't answering me)") +
                 "; full search " + k.songs + " songs, " + k.videos + " artist videos, " + k.uploads + " fan uploads" + (k.other ? ", " + k.other + " other" : "") +
                 ". " + (best ? "Best match: " + best.title + " · " + best.artist + (best.dur ? " (" + Math.floor(best.dur / 60) + ":" + String(best.dur % 60).padStart(2, "0") + ")" : "") + " youtu.be/" + best.cid
-                  : d.songs.length ? "None of the " + d.songs.length + " songs is the same recording." : "No songs to match.");
+                  : d.songs.length ? "None of the " + d.songs.length + " songs is the same recording." : "No songs to match.") +
+                " YouTube search: " + (d.web ? d.web.length + " videos, " + d.web.filter(swaps.isArtTrack).length + " audio tracks" : "no answer") + ".";
               talk(fitChat(line));
             }, function(err) {
               talk("YouTube Music didn't answer: " + (err && err.message));
@@ -2941,7 +3048,7 @@ var handleChat = function(chatID, feedKey) {
               talk("Already looking for swaps; !swaps says how it went once it's done.");
             } else {
               talk(":mag: Looking through " + (fullScan ? "everyone's" : "recently active people's") + " playlists for broken tracks with a YouTube Music copy. !swaps says how it went.");
-              swapper().run({ reason: "!swapscan", full: fullScan });
+              swapper().run({ reason: "!swapscan", full: fullScan, paid: true });
             }
           } else if (swapper().state.running) {
             talk("Looking for swaps right now (started " + Math.round((Date.now() - swapper().state.startedAt) / 60000) + " min ago).");
