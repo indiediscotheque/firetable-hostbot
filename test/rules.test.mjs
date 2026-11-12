@@ -299,6 +299,19 @@ await expect("DENIED", "change it later", eve.ref("users/eve/foundVia").set("cha
 await expect("DENIED", "set someone else's", eve.ref("users/bob/foundVia").set("x"));
 await expect("DENIED", "a foundVia of 200 KB", bob().ref("users/bob/foundVia").set(big));
 
+console.log("-- playlist formats");
+await expect("ALLOWED", "set a playlist to SoundCloud", eve.ref("playlistPrefs/eve/format/-Nabc123").set("sc"));
+await expect("ALLOWED", "set the built-in list to YouTube videos", eve.ref("playlistPrefs/eve/format/0").set("video"));
+await expect("ALLOWED", "set one to YouTube Music", eve.ref("playlistPrefs/eve/format/-Nabc124").set("ytm"));
+await expect("ALLOWED", "clear one", eve.ref("playlistPrefs/eve/format/-Nabc124").remove());
+await expect("DENIED", "a format that isn't one of the three", eve.ref("playlistPrefs/eve/format/-Nabc123").set("spotify"));
+await expect("DENIED", "a format of 200 KB", eve.ref("playlistPrefs/eve/format/-Nabc123").set(big));
+await expect("DENIED", "set someone else's", eve.ref("playlistPrefs/bob/format/0").set("sc"));
+await expect("ALLOWED", "the bot reads someone's formats", db("bot").ref("playlistPrefs/eve/format").once("value"));
+await expect("DENIED", "the bot reads the rest of their preferences", db("bot").ref("playlistPrefs/eve").once("value"));
+await expect("DENIED", "someone else reads them", bob().ref("playlistPrefs/eve/format").once("value"));
+await expect("ALLOWED", "you read your own", eve.ref("playlistPrefs/eve").once("value"));
+
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
 process.exit(failed ? 1 : 0);

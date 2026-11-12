@@ -351,3 +351,314 @@ test("swap runner: finds, checks and saves suggestions; skips dismissed; re-chec
   assert.equal(third.suggested, 0);
   assert.equal(notices.length, 2, "no notice when nothing is new");
 });
+
+// ─── Swaps: a catalog that doesn't answer, old "no match" answers, playlist formats ──
+const fakeDb = (data) => {
+  const at = (path) => path.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), data);
+  const setAt = (path, v) => {
+    const parts = path.split("/").filter(Boolean);
+    const last = parts.pop();
+    const parent = parts.reduce((o, k) => (o[k] = o[k] || {}), data);
+    if (v === null || v === undefined) delete parent[last]; else parent[last] = v;
+  };
+  const snap = (key, v) => ({ key, val: () => (v === undefined ? null : JSON.parse(JSON.stringify(v))),
+    forEach: (fn) => Object.keys(v || {}).forEach((k) => fn(snap(k, v[k]))) });
+  const ref = (path) => ({
+    child: (k) => ref(path + "/" + k),
+    once: async () => snap(path.split("/").pop(), at(path)),
+    set: async (v) => setAt(path, v),
+    update: async (v) => Object.keys(v).forEach((k) => setAt(path + "/" + k, v[k])),
+    orderByChild: () => ({ startAt: () => ({ once: async () => {
+      const v = at(path) || {};
+      const out = {};
+      Object.keys(v).forEach((k) => { if (v[k] && v[k].flagged) out[k] = v[k]; });
+      return snap(path, out);
+    } }) }),
+    transaction: async (fn) => {
+      if (fn(null) === undefined) return { committed: false };
+      const r = fn(at(path) === undefined ? null : JSON.parse(JSON.stringify(at(path))));
+      if (r === undefined) return { committed: false };
+      setAt(path, r);
+      return { committed: true };
+    }
+  });
+  return { db: { ref }, at };
+};
+const broken = (cid, name) => ({ type: 1, cid, name, flagged: { date: 1, code: 2 } });
+const songRow = { cid: "studio00001", title: "Karma Police", artists: ["Radiohead"], album: "OK Computer", dur: 262 };
+const realSearch = (rows) => {
+  // the shape lib/ytmusic.js searchSongs answers in, `catalog` included
+  const all = ytmusic.parseSearch(ytm.answer(rows));
+  return { songs: ytmusic.songsOnly(all), any: all.length || 3, catalog: rows.length };
+};
+
+test("swap runner: a song catalog that answers nothing isn't saved as 'no match', and YouTube Music searches stop", async () => {
+  const data = { queues: { u1: {
+    a: broken("dead0000001", "Radiohead - Karma Police"), b: broken("dead0000002", "Radiohead - Lucky"),
+    c: broken("dead0000003", "Radiohead - No Surprises"), d: broken("dead0000004", "Radiohead - Airbag"),
+    e: broken("dead0000005", "Radiohead - Let Down")
+  } } };
+  const { db } = fakeDb(data);
+  const searches = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    canary: "Daft Punk One More Time",
+    search: async (q) => { searches.push(q); return realSearch([]); }, // "No results" for everything, the canary too
+    verify: async () => ({}), notify: () => {}
+  });
+  const stats = await sw.run();
+  assert.equal(data.swapCache, undefined, "nothing remembered as 'no match'");
+  assert.match(stats.ytmOff, /catalog isn't answering/);
+  assert.equal(stats.stopped, "", "the other sources carry on");
+  assert.equal(searches.filter((q) => q === "Daft Punk One More Time").length, 1, "the canary is searched once");
+  assert.equal(searches.length, 4, "three searches, the canary, then YouTube Music isn't asked again");
+  assert.equal(data.swapScans, undefined, "nobody is marked as scanned: it all waits for the next run");
+  assert.match(swaps.summary(stats), /YouTube Music: YouTube Music's song catalog isn't answering/);
+});
+
+test("swap runner: once the catalog has answered, a search without songs is a real 'no match'", async () => {
+  const data = { queues: { u1: { a: broken("dead0000001", "Radiohead - Karma Police"), b: broken("dead0000002", "Obscure Act - Nowhere Song") } } };
+  const { db } = fakeDb(data);
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    search: async (q) => realSearch(/Karma/.test(q) ? [songRow] : []),
+    verify: async (ids) => Object.fromEntries(ids.map((i) => [i, 0])), notify: () => {}
+  });
+  const stats = await sw.run();
+  assert.equal(stats.stopped, "");
+  assert.equal(data.queues.u1.a.swap.cid, "studio00001");
+  const cached = Object.values(data.swapCache);
+  assert.equal(cached.length, 2, "both answers remembered, the empty one included");
+  assert.ok(cached.some((c) => c.picks.length === 0));
+  assert.ok(cached.every((c) => c.v === swaps.CACHE_VERSION), "saved with the version that trusts them");
+});
+
+test("swap cache: 'no match' answers saved before the catalog fix are searched again", () => {
+  const t = Date.now();
+  const day = 86400000;
+  assert.equal(swaps.usableCache({ date: t - day, picks: [] }, t), false, "old 'no match' (no version): search again");
+  assert.equal(swaps.usableCache({ date: t - day }, t), false);
+  assert.equal(swaps.usableCache({ date: t - day, picks: [{ cid: "x" }] }, t), true, "old matches still count");
+  assert.equal(swaps.usableCache({ date: t - day, picks: [], v: swaps.CACHE_VERSION }, t), true, "a 'no match' since the fix counts");
+  assert.equal(swaps.usableCache({ date: t - 31 * day, picks: [{ cid: "x" }] }, t), false, "older than 30 days: search again");
+  assert.equal(swaps.usableCache(null, t), false);
+});
+
+test("swap runner: playlists kept to SoundCloud aren't read; video playlists never get audio tracks", async () => {
+  const data = {
+    queues: { u1: { a: broken("dead0000001", "Radiohead - Karma Police") } },
+    playlists: { u1: {
+      scList: { name: "SC", list: { a: broken("dead0000002", "Radiohead - Lucky") } },
+      vidList: { name: "Videos", list: { a: broken("dead0000003", "Radiohead - Airbag") } },
+      ytmList: { name: "YTM", list: { a: broken("dead0000004", "Radiohead - Let Down") } },
+      plain: { name: "Unset", list: { a: broken("dead0000005", "Radiohead - No Surprises") } }
+    } },
+    playlistPrefs: { u1: { format: { 0: "sc", scList: "sc", vidList: "video", ytmList: "ytm", junk: "spotify" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const searches = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    search: async (q) => { searches.push(q); return realSearch([songRow]); },
+    verify: async (ids) => Object.fromEntries(ids.map((i) => [i, 0])), notify: () => {}
+  });
+  const stats = await sw.run();
+  assert.deepEqual(searches.sort(), ["Radiohead Let Down", "Radiohead No Surprises"], "YouTube Music's audio tracks only for YouTube Music and unset playlists");
+  assert.equal(stats.skippedLists, 2);
+  assert.equal(stats.lists, 3);
+  assert.equal(data.playlists.u1.vidList.list.a.swap, undefined, "no audio track for a video playlist");
+  assert.match(swaps.summary(stats), /2 SoundCloud playlists skipped/);
+
+  // a track flagged while playing from a SoundCloud playlist: no lookup at all
+  searches.length = 0;
+  const r = await sw.track("u1", db.ref("playlists/u1/scList/list"), "a", "scList");
+  assert.equal(r, null);
+  assert.equal(searches.length, 0);
+  await sw.track("u1", db.ref("playlists/u1/plain/list"), "a", "plain");
+  assert.equal(searches.length, 0, "already remembered, no new search");
+});
+
+test("playlist formats: unset or unknown counts as YouTube Music", () => {
+  assert.equal(swaps.formatOf({ a: "sc" }, "a"), "sc");
+  assert.equal(swaps.formatOf({ a: "video" }, "a"), "video");
+  assert.equal(swaps.formatOf({}, "a"), "ytm");
+  assert.equal(swaps.formatOf({ a: "spotify" }, "a"), "ytm");
+  assert.equal(swaps.formatOf(null, "0"), "ytm");
+  assert.equal(swaps.swapsFor("ytm"), true);
+  assert.equal(swaps.swapsFor("sc"), false);
+  assert.equal(swaps.swapsFor("video"), true, "video playlists get video swaps");
+  assert.equal(swaps.wantsAudio("ytm"), true);
+  assert.equal(swaps.wantsAudio("video"), false);
+});
+
+// ─── Swaps: free sources first, then the paid search ──────────────────────
+const vfy = (map) => async (ids) => Object.fromEntries(ids.filter((i) => map[i]).map((i) => [i, map[i]]));
+
+test("Art Tracks, videos as songs, the artist's own videos", () => {
+  assert.equal(swaps.isArtTrack({ channel: "Radiohead - Topic" }), true);
+  assert.equal(swaps.isArtTrack({ channel: "Radiohead", description: "Provided to YouTube by XL Recordings\n\nKarma Police · Radiohead" }), true, "merged into the artist's channel");
+  assert.equal(swaps.isArtTrack({ channel: "Radiohead", description: "Karma Police\n\nAuto-generated by YouTube." }), true);
+  assert.equal(swaps.isArtTrack({ channel: "Radiohead", description: "Official video. Directed by …" }), false);
+  assert.deepEqual(swaps.videoSong({ title: "Radiohead - Karma Police (Official Video)", channel: "x" }), { artist: "Radiohead", title: "Karma Police (Official Video)" });
+  assert.deepEqual(swaps.videoSong({ title: "Karma Police", channel: "RadioheadVEVO" }), { artist: "Radiohead", title: "Karma Police" });
+  assert.equal(swaps.officialFor("Radiohead - Karma Police", "Radiohead"), true);
+  assert.equal(swaps.officialFor("Radiohead - Karma Police", "RadioheadVEVO"), true);
+  assert.equal(swaps.officialFor("Radiohead - Karma Police", "Lyrics Daily"), false);
+});
+
+test("swap runner: the room's other uploads and the year playlists come before any search", async () => {
+  const data = { queues: { u1: {
+    a: broken("dead0000001", "Radiohead - Karma Police"),
+    b: broken("dead0000002", "Radiohead - Lucky"),
+    c: broken("dead0000003", "Radiohead - Airbag")
+  } } };
+  const { db } = fakeDb(data);
+  const searches = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    siblings: async (ups) => (ups[0].cid === "dead0000001" ? [{ cid: "dead0000001", artist: "Radiohead", title: "Karma Police" },
+      { cid: "roomvideo01", artist: "Radiohead", title: "Karma Police" }, { cid: "roomaudio01", artist: "Radiohead", title: "Karma Police" }] : []),
+    library: async () => [{ cid: "libvideo001", artist: "Radiohead", title: "Lucky", kind: "MUSIC_VIDEO_TYPE_OMV" },
+      { cid: "libaudio001", artist: "Radiohead", title: "Lucky", album: "OK Computer", dur: 260, kind: "MUSIC_VIDEO_TYPE_ATV" }],
+    search: async (q) => { searches.push(q); return realSearch([]); },
+    webSearch: async (q) => { searches.push("web " + q); return []; },
+    verify: vfy({ roomvideo01: { problem: 0, audio: false }, roomaudio01: { problem: 0, audio: true, dur: 262 }, libaudio001: { problem: 0, audio: true } }),
+    notify: () => {}
+  });
+  const stats = await sw.run();
+  const q = data.queues.u1;
+  assert.equal(q.a.swap.cid, "roomaudio01", "the room's audio track, not its video");
+  assert.equal(q.a.swap.audio, undefined, "only what the rules allow is saved with the track");
+  assert.equal(q.b.swap.cid, "libaudio001", "the year playlists' audio track");
+  assert.equal(q.b.swap.album, "OK Computer");
+  assert.equal(q.c.swap, undefined);
+  assert.deepEqual(searches, ["Radiohead Airbag", "web Radiohead Airbag"], "only the song no free source had is searched for");
+  assert.equal(stats.from.room, 1);
+  assert.equal(stats.from.library, 1);
+  assert.match(swaps.summary(stats), /matches from 1 room history, 1 year playlists/);
+});
+
+test("swap runner: YouTube search finds audio tracks for audio lists and the artist's videos for video lists", async () => {
+  const data = {
+    queues: { u1: { a: broken("dead0000001", "Radiohead - Karma Police") } },
+    playlists: { u1: { vids: { name: "Videos", list: { a: broken("dead0000002", "Radiohead - Karma Police") } } } },
+    playlistPrefs: { u1: { format: { vids: "video" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const web = [
+    { cid: "fanlyrics01", title: "Radiohead - Karma Police (Lyrics)", channel: "Lyrics Daily", dur: 262 },
+    { cid: "officialv01", title: "Radiohead - Karma Police (Official Video)", channel: "Radiohead", dur: 270 },
+    { cid: "arttrack001", title: "Karma Police", channel: "Radiohead", dur: 262, description: "Provided to YouTube by XL Recordings Karma Police · Radiohead" }
+  ];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    search: async () => realSearch([]),
+    webSearch: async () => web,
+    verify: vfy({ fanlyrics01: { problem: 0, audio: false }, officialv01: { problem: 0, audio: false, dur: 270 }, arttrack001: { problem: 0, audio: true, dur: 262 } }),
+    notify: () => {}
+  });
+  await sw.run();
+  assert.equal(data.queues.u1.a.swap.cid, "arttrack001", "an audio list gets the audio track");
+  assert.equal(data.playlists.u1.vids.list.a.swap.cid, "officialv01", "a video list gets the artist's video, never the audio track or a fan upload");
+  const ids = Object.keys(data.swapCache);
+  assert.equal(ids.length, 2, "audio and video answers are remembered apart");
+  assert.ok(ids.some((id) => id.startsWith("w")));
+});
+
+test("swap runner: people's playlists on YouTube hold the audio tracks YouTube's searches never list", async () => {
+  const data = { queues: { u1: { a: broken("dead0000001", "Poolside - Harvest Moon") } } };
+  const { db } = fakeDb(data);
+  const read = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    search: async () => realSearch([songRow]),
+    playlistSearch: async () => [{ id: "PLone" }, { id: "PLtwo" }, { id: "PLthree" }, { id: "PLfour" }],
+    playlist: async (id) => { read.push(id); return { tracks: id === "PLtwo" ? [
+      { cid: "omvvideo001", artist: "Poolside", title: "Harvest Moon", dur: 369, kind: "MUSIC_VIDEO_TYPE_OMV" },
+      { cid: "arttrack001", artist: "Poolside", title: "Harvest Moon", dur: 369, kind: "" }] : [] }; },
+    webSearch: async () => { throw new Error("not needed"); },
+    verify: vfy({ omvvideo001: { problem: 0, audio: false }, arttrack001: { problem: 0, audio: true, dur: 369 } }),
+    notify: () => {}
+  });
+  const stats = await sw.run();
+  assert.equal(data.queues.u1.a.swap.cid, "arttrack001", "the audio track, checked to be one");
+  assert.deepEqual(read, ["PLone", "PLtwo", "PLthree"], "the top three playlists' first pages");
+  assert.equal(stats.from.lists, 1);
+  assert.equal(stats.webSearched, 0, "found already: YouTube's video search isn't asked");
+});
+
+test("swap runner: the paid search stands in for a free search that doesn't answer, most-listed first, within the day's units", async () => {
+  const names = ["Radiohead - Airbag", "Radiohead - Let Down", "Radiohead - Lucky"];
+  const data = { queues: {
+    u1: { a: broken("dead0000001", names[0]), b: broken("dead0000002", names[1]), c: broken("dead0000003", names[2]) },
+    u2: { a: broken("dead0000004", names[1]) }
+  } };
+  const { db } = fakeDb(data);
+  const paid = [];
+  let t = Date.now();
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => ({ u1: { username: "u1" }, u2: { username: "u2" } }), botid: () => "bot", delayMs: 0, now: () => t,
+    search: async () => realSearch([songRow]), // the catalog answers, but has none of these
+    playlistSearch: async () => { throw new Error("HTTP 429"); }, // YouTube's free playlist search is down
+    playlist: async (id) => ({ tracks: id === "PLpaid" ? [{ cid: "paidaudio01", artist: "Radiohead", title: "Let Down", kind: "" }] : [] }),
+    apiSearch: async () => { throw new Error("audio lists don't get the video search"); },
+    apiPlaylistSearch: async (q) => { paid.push(q); return [{ id: "PLpaid" }]; },
+    apiUnits: 100,
+    verify: vfy({ paidaudio01: { problem: 0, audio: true } }),
+    notify: () => {}
+  });
+  const unpaid = await sw.run({ quiet: true });
+  assert.equal(paid.length, 0, "no paid search unless the run allows it");
+  assert.equal(unpaid.apiUnits, 0);
+  assert.match(unpaid.listsOff, /isn't answering/);
+  const stats = await sw.run({ full: true, paid: true });
+  assert.deepEqual(paid, ["Radiohead Let Down"], "one search (100 units): the song in the most lists first");
+  assert.equal(stats.apiUnits, 100);
+  assert.equal(stats.apiWaiting, 2, "the rest wait for tomorrow's units");
+  assert.equal(data.queues.u1.b.swap.cid, "paidaudio01");
+  assert.equal(data.queues.u2.a.swap.cid, "paidaudio01");
+  assert.match(swaps.summary(stats), /YouTube API units \(100 on search\)/);
+  const again = await sw.run({ full: true, paid: true });
+  assert.equal(paid.length, 1, "today's units are spent");
+  assert.equal(again.apiWaiting, 2);
+  t += 86400000;
+  await sw.run({ full: true, paid: true });
+  assert.equal(paid.length, 2, "a new day, the next song");
+  t += 86400000;
+  await sw.run({ full: true, paid: true });
+  t += 86400000;
+  const done = await sw.run({ full: true, paid: true });
+  assert.equal(paid.length, 3, "a song the paid search missed isn't paid for again for 30 days");
+  assert.equal(done.apiSearched, 0);
+});
+
+test("swap runner: no paid search for a song whose free search answered (it would find the same)", async () => {
+  const data = { queues: { u1: { a: broken("dead0000001", "Radiohead - Airbag") } } };
+  const { db } = fakeDb(data);
+  const paid = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    search: async () => realSearch([songRow]),
+    playlistSearch: async () => [{ id: "PLnothing" }],
+    playlist: async () => ({ tracks: [] }),
+    apiPlaylistSearch: async (q) => { paid.push(q); return []; },
+    apiUnits: 1000, verify: vfy({}), notify: () => {}
+  });
+  const stats = await sw.run({ paid: true });
+  assert.equal(paid.length, 0);
+  assert.equal(stats.apiUnits, 0);
+  assert.ok(Object.values(data.swapCache)[0].free, "remembered as answered by a free search");
+});
+
+test("YouTube search answers: videos with their channel, length and description", () => {
+  const answer = { contents: { twoColumnSearchResultsRenderer: { primaryContents: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: [
+    { videoRenderer: { videoId: "abcdefghij1", title: { runs: [{ text: "Radiohead - Karma Police" }] }, ownerText: { runs: [{ text: "Radiohead - Topic" }] },
+      lengthText: { simpleText: "4:22" }, detailedMetadataSnippets: [{ snippetText: { runs: [{ text: "Provided to YouTube by XL" }] } }] } },
+    { videoRenderer: { videoId: "abcdefghij1", title: { runs: [{ text: "again" }] } } },
+    { videoRenderer: { videoId: "bad" } },
+    { shelfRenderer: {} }
+  ] } }] } } } } };
+  const got = ytmusic.parseWebSearch(answer);
+  assert.deepEqual(got, [{ cid: "abcdefghij1", title: "Radiohead - Karma Police", channel: "Radiohead - Topic", dur: 262, description: "Provided to YouTube by XL" }]);
+  assert.equal(swaps.isArtTrack(got[0]), true);
+});

@@ -146,6 +146,12 @@
     "playlistPrefs": {
       "$uid": {
         ".read": "auth.uid == $uid",
+        "format": {
+          ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+          "$list": {
+            ".validate": "$list.matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.isString() && newData.val().matches(/^(ytm|video|sc)$/)"
+          }
+        },
         ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
         "defaultList": {
           ".validate": "newData.isString() && newData.val().length <= 40"
