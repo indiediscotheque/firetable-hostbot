@@ -279,6 +279,7 @@ function setup(extra = {}) {
     now: () => T0,
     delayMs: 0,
     random: extra.random,
+    ownLists: extra.ownLists,
     log: () => {}
   });
   const tracks = () => db.get("playlists/" + BOT + "/ytm1/list") || {};
@@ -733,4 +734,20 @@ test("lookup: the Song / Video toggle, artist pages, and Apple's album pointing 
   assert.equal(r.stats.from.twin, 2);
   assert.equal(r.stats.from.album, 2);
   assert.match(swaps.summary(r.stats), /Song \/ Video toggle/);
+});
+
+test("each sync first fixes the bot's other playlists (not its own list), and says so", async () => {
+  const asked = [];
+  const { sync } = setup({ ownLists: async (o) => { asked.push(o); return { lists: 2, checked: 40, accepted: 3, nowBroken: 1, flagged: 4, offFormat: 0, waiting: 2 }; } });
+  const s = await sync.run({ reason: "!ytsync" });
+  assert.deepEqual(asked, [{ skip: ["ytm1"], reason: "!ytsync" }]);
+  assert.equal(s.own.accepted, 3);
+  assert.match(ytmsync.summary(s), /the bot's other playlists: 2 lists, 40 tracks checked, 3 swaps put in, 1 newly broken, 1 with no swap yet, 2 waiting on searches/);
+  assert.match(ytmsync.brief(s), /other lists: 3 swaps put in, 1 newly broken/);
+  assert.ok(s.waiting >= 2, "what waits there gets a catch-up sync too");
+
+  // it failing doesn't stop the sync
+  const broken = setup({ ownLists: async () => { throw new Error("nope"); } });
+  const s2 = await broken.sync.run({ reason: "test" });
+  assert.ok(!s2.failed && !s2.own);
 });

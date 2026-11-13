@@ -2171,7 +2171,9 @@ var swapper = function() {
 // (YTMUSIC_SYNC_HOUR, 5 a.m. by default, in TZ): broken tracks and YouTube
 // videos are replaced with their YouTube Music audio track, new songs added,
 // duplicates removed, and the list shuffled. Also right after a start when the last sync is over a day
-// old, and on !ytsync. YTMUSIC_SYNC=false turns it off.
+// old, and on !ytsync. Each sync first goes through the bot's other playlists
+// and its queue (swapper.ownLists): every track checked, each list kept to its
+// format, every swap found put in. YTMUSIC_SYNC=false turns it off.
 var ytmOn = process.env.YTMUSIC_SYNC !== "false";
 var YTM_HOUR = parseInt(process.env.YTMUSIC_SYNC_HOUR, 10);
 if (!(YTM_HOUR >= 0 && YTM_HOUR <= 23)) YTM_HOUR = 5;
@@ -2265,6 +2267,12 @@ var ytmSync = function() {
       search: ytmusic.searchSongs,
       // every source the swap suggestions use (YouTube Music audio tracks only)
       lookup: function(items, o) { return swapper().lookup(items, o); },
+      // the bot's other playlists and queue: checked, kept to their format,
+      // their swaps put in (YTMUSIC_OWN_LISTS=false or SWAP_SUGGESTIONS=false: off).
+      // Catch-up syncs skip re-checking every track (the API units)
+      ownLists: swapsOn && process.env.YTMUSIC_OWN_LISTS !== "false" ? function(o) {
+        return swapper().ownLists({ skip: o.skip, reason: o.reason, check: o.reason !== "catch-up" });
+      } : null,
       log: console.log,
       listName: process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC",
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
@@ -3156,7 +3164,7 @@ var handleChat = function(chatID, feedKey) {
             talk("Syncing " + ytmName + " right now: " + (ytmSync().state.step || "starting") + " (started " +
               Math.round((Date.now() - ytmSync().state.startedAt) / 60000) + " min ago).");
           } else if (command == "ytsync" && senderIsMod) {
-            talk(":arrows_counterclockwise: Syncing my " + ytmName + " playlist with the Indie Discotheque year playlists. !ytmusic says how it went.");
+            talk(":arrows_counterclockwise: Checking my playlists and putting their swaps in, then syncing " + ytmName + " with the Indie Discotheque year playlists. !ytmusic says how it went.");
             ytmRun({ reason: "!ytsync" });
           } else if (command == "ytsync") {
             talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");

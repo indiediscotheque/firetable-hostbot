@@ -896,3 +896,67 @@ test("swap runner: what's over the search limits gets a catch-up pass the same d
   assert.equal(await sw.online("u2"), true, "a second arrival shares the pass already planned");
   assert.equal(timers.length, 1);
 });
+
+test("swap runner: the bot's own lists are checked, kept to their format and their swaps put in (YOUTUBE MUSIC sync)", async () => {
+  const yt = (cid, name) => ({ type: 1, cid, name });
+  const data = {
+    queues: { bot: {
+      ok: yt("nsstudio001", "Radiohead - No Surprises"), // plays, an audio track
+      gone: Object.assign(yt("gonetrack01", "Radiohead - Karma Police"), { tags: "rock" }), // gone since it was added: not flagged yet
+      video: yt("kpvideo0001", "Radiohead - Karma Police"), // a music video in a list with no format (YouTube Music)
+      back: Object.assign(yt("nsstudio001", "Radiohead - No Surprises"), { flagged: { date: 1, code: 2 } }), // a check's flag; plays again
+      theme: Object.assign(yt("gonetrack02", "Radiohead - Karma Police"), { flagged: { date: 1, code: 10 } }) // someone's call
+    } },
+    playlists: { bot: {
+      ytm: { name: "YOUTUBE MUSIC", list: { v: yt("kpvideo0001", "Radiohead - Karma Police") } }, // the sync's own list
+      vids: { name: "Videos", list: { a: yt("studio00001", "Radiohead - Karma Police") } }
+    }, u1: { p: { name: "Mine", list: { v: Object.assign(broken("gonetrack01", "Radiohead - Karma Police")) } } } },
+    playlistPrefs: { bot: { format: { vids: "video" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" }, bot: { username: "bot" } }), botid: () => "bot",
+    delayMs: 0, twinDelayMs: 0,
+    search: async () => realSearch([songRow]),
+    counterpart: async (cid) => (cid === "studio00001" ? { cid: "kpvideo0001", artist: "Radiohead", title: "Karma Police", dur: 270, kind: "MUSIC_VIDEO_TYPE_OMV" } : null),
+    verify: vfy({
+      kpvideo0001: { problem: 0, audio: false, dur: 270, channel: "RadioheadVEVO", title: "Radiohead - Karma Police (Official Music Video)" },
+      studio00001: { problem: 0, audio: true, dur: 262, channel: "Radiohead - Topic", title: "Karma Police" },
+      nsstudio001: { problem: 0, audio: true, dur: 229, channel: "Radiohead - Topic", title: "No Surprises" }
+    }),
+    notify: () => { throw new Error("the bot isn't told about its own swaps"); }
+  });
+  const stats = await sw.ownLists({ skip: ["ytm"] });
+  const q = data.queues.bot;
+  assert.deepEqual([q.gone.cid, q.gone.type, q.gone.tags, q.gone.flagged, q.gone.swap], ["studio00001", 1, "rock", undefined, undefined],
+    "a track that stopped playing is flagged, then swapped in place, tags kept");
+  assert.deepEqual(q.gone.swappedFrom.cid, "gonetrack01", "where it came from is kept for Undo");
+  assert.equal(q.gone.url, "https://www.youtube.com/watch?v=studio00001");
+  assert.equal(q.video.cid, "studio00001", "a music video in an unset (YouTube Music) list gets its audio track");
+  assert.equal(q.back.flagged, undefined, "a check's flag on a track that plays again is cleared");
+  assert.equal(q.back.cid, "nsstudio001");
+  assert.deepEqual(q.theme.flagged, { date: 1, code: 10 }, "someone's own flag stays");
+  assert.equal(q.theme.cid, "gonetrack02");
+  assert.equal(q.ok.swap, undefined);
+  assert.equal(data.playlists.bot.ytm.list.v.cid, "kpvideo0001", "the YOUTUBE MUSIC list is left to the sync");
+  assert.equal(data.playlists.bot.vids.list.a.cid, "kpvideo0001", "a list kept to videos gets the official video");
+  assert.equal(data.playlists.u1.p.list.v.cid, "gonetrack01", "nobody else's lists are touched");
+  assert.equal(stats.accepted, 3);
+  assert.equal(stats.nowBroken, 1);
+  assert.equal(stats.playAgain, 1);
+  assert.match(swaps.ownSummary(stats), /3 swaps put in, 1 newly broken, 1 play again/);
+  assert.equal(sw.state.running, false, "runs alongside a nightly run");
+});
+
+test("swap runner: the nightly run looks through the bot's lists first", async () => {
+  const order = [];
+  const data = { queues: { u1: { a: broken("dead0000001", "Radiohead - Airbag") }, bot: { a: broken("dead0000002", "Radiohead - Lucky") } } };
+  const { db } = fakeDb(data);
+  const sw = swaps.createSwapper({
+    db: { ref: (p) => { if (/^queues\//.test(p)) order.push(p); return db.ref(p); } },
+    shallowKeys: async () => [], users: () => ({ u1: { username: "u1", status: true }, bot: { username: "bot" } }), botid: () => "bot", delayMs: 0,
+    search: async () => realSearch([songRow]), verify: vfy({}), notify: () => {}
+  });
+  await sw.run({ full: true, quiet: true });
+  assert.deepEqual(order.slice(0, 2), ["queues/bot", "queues/u1"]);
+});
