@@ -28,6 +28,7 @@ var checks = require('./lib/checks');
 var ytmusic = require('./lib/ytmusic');
 var swaps = require('./lib/swaps');
 var ytmsync = require('./lib/ytmsync');
+var apple = require('./lib/apple');
 var discover = require('./lib/discover');
 var ytplaylists = require('./lib/ytplaylists');
 
@@ -1926,6 +1927,9 @@ var swapsOn = process.env.SWAP_SUGGESTIONS !== "false";
 var SWAP_HOUR = parseInt(process.env.SWAP_HOUR, 10);
 if (!(SWAP_HOUR >= 0 && SWAP_HOUR <= 23)) SWAP_HOUR = 4;
 var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 600;
+// songs a run looks up on artist and album pages and in Apple's catalog
+// (each a few requests, so capped apart)
+var SWAP_MAX_DEEP = parseInt(process.env.SWAP_MAX_DEEP, 10) || 300;
 var SWAP_API_UNITS = parseInt(process.env.SWAP_API_UNITS, 10);
 if (!(SWAP_API_UNITS >= 0)) SWAP_API_UNITS = 1000;
 
@@ -2085,6 +2089,12 @@ var swapper = function() {
       webSearch: ytmusic.webSearch,
       playlistSearch: ytmusic.webPlaylists,
       playlist: function(id) { return ytmusic.playlistTracks(id, { maxPages: 1 }); },
+      counterpart: ytmusic.counterpart,
+      artists: ytmusic.searchArtists,
+      artistPage: ytmusic.artistPage,
+      album: ytmusic.albumTracks,
+      apple: process.env.APPLE_LOOKUP === "false" ? null : apple.searchSongs,
+      maxDeep: SWAP_MAX_DEEP,
       siblings: songSiblings,
       library: yearPlaylistTracks,
       apiSearch: function(q) { return youtubeSearch(q); },
@@ -2206,6 +2216,7 @@ var ytmSync = function() {
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
       dupeSeconds: YTM_DUPE_SECONDS,
       maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 1000,
+      maxDeep: parseInt(process.env.YTMUSIC_MAX_DEEP, 10) || 500,
       delayMs: 2500
     });
   }
