@@ -716,7 +716,7 @@ const scenarios = {
     await say("dj1", "!ytsync");
     await sleep(1200);
     st = await get("/");
-    check(said(st).some((t) => /^YOUTUBE MUSIC \(synced daily at 5:00\): 7 tracks checked; 1 broken track replaced, 1 with no match yet/.test(t)), "!ytmusic says how the last sync went");
+    check(said(st).some((t) => /^YOUTUBE MUSIC \(daily at 5:00\): 1 broken track replaced, 1 still broken\b.*\b7 tracks\./.test(t) && t.length <= 240), "!ytmusic says how the last sync went, in one chat line");
     check(said(st).some((t) => /^Only mods can start a sync/.test(t)), "!ytsync is for mods");
     const syncs = () => (p.out.match(/youtube music: \d+ tracks checked[^\n]*/g) || []);
     await say("boss", "!ytsync");
