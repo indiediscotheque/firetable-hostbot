@@ -21,7 +21,7 @@ var tags = require("../../lib/tags");
 
 async function publish(db, env, opts, log) {
   var minConf = opts.minConfidence == null ? 0.9 : Number(opts.minConfidence);
-  var c = opts.write || opts.off ? fb.client(env) : null;
+  var c = opts.write || opts.off ? opts.client || fb.client(env) : null; // opts.client: a stand-in, for tests
 
   if (opts.off) {
     await c.update({ "globalSongsMeta/ready": false });
@@ -49,13 +49,37 @@ async function publish(db, env, opts, log) {
   var workKeysOf = new Map();
   db.prepare("SELECT id, keys FROM songs").all().forEach(function(s) { workKeysOf.set(s.id, JSON.parse(s.keys || "[]")); });
 
-  function stableId(keys, existing, fallback) {
-    var votes = new Map();
-    keys.forEach(function(k) { var id = existing[tags.hash(k)]; if (id) votes.set(id, (votes.get(id) || 0) + 1); });
-    var best = fallback;
-    var n = 0;
-    votes.forEach(function(v, id) { if (v > n) { n = v; best = id; } });
-    return best;
+  // Each track (or song) keeps the id the room has for its keys. One id goes
+  // to one track only: when a track is split ("Kites" and its remix, once one
+  // track), the part with most of the old id's keys, then the most uploads
+  // and plays, keeps it; the other gets an id of its own. Two tracks on one
+  // id would be one track in the room again.
+  function stableIds(items, existing) {
+    var claims = [];
+    items.forEach(function(it, i) {
+      var votes = new Map();
+      it.keys.forEach(function(k) { var id = existing[tags.hash(k)]; if (id) votes.set(id, (votes.get(id) || 0) + 1); });
+      votes.forEach(function(v, id) { claims.push({ i: i, id: id, v: v }); });
+    });
+    claims.sort(function(a, b) {
+      return b.v - a.v || (items[b.i].weight || 0) - (items[a.i].weight || 0) || (items[a.i].fallback < items[b.i].fallback ? -1 : 1) || (a.id < b.id ? -1 : 1);
+    });
+    var out = new Map();
+    var taken = new Set();
+    claims.forEach(function(c) {
+      if (out.has(items[c.i].fallback) || taken.has(c.id)) return;
+      out.set(items[c.i].fallback, c.id);
+      taken.add(c.id);
+    });
+    // a track with no id of its own left: its fresh one (never one already taken)
+    items.forEach(function(it) {
+      if (out.has(it.fallback)) return;
+      var id = it.fallback;
+      for (var n = 2; taken.has(id); n++) id = it.fallback + "-" + n;
+      out.set(it.fallback, id);
+      taken.add(id);
+    });
+    return out;
   }
 
   // genres (tools/history/genres.js), when they've been worked out
@@ -67,9 +91,12 @@ async function publish(db, env, opts, log) {
   var songGenres = new Map(); // song id -> Map(genre -> weight)
   var genreSlug = function(g) { return String(g).toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); };
 
-  db.prepare("SELECT id FROM songs").all().forEach(function(s) {
-    workIdMap.set(s.id, stableId(workKeysOf.get(s.id), existingWorkKeys, s.id));
-  });
+  workIdMap = stableIds(db.prepare("SELECT id, plays FROM songs").all().map(function(s) {
+    return { fallback: s.id, keys: workKeysOf.get(s.id) || [], weight: s.plays || 0 };
+  }), existingWorkKeys);
+  var publishedTrackIds = stableIds(db.prepare("SELECT id, keys, uploads, plays FROM tracks WHERE confidence >= ?").all(minConf > 0 ? minConf : 1e-9).map(function(t) {
+    return { fallback: t.id, keys: JSON.parse(t.keys || "[]"), weight: (t.uploads || 0) * 1e6 + (t.plays || 0) };
+  }), existingSongKeys);
 
   // --tidy junk|rsn: the tags each track is shown with (never for tags a
   // person chose, or ones in tag-exceptions.csv)
@@ -79,7 +106,7 @@ async function publish(db, env, opts, log) {
   for (var t of db.prepare("SELECT * FROM tracks WHERE confidence > 0").iterate()) {
     if (t.confidence < minConf) { counts.skippedUnsure++; continue; }
     var keys = JSON.parse(t.keys || "[]");
-    var id = stableId(keys, existingSongKeys, t.id);
+    var id = publishedTrackIds.get(t.id);
     trackIdMap.set(t.id, id);
     var work = workIdMap.get(t.song_id) || t.song_id;
     var show = { a: t.artist, t: t.title };
