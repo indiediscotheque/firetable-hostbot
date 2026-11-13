@@ -655,8 +655,13 @@ const scenarios = {
     check(k && k.flagged && k.swap && k.swap.cid === "kpstudio001" && k.swap.album === "OK Computer",
       "its swap is the audio track that can play (not the video, not the one that can't be embedded)");
     // a mod starts the nightly run by hand
+    // (its own summary: the flagged-track lookup above logged one already;
+    // searches share one pace with that lookup, 2.5 s apart)
+    const runsBefore = (p.out.match(/swaps: \d+ flagged tracks? in /g) || []).length;
     await say("boss", "!swapscan");
-    check(await waitFor(p, "swaps: "), "!swapscan runs the search");
+    let scanned = false;
+    for (let i = 0; i < 200 && !scanned; i++) { scanned = (p.out.match(/swaps: \d+ flagged tracks? in /g) || []).length > runsBefore; if (!scanned) await sleep(100); }
+    check(scanned, "!swapscan runs the search");
     await sleep(800);
     st = await get("/");
     const list = st.playlists.dj2.pl1.list;
@@ -668,7 +673,7 @@ const scenarios = {
     check(told.length === 1 && told[0].kind === "swap" && /working copy on YouTube Music/.test(told[0].txt), "the playlist's owner gets one notice");
     await say("dj1", "!swaps");
     await sleep(800);
-    check(said(await get("/")).some((t) => /^Swaps \(nightly at 4:00\): .*new swap/.test(t)), "!swaps says how the last run went");
+    check(said(await get("/")).some((t) => /^Swaps \(nightly at 4:00, \d+ searches today\): .*new swap/.test(t)), "!swaps says how the last run went (and the day's searches)");
     await healthy(p);
     return p;
   },
