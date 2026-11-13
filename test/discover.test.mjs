@@ -152,6 +152,20 @@ test("the all-time chart: the history's counts, each with a playable upload", as
   assert.equal(all.rows[0].g, "House");
 });
 
+test("the all-time chart plays an upload of the song's own version, never a remix filed under it", async () => {
+  const { db, d } = setup({
+    globalSongs: { s1: { artist: "Geographer", title: "Kites", plays: 351 } },
+    globalTracks: {
+      "1orig": { song: "s1", artist: "Geographer", title: "Kites (Original Mix)", last_play_date: 10 },
+      "1remix": { song: "s1", artist: "Geographer", title: "Kites (Limousines Remix)", last_play_date: 99 }
+    }
+  });
+  await d.refreshAllTime();
+  assert.deepEqual(db.get("discover/charts/all/all").rows.map((r) => r.cid + ":" + r.t), ["orig:Kites"]);
+  assert.equal(discover.pickUpload({ artist: "A", title: "B" }, { "1x": { title: "B (C Remix)", last_play_date: 5 } }), "1x", "only another version: still playable");
+  assert.equal(discover.pickUpload({ artist: "A", title: "B" }, { "1x": { last_play_date: 1 }, "1y": { title: "B", last_play_date: 2 } }), "1y", "the latest played");
+});
+
 test("new releases: release dates looked up once, room plays and colours added", async () => {
   let asked = [];
   const { db, d } = setup({

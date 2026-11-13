@@ -3600,7 +3600,9 @@ var gts = {
           thing.title = fixedtitle;
           return globalpeek.update({ artist: fixedartist, title: fixedtitle }).then(function() {
             gts.reportNp(s, listRef, thing, gts.lastTrack(s));
-            return gts.learnSpelling(thing.song || s.songId, fixedartist, fixedtitle);
+            return Promise.resolve(gts.learnSpelling(thing.song || s.songId, fixedartist, fixedtitle, upKey)).then(function(link) {
+              if (link && link.id) s.songId = link.id; // this play goes in the log under its own track
+            });
           });
         }
         var fresh = {
@@ -3614,7 +3616,7 @@ var gts = {
         };
         return globalpeek.update(fresh).then(function() {
           gts.reportNp(s, listRef, fresh, gts.lastTrack(s));
-          return gts.learnSpelling(s.songId, fixedartist, fixedtitle);
+          return gts.learnSpelling(s.songId, fixedartist, fixedtitle, upKey);
         });
       })
       .catch(function(err) {
@@ -3622,15 +3624,38 @@ var gts = {
       });
   },
   // A mod's fix is how the track is written from now on, and the fixed
-  // spelling finds this track next time it turns up on another upload.
-  learnSpelling: function(trackId, artist, title) {
+  // spelling finds this track next time it turns up on another upload. A fix
+  // that names another version ("Kites" -> "Kites (Limousines Remix)") says
+  // this upload was filed under the wrong track: it moves to that version's
+  // track, and the other uploads keep theirs.
+  learnSpelling: function(trackId, artist, title, upKey) {
     if (!songIndex.ready || !trackId) return;
+    var db = firebase.database();
     var p = tags.parse(artist, title);
-    var updates = {};
-    updates["globalSongs/" + trackId + "/artist"] = artist;
-    updates["globalSongs/" + trackId + "/title"] = title;
-    if (!p.weak && !placeholderTags.is(artist, title)) updates["globalSongKeys/" + tags.hash(tags.keysOf(p).track)] = trackId;
-    return firebase.database().ref().update(updates);
+    var rename = function() {
+      var updates = {};
+      updates["globalSongs/" + trackId + "/artist"] = artist;
+      updates["globalSongs/" + trackId + "/title"] = title;
+      if (!p.weak && !placeholderTags.is(artist, title)) updates["globalSongKeys/" + tags.hash(tags.keysOf(p).track)] = trackId;
+      return db.ref().update(updates);
+    };
+    if (!upKey || p.weak) return rename();
+    return db.ref("globalSongs/" + trackId).once("value").then(function(snap) {
+      var t = snap.val();
+      if (!t || tags.sameVersion(tags.keysOf(tags.parse(t.artist || "", t.title || "")).version, tags.keysOf(p).version)) return rename();
+      // the track is this upload alone: it was this version all along
+      return db.ref("globalTracks").orderByChild("song").equalTo(trackId).limitToFirst(2).once("value").then(function(ups) {
+        var others = 0;
+        ups.forEach(function(c) { if (c.key !== upKey) others++; });
+        if (!others) return rename();
+        return gts.linkTrack(upKey, null, artist, title).then(function(link) {
+          // a track new to the history is written the way the mod wrote it
+          return db.ref("globalSongs/" + link.id).transaction(function(cur) {
+            return cur || { artist: artist, title: title, work: link.work || null, plays: 0 };
+          }).then(function() { return link; });
+        });
+      });
+    }).catch(function(err) { console.log("learn spelling error:", err && err.message); });
   },
   lastTrack: function(s) {
     return s && s.track || null;

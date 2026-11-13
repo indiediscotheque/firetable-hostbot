@@ -344,6 +344,7 @@ const scenarios = {
       globalWorks: { s1: { artist: "Foals", title: "My Number", plays: 60, versions: 2, first_play_date: first } },
       globalSongKeys: { [key]: "t1" },
       globalWorkKeys: { [workKey]: "s1" },
+      globalTracks: { "1yt8": { artist: "Foals", title: "My Number", song: "t1", type: 1 } },
       tagReview: { q1: { n: 1, a: "Foals - My Number", b: "Foals - My Numbr", a_key: "foals|mynumber|", b_key: "foals|mynumbr|", why: "similar title" } }
     }));
     const p = startBot("history");
@@ -370,6 +371,16 @@ const scenarios = {
     const log = Object.values(st.tagLog || {});
     check(log.some((e) => e.k === "1yt9" && e.a === "Foals" && e.t === "My Number" && e.by === "boss" && e.ft === "My Number (Official Video)"), "!fixtags is logged with what it replaced");
     check(st.globalSongKeys[key] === "t1" && st.globalSongs.t1.title === "My Number", "the fixed spelling points at the same track");
+    // the upload is really the remix: it moves to the remix's track, and the
+    // original keeps its name and its other upload
+    await say("boss", "!fixtags Foals - My Number (Lemaitre Remix)");
+    await sleep(2500);
+    st = await get("/");
+    const remixId = st.globalTracks["1yt9"].song;
+    check(remixId && remixId !== "t1" && st.globalTracks["1yt8"].song === "t1", "a fix to another version moves the upload to that version's track");
+    check(st.globalSongs.t1.title === "My Number" && st.globalSongs[remixId] && st.globalSongs[remixId].title === "My Number (Lemaitre Remix)" && st.globalSongs[remixId].work === "s1",
+      "the original keeps its name; the remix is its own track of the same song");
+    check(st.globalSongKeys[tags.hash(tags.trackKey("Foals", "My Number (Lemaitre Remix)"))] === remixId, "the remix's spelling finds the remix next time");
     await healthy(p);
     return p;
   },
