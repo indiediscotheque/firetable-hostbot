@@ -673,7 +673,7 @@ const scenarios = {
     check(told.length === 1 && told[0].kind === "swap" && /working copy on YouTube Music/.test(told[0].txt), "the playlist's owner gets one notice");
     await say("dj1", "!swaps");
     await sleep(800);
-    check(said(await get("/")).some((t) => /^Swaps \(nightly at 4:00\): .*new swap/.test(t)), "!swaps says how the last run went");
+    check(said(await get("/")).some((t) => /^Swaps \(nightly at 4:00, \d+ searches today\): .*new swap/.test(t)), "!swaps says how the last run went (and the day's searches)");
     await healthy(p);
     return p;
   },
