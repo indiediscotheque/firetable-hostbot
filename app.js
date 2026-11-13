@@ -531,6 +531,7 @@ var talk = function(txt, card, opts) {
 // opts: card (a card id to show), ttl (seconds it stays worth seeing),
 // tag / topic (replace an earlier push of the same kind), name (fallback).
 var NOTICE_MAX = 300;
+var QUIET_NOTICES = { track: true, swap: true }; // playlist upkeep: no sound on the phone
 var notify = function(uid, txt, opts) {
   opts = opts || {};
   if (!uid || uid == botid) return Promise.resolve();
@@ -543,7 +544,8 @@ var notify = function(uid, txt, opts) {
   return ref.set(notice).then(function() {
     push.toUser(uid, {
       kind: "bot", id: ref.key, title: botName, body: push.text(txt), from: botName, fromId: botid,
-      time: Date.now(), tag: opts.tag || "bot-" + ref.key, url: opts.card ? "./#cards" : "./"
+      time: Date.now(), tag: opts.tag || "bot-" + ref.key, url: opts.card ? "./#cards" : "./",
+      silent: QUIET_NOTICES[notice.kind] === true
     }, { ttl: opts.ttl || 60 * 60, topic: opts.topic });
   }, function(err) {
     if (!/permission/i.test(err.code || err.message)) return console.log("couldn't send a notice:", err.message);
