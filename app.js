@@ -1935,14 +1935,14 @@ if (!(SWAP_API_UNITS >= 0)) SWAP_API_UNITS = 1000;
 
 // Can these YouTube videos play here, and are they YouTube Music audio
 // tracks? One videos.list call (1 unit) for up to 50. Resolves {id: {problem
-// (flag code, 0 = fine), audio, dur}}; ids YouTube doesn't know are left out
+// (flag code, 0 = fine), audio, dur, channel, title}}; ids YouTube doesn't know are left out
 // (gone). Rejects when YouTube can't answer (quota, key, network).
 var youtubeProblems = function(ids) {
   var url = new URL("https://www.googleapis.com/youtube/v3/videos");
   url.searchParams.set("part", "snippet,contentDetails,status");
   url.searchParams.set("id", ids.join(","));
   url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
+  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
   url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
   return http(url, { timeout: 30000 }).then(function(res) {
     if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
@@ -1953,7 +1953,8 @@ var youtubeProblems = function(ids) {
     res.json.items.forEach(function(item) {
       var sn = item.snippet || {};
       out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
-        audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }) };
+        audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }),
+        channel: String(sn.channelTitle || ""), title: String(sn.title || "") };
     });
     return out;
   });

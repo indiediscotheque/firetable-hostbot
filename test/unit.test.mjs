@@ -662,3 +662,55 @@ test("YouTube search answers: videos with their channel, length and description"
   assert.deepEqual(got, [{ cid: "abcdefghij1", title: "Radiohead - Karma Police", channel: "Radiohead - Topic", dur: 262, description: "Provided to YouTube by XL" }]);
   assert.equal(swaps.isArtTrack(got[0]), true);
 });
+
+test("videoRank: the artist's official music video first; lyric videos, 'Official Audio', fan uploads and audio tracks never", () => {
+  const name = "Radiohead - Karma Police";
+  assert.equal(swaps.videoRank(name, { channel: "RadioheadVEVO", title: "Radiohead - Karma Police (Official Music Video)" }), 3);
+  assert.equal(swaps.videoRank(name, { channel: "Radiohead", title: "Radiohead - Karma Police" }), 2);
+  assert.equal(swaps.videoRank(name, { channel: "Some Label", title: "Karma Police", official: true }), 2, "the video YouTube Music pairs with the song");
+  assert.equal(swaps.videoRank(name, { channel: "Radiohead", title: "Radiohead - Karma Police (Official Lyric Video)" }), 1);
+  assert.equal(swaps.videoRank(name, { channel: "Radiohead", title: "Karma Police (Official Audio)" }), 1);
+  assert.equal(swaps.videoRank(name, { channel: "Radiohead", title: "Karma Police (Visualizer)" }), 1);
+  assert.equal(swaps.videoRank(name, { channel: "Lyrics Daily", title: "Radiohead - Karma Police (Official Video)" }), 0, "a fan upload, whatever its title says");
+  assert.equal(swaps.videoRank(name, { channel: "Radiohead - Topic", title: "Karma Police" }), -1);
+});
+
+test("swap runner: video lists get the official music video first, through YouTube Music's toggle when searches miss it", async () => {
+  const data = {
+    playlists: { u1: {
+      vids: { name: "Videos", list: { a: broken("dead0000002", "Radiohead - Karma Police"), b: broken("dead0000003", "Phoenix - Lisztomania") } }
+    } },
+    playlistPrefs: { u1: { format: { vids: "video" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const web = (q) => (/Karma/.test(q) ? [
+    { cid: "kplyric0001", title: "Radiohead - Karma Police (Official Lyric Video)", channel: "Radiohead", dur: 262 },
+    { cid: "kpaudio0001", title: "Radiohead - Karma Police (Official Audio)", channel: "Radiohead", dur: 262 },
+    { cid: "kplive00001", title: "Radiohead - Karma Police", channel: "Radiohead", dur: 270 },
+    { cid: "kpvideo0001", title: "Radiohead - Karma Police (Official Music Video)", channel: "RadioheadVEVO", dur: 270 }
+  ] : [{ cid: "lcfan000001", title: "Phoenix - Lisztomania (Official Video)", channel: "Fan Uploads", dur: 245 }]);
+  const info = (channel, title, dur) => ({ problem: 0, audio: false, dur, channel, title });
+  const twins = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0, twinDelayMs: 0,
+    search: async () => realSearch([]),
+    webSearch: async (q) => web(q),
+    library: async () => [{ cid: "lcstudio001", artist: "Phoenix", title: "Lisztomania", dur: 241, kind: "MUSIC_VIDEO_TYPE_ATV" }],
+    counterpart: async (cid) => { twins.push(cid); return cid === "lcstudio001" ? { cid: "lcvideo0001", artist: "Phoenix", title: "Lisztomania", dur: 245, kind: "MUSIC_VIDEO_TYPE_OMV" } : null; },
+    verify: vfy({
+      kplyric0001: info("Radiohead", "Radiohead - Karma Police (Official Lyric Video)", 262),
+      kpaudio0001: info("Radiohead", "Radiohead - Karma Police (Official Audio)", 262),
+      kplive00001: info("Radiohead", "Radiohead - Karma Police", 270),
+      kpvideo0001: info("RadioheadVEVO", "Radiohead - Karma Police (Official Music Video)", 270),
+      lcfan000001: info("Fan Uploads", "Phoenix - Lisztomania (Official Video)", 245),
+      lcvideo0001: info("Phoenix", "Phoenix - Lisztomania (Official Video)", 245),
+      lcstudio001: { problem: 0, audio: true, dur: 241, channel: "Phoenix - Topic", title: "Lisztomania" }
+    }),
+    notify: () => {}
+  });
+  await sw.run();
+  const list = data.playlists.u1.vids.list;
+  assert.equal(list.a.swap.cid, "kpvideo0001", "the official music video, ahead of the lyric video, the 'Official Audio' and another upload");
+  assert.equal(list.b.swap.cid, "lcvideo0001", "the year playlists' audio track, toggled to its official video; never the fan upload");
+  assert.deepEqual(twins, ["lcstudio001"]);
+});
