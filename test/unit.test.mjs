@@ -465,9 +465,9 @@ test("swap runner: playlists kept to SoundCloud aren't read; video playlists nev
   const stats = await sw.run();
   assert.deepEqual(searches.sort(), ["Radiohead Let Down", "Radiohead No Surprises"], "YouTube Music's audio tracks only for YouTube Music and unset playlists");
   assert.equal(stats.skippedLists, 2);
-  assert.equal(stats.lists, 3);
+  assert.equal(stats.lists, 5, "SoundCloud playlists are read, only to clear old suggestions");
   assert.equal(data.playlists.u1.vidList.list.a.swap, undefined, "no audio track for a video playlist");
-  assert.match(swaps.summary(stats), /2 SoundCloud playlists skipped/);
+  assert.match(swaps.summary(stats), /2 SoundCloud playlists not searched for/);
 
   // a track flagged while playing from a SoundCloud playlist: no lookup at all
   searches.length = 0;
@@ -713,4 +713,44 @@ test("swap runner: video lists get the official music video first, through YouTu
   assert.equal(list.a.swap.cid, "kpvideo0001", "the official music video, ahead of the lyric video, the 'Official Audio' and another upload");
   assert.equal(list.b.swap.cid, "lcvideo0001", "the year playlists' audio track, toggled to its official video; never the fan upload");
   assert.deepEqual(twins, ["lcstudio001"]);
+});
+
+test("swap runner: suggestions that don't fit the playlist's format are cleared, and ones that fit are found", async () => {
+  const withSwap = (cid, name, swap) => Object.assign(broken(cid, name), { swap: Object.assign({ date: Date.now() }, swap) });
+  const data = {
+    queues: { u1: { a: withSwap("dead0000001", "Radiohead - Lucky", { cid: "studio00001", kind: "audio" }) } }, // the Default list kept to SoundCloud
+    playlists: { u1: {
+      vids: { name: "Videos", list: {
+        a: withSwap("dead0000002", "Radiohead - Karma Police", { cid: "studio00001", kind: "audio" }), // an audio track in a video list
+        b: withSwap("dead0000003", "Radiohead - Karma Police", { cid: "studio00001" }), // saved before kinds: YouTube says it's audio
+        c: withSwap("dead0000004", "Radiohead - Karma Police", { dismissed: "studio00001" }) // "not this one" stays
+      } },
+      ytm: { name: "YTM", list: {
+        a: withSwap("dead0000005", "Radiohead - Karma Police", { cid: "officialv01", kind: "video" }), // a video in a YouTube Music list
+        b: withSwap("dead0000006", "Radiohead - Karma Police", { cid: "studio00001" }) // saved before kinds, an audio track: kept, kind added
+      } }
+    } },
+    playlistPrefs: { u1: { format: { 0: "sc", vids: "video", ytm: "ytm" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
+    search: async () => realSearch([songRow]),
+    webSearch: async () => [{ cid: "officialv01", title: "Radiohead - Karma Police (Official Video)", channel: "Radiohead", dur: 270 }],
+    verify: vfy({
+      studio00001: { problem: 0, audio: true, dur: 262, channel: "Radiohead - Topic", title: "Karma Police" },
+      officialv01: { problem: 0, audio: false, dur: 270, channel: "Radiohead", title: "Radiohead - Karma Police (Official Video)" }
+    }),
+    notify: () => {}
+  });
+  const stats = await sw.run();
+  assert.equal(data.queues.u1.a.swap, undefined, "a SoundCloud list's suggestion is cleared");
+  const v = data.playlists.u1.vids.list, y = data.playlists.u1.ytm.list;
+  assert.deepEqual([v.a.swap.cid, v.a.swap.kind], ["officialv01", "video"], "the audio track gives way to the artist's video");
+  assert.equal(v.b.swap, undefined, "an old suggestion YouTube says is an audio track is cleared from a video list");
+  assert.equal(v.c.swap.dismissed, "studio00001");
+  assert.deepEqual([y.a.swap.cid, y.a.swap.kind], ["studio00001", "audio"], "the video gives way to the audio track");
+  assert.deepEqual([y.b.swap.cid, y.b.swap.kind], ["studio00001", "audio"], "an old one that fits stays, and now says what it is");
+  assert.ok(stats.cleared >= 2);
+  assert.match(swaps.summary(stats), /didn't fit the playlist's format cleared/);
 });

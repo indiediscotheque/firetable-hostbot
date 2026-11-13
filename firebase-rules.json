@@ -409,6 +409,7 @@
             "album": { ".validate": "newData.isString() && newData.val().length <= 500" },
             "dur": { ".validate": "newData.isNumber()" },
             "explicit": { ".validate": "newData.isBoolean()" },
+            "kind": { ".validate": "newData.isString() && newData.val().matches(/^(audio|video)$/)" },
             "date": { ".validate": "newData.isNumber()" },
             "dismissed": { ".validate": "newData.isString() && newData.val().length <= 64" },
             "$other": { ".validate": false }
@@ -453,6 +454,7 @@
                 "album": { ".validate": "newData.isString() && newData.val().length <= 500" },
                 "dur": { ".validate": "newData.isNumber()" },
                 "explicit": { ".validate": "newData.isBoolean()" },
+                "kind": { ".validate": "newData.isString() && newData.val().matches(/^(audio|video)$/)" },
                 "date": { ".validate": "newData.isNumber()" },
                 "dismissed": { ".validate": "newData.isString() && newData.val().length <= 64" },
                 "$other": { ".validate": false }

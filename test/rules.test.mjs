@@ -157,6 +157,9 @@ await expect("ALLOWED", "bot saves a swap in a playlist", db("bot").ref("playlis
 await expect("DENIED", "swap with a video id that isn't one", db("bot").ref("queues/eve/old4/swap").set(Object.assign({}, swapPick, { cid: "x".repeat(300) })));
 await expect("DENIED", "swap with extra fields", db("bot").ref("queues/eve/old4/swap").set(Object.assign({}, swapPick, { junk: big })));
 await expect("DENIED", "swap without a date", db("bot").ref("queues/eve/old4/swap").set({ cid: "kpstudio001" }));
+await expect("ALLOWED", "bot says what kind a swap is", db("bot").ref("playlists/eve/pl3/list/a/swap").set(Object.assign({}, swapPick, { kind: "video" })));
+await expect("DENIED", "a swap kind that isn't audio or video", db("bot").ref("playlists/eve/pl3/list/a/swap").set(Object.assign({}, swapPick, { kind: "podcast" })));
+await expect("ALLOWED", "the owner clears a swap that doesn't fit the list's format", eve.ref("playlists/eve/pl3/list/a/swap").set(null));
 await expect("DENIED", "someone else's swap", db("bob").ref("queues/eve/old4/swap").set(swapPick));
 await expect("ALLOWED", "say \"not this one\" to a swap", eve.ref("queues/eve/old4/swap").set({ dismissed: "kpstudio001", date: Date.now() }));
 await expect("ALLOWED", "swap a track in, keeping where it came from", eve.ref("queues/eve/old4").set({ type: 1, cid: "kpstudio001", name: "Flagged - Track", url: "https://www.youtube.com/watch?v=kpstudio001",
