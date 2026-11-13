@@ -45,7 +45,7 @@ test("sameVersion: an original is never its remix; a remixer's name may be spell
   assert.equal(tags.sameVersion(v("Miike Snow", "Silvia (Robotberget Remix)"), v("Miike Snow", "Silvia (Roboberget Remix)")), true);
 });
 
-test("toolkit: an upload tagged as the original and as its remix is the remix (its tag now), and the original keeps its own uploads", () => {
+test("toolkit: an upload tagged as the original and as its remix is the remix (its tag now), and the original keeps its own uploads", async () => {
   const dir = mkdtempSync(join(tmpdir(), "history-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
   const fb = join(dir, "remix.json");
@@ -81,6 +81,26 @@ test("toolkit: an upload tagged as the original and as its remix is the remix (i
     assert.deepEqual(playsOn("remixremixr"), [remix.id], "plays of the remix upload count for the remix, whatever it was called then");
     assert.deepEqual(playsOn("origorigori"), [orig.id]);
     assert.equal(db.prepare("SELECT song_id FROM tracks WHERE id = ?").get(orig.id).song_id, db.prepare("SELECT song_id FROM tracks WHERE id = ?").get(remix.id).song_id, "still one song (all versions)");
+
+    // published over a history that had them as one track (tOLD): one keeps
+    // the room's id, the other gets its own, so they stay two tracks there
+    const { publish } = require("../tools/history/publish.js");
+    const both = {};
+    [["Geographer", "Kites"], ["Geographer", "Kites (Limousines Remix)"]].forEach(([a, t]) => { both[tags.hash(tags.trackKey(a, t))] = "tOLD"; });
+    const sent = {};
+    const client = {
+      get: async (p) => (p === "globalSongKeys" ? both : p === "globalSongsMeta" ? { tracks: 1, plays: 1 } : null),
+      update: async (u) => { Object.assign(sent, u); }
+    };
+    await publish(db, {}, { dir, write: true, client, force: true }, () => {});
+    const origId = sent["globalTracks/1origorigori/song"];
+    const remixId = sent["globalTracks/1remixremixr/song"];
+    assert.ok(origId && remixId && origId !== remixId, "two tracks, two ids");
+    assert.ok([origId, remixId].includes("tOLD"), "one of them keeps the room's id");
+    assert.equal(sent["globalTracks/1remix2remix/song"], remixId);
+    assert.equal(sent["globalSongs/" + origId + "/title"], "Kites");
+    assert.equal(sent["globalSongs/" + remixId + "/title"], "Kites (Limousines Remix)");
+    assert.equal(sent["globalSongKeys/" + tags.hash(tags.trackKey("Geographer", "Kites (Limousines Remix)"))], remixId);
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
