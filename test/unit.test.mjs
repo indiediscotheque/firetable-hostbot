@@ -412,7 +412,7 @@ test("swap runner: a song catalog that answers nothing isn't saved as 'no match'
   assert.equal(stats.stopped, "", "the other sources carry on");
   assert.equal(searches.filter((q) => q === "Daft Punk One More Time").length, 1, "the canary is searched once");
   assert.equal(searches.length, 4, "three searches, the canary, then YouTube Music isn't asked again");
-  assert.equal(data.swapScans, undefined, "nobody is marked as scanned: it all waits for the next run");
+  assert.deepEqual(data.swapScans, { u1: 0 }, "nobody is marked as done: they're marked not done (0), so the next pass picks them up");
   assert.match(swaps.summary(stats), /YouTube Music: YouTube Music's song catalog isn't answering/);
 });
 
@@ -853,4 +853,46 @@ test("swap runner: a video list's promoter and fan uploads get the official musi
   assert.equal(l.r.flagged, undefined);
   assert.equal(l.c.swap.cid, "nsvideo0001", "the artist's plain upload gets their official video");
   assert.deepEqual([data.trackKinds.promoter001, data.trackKinds.kpvideo0001, data.trackKinds.artistch001], ["v0", "v3", "v2"]);
+});
+
+test("swap runner: what's over the search limits gets a catch-up pass the same day; someone coming online gets looked at", async () => {
+  const data = { queues: {
+    u1: { a: broken("dead0000001", "Radiohead - Airbag"), b: broken("dead0000002", "Radiohead - Let Down"), c: broken("dead0000003", "Radiohead - Lucky") },
+    u2: { a: broken("dead0000004", "Radiohead - Karma Police") }
+  } };
+  const { db } = fakeDb(data);
+  const timers = [];
+  let t = Date.UTC(2026, 10, 13, 4);
+  const users = { u1: { username: "u1", status: true }, u2: { username: "u2", idle: { since: t - 1000 } } };
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], users: () => users, botid: () => "bot", delayMs: 0, now: () => t,
+    search: async (q) => realSearch([{ cid: "studio" + q.length.toString().padStart(5, "0"), title: q.replace("Radiohead ", ""), artists: ["Radiohead"] }]),
+    verify: async (ids) => Object.fromEntries(ids.map((i) => [i, { problem: 0, audio: true }])), notify: () => {},
+    maxSearches: 2, catchUp: true, catchUpMinutes: 30,
+    setTimer: (fn, ms) => { const tm = { fn, ms }; timers.push(tm); return tm; }, clearTimer: (tm) => { tm.cancelled = true; }
+  });
+  const s1 = await sw.run({ reason: "nightly" });
+  assert.equal(s1.capped, 2, "two songs over this run's limit of 2 searches");
+  assert.ok(timers.length === 1 && timers[0].ms === 30 * 60 * 1000, "a catch-up pass in 30 minutes");
+  assert.ok(sw.state.nextAt > t && sw.state.backlog.capped === 2);
+  const pending = Object.values(data.swapScans).filter((v) => v === 0).length;
+  assert.ok(pending >= 1, "whoever isn't done is marked not done");
+
+  // the catch-up pass runs: only people not done, and what waited is found
+  t += 30 * 60 * 1000;
+  timers[0].fn();
+  await new Promise((r) => setTimeout(r, 50));
+  const all = [...Object.values(data.queues.u1), ...Object.values(data.queues.u2)];
+  assert.ok(all.every((tr) => tr.swap && tr.swap.cid), "every broken track has its swap after the catch-up pass");
+  assert.ok(Object.values(data.swapScans).every((v) => v > 0), "and everyone is done");
+  assert.equal(sw.state.today.passes, 1);
+
+  // someone comes online after a day: looked at in a few minutes
+  t += 25 * 60 * 60 * 1000;
+  timers.length = 0;
+  assert.equal(await sw.online("u2"), true);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].ms, 5 * 60 * 1000);
+  assert.equal(await sw.online("u2"), true, "a second arrival shares the pass already planned");
+  assert.equal(timers.length, 1);
 });

@@ -1749,6 +1749,10 @@ usersRef.on("child_changed", function(snap) {
   var u = snap.val();
   users[snap.key] = u;
   if ((before && before.status) || (u && u.status)) lastBlipped[snap.key] = Date.now();
+  // came online: their lists get a swap pass soon if it's been a day
+  if (swapsOn && started && snap.key !== botid && u && u.status && !(before && before.status)) {
+    swapper().online(snap.key).catch(function() {});
+  }
   if (snap.key === botid) keepBotOnline();
   autoDJ.check(); // the bot needs its own profile before it can sit down
 });
@@ -1958,6 +1962,14 @@ var swapsOn = process.env.SWAP_SUGGESTIONS !== "false";
 var SWAP_HOUR = parseInt(process.env.SWAP_HOUR, 10);
 if (!(SWAP_HOUR >= 0 && SWAP_HOUR <= 23)) SWAP_HOUR = 4;
 var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 600;
+// Catch-up passes: what a night's run couldn't get to (its search limits, a
+// source that was rate-limited) is picked up the same day, pass after pass,
+// SWAP_CATCHUP_MINUTES apart (30), within SWAP_DAILY_SEARCHES free searches
+// (6,000) and SWAP_MAX_PASSES passes (24) a day. Someone who comes online
+// with lists not looked through for SWAP_RESCAN_HOURS (20) gets a pass in a
+// few minutes. SWAP_CATCHUP=false: the nightly run only.
+var SWAP_CATCHUP = process.env.SWAP_CATCHUP !== "false";
+// (the numbers are read with envNumber, further down, when the swapper starts)
 // songs a run looks up on artist and album pages and in Apple's catalog
 // (each a few requests, so capped apart)
 var SWAP_MAX_DEEP = parseInt(process.env.SWAP_MAX_DEEP, 10) || 300;
@@ -2141,6 +2153,11 @@ var swapper = function() {
       botid: function() { return botid; },
       log: console.log,
       maxSearches: SWAP_MAX_SEARCHES,
+      catchUp: SWAP_CATCHUP,
+      catchUpMinutes: envNumber("SWAP_CATCHUP_MINUTES", 30),
+      dailySearches: envNumber("SWAP_DAILY_SEARCHES", 6000),
+      maxPasses: envNumber("SWAP_MAX_PASSES", 24),
+      rescanHours: envNumber("SWAP_RESCAN_HOURS", 20),
       delayMs: 2500
     });
   }
@@ -2258,6 +2275,26 @@ var ytmSync = function() {
   return ytmSyncInstance;
 };
 
+// A sync, then catch-up syncs while tracks still wait for a lookup (the
+// search limits): YTMUSIC_CATCHUP_MINUTES apart (60), at most
+// YTMUSIC_MAX_CATCHUPS a day (8), without reshuffling the list each time.
+var ytmCatch = { day: "", n: 0, timer: null };
+var ytmRun = function(opts) {
+  return ytmSync().run(opts).then(function(s) {
+    if (!s || s.failed || !s.waiting || process.env.YTMUSIC_CATCHUP === "false") return s;
+    var day = new Date().toDateString();
+    if (ytmCatch.day !== day) { ytmCatch.day = day; ytmCatch.n = 0; }
+    if (ytmCatch.n >= envNumber("YTMUSIC_MAX_CATCHUPS", 8) || ytmCatch.timer) return s;
+    ytmCatch.timer = setTimeout(function() {
+      ytmCatch.timer = null;
+      ytmCatch.n++;
+      ytmRun({ reason: "catch-up", shuffle: false });
+    }, envNumber("YTMUSIC_CATCHUP_MINUTES", 60) * 60 * 1000);
+    if (ytmCatch.timer.unref) ytmCatch.timer.unref();
+    return s;
+  });
+};
+
 var ytmRanOn = null;
 var ytmChecked = false;
 var ytmTick = function() {
@@ -2270,14 +2307,14 @@ var ytmTick = function() {
     ytmSync().lastRunAt().then(function(at) {
       if (Date.now() - at > 24 * 60 * 60 * 1000) {
         ytmRanOn = d.toDateString();
-        ytmSync().run({ reason: at ? "catching up" : "first sync" });
+        ytmRun({ reason: at ? "catching up" : "first sync" });
       }
     });
     return;
   }
   if (d.getHours() !== YTM_HOUR || ytmRanOn === d.toDateString()) return;
   ytmRanOn = d.toDateString();
-  ytmSync().run({ reason: "daily" });
+  ytmRun({ reason: "daily" });
 };
 setInterval(ytmTick, 10 * 60 * 1000);
 setTimeout(ytmTick, 3 * 60 * 1000);
@@ -3102,7 +3139,12 @@ var handleChat = function(chatID, feedKey) {
             talk("Looking for swaps right now (started " + Math.round((Date.now() - swapper().state.startedAt) / 60000) + " min ago).");
           } else {
             var lastRun = swapper().state.last;
-            talk(fitChat("Swaps (nightly at " + SWAP_HOUR + ":00): " + (lastRun ? swaps.summary(lastRun) : "no run yet; mods can start one with !swapscan.")));
+            var st = swapper().state;
+            // what still waits, and when the next catch-up pass is, first (chat cuts long lines)
+            var backlog = st.nextAt ? "next pass in " + Math.max(1, Math.round((st.nextAt - Date.now()) / 60000)) + " min" +
+              (st.backlog && st.backlog.tracks ? " (" + st.backlog.tracks + " waiting)" : "") + "; " : "";
+            talk(fitChat("Swaps (nightly at " + SWAP_HOUR + ":00, " + st.today.searches + " searches today): " + backlog +
+              (lastRun ? swaps.summary(lastRun) : "no run yet; mods can start one with !swapscan.")));
           }
         } else if (command == "ytmusic" || command == "ytsync") {
           var ytmName = process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC";
@@ -3113,7 +3155,7 @@ var handleChat = function(chatID, feedKey) {
               Math.round((Date.now() - ytmSync().state.startedAt) / 60000) + " min ago).");
           } else if (command == "ytsync" && senderIsMod) {
             talk(":arrows_counterclockwise: Syncing my " + ytmName + " playlist with the Indie Discotheque year playlists. !ytmusic says how it went.");
-            ytmSync().run({ reason: "!ytsync" });
+            ytmRun({ reason: "!ytsync" });
           } else if (command == "ytsync") {
             talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");
           } else {
