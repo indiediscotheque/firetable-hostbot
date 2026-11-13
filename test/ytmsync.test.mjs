@@ -592,7 +592,7 @@ test("with the swap search's lookup: broken tracks get YouTube Music audio track
   assert.equal(s.replaced, 2);
   assert.equal(s.unflagged, 1);
   assert.equal(s.noMatch, 3);
-  assert.deepEqual(s.from, { room: 0, library: 1, twin: 0, ytm: 0, lists: 1, web: 0, artist: 0, album: 0, api: 0 });
+  assert.deepEqual(s.from, { room: 0, library: 1, twin: 0, ytm: 0, lists: 1, web: 0, artist: 0, album: 0, api: 0, soundcloud: 0 });
   assert.match(ytmsync.summary(s), /2 broken tracks replaced \(found in 1 year playlists, 1 YouTube playlists\)/);
   assert.match(ytmsync.summary(s), /1 track that play again unflagged/);
   assert.match(ytmsync.summary(s), /2 tracks wait for the next sync/, "what no source could answer is tried again");

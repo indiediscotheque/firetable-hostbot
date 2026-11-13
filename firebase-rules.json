@@ -135,6 +135,11 @@
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$uid": { ".validate": "newData.isNumber()" }
     },
+    "trackKinds": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "$cid": { ".validate": "$cid.matches(/^[A-Za-z0-9_-]{11}$/) && newData.isString() && newData.val().matches(/^(a|v[0-3])$/)" }
+    },
     "ytmSync": {
       ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
@@ -403,13 +408,16 @@
           },
           "swap": {
             ".validate": "newData.hasChildren(['date'])",
-            "cid": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{11}$/)" },
+            "cid": { ".validate": "newData.isString() && newData.val().matches(/^([A-Za-z0-9_-]{11}|[0-9]{1,20})$/)" },
             "artist": { ".validate": "newData.isString() && newData.val().length <= 500" },
             "title": { ".validate": "newData.isString() && newData.val().length <= 500" },
             "album": { ".validate": "newData.isString() && newData.val().length <= 500" },
             "dur": { ".validate": "newData.isNumber()" },
             "explicit": { ".validate": "newData.isBoolean()" },
-            "kind": { ".validate": "newData.isString() && newData.val().matches(/^(audio|video)$/)" },
+            "kind": { ".validate": "newData.isString() && newData.val().matches(/^(audio|video|soundcloud)$/)" },
+            "why": { ".validate": "newData.isString() && newData.val() == 'format'" },
+            "url": { ".validate": "newData.isString() && newData.val().length <= 2048 && newData.val().matches(/^https:\\/\\/soundcloud\\.com\\//)" },
+            "img": { ".validate": "newData.isString() && newData.val().length <= 2048 && newData.val().matches(/^https:\\/\\//)" },
             "date": { ".validate": "newData.isNumber()" },
             "dismissed": { ".validate": "newData.isString() && newData.val().length <= 64" },
             "$other": { ".validate": false }
@@ -448,13 +456,16 @@
               },
               "swap": {
                 ".validate": "newData.hasChildren(['date'])",
-                "cid": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{11}$/)" },
+                "cid": { ".validate": "newData.isString() && newData.val().matches(/^([A-Za-z0-9_-]{11}|[0-9]{1,20})$/)" },
                 "artist": { ".validate": "newData.isString() && newData.val().length <= 500" },
                 "title": { ".validate": "newData.isString() && newData.val().length <= 500" },
                 "album": { ".validate": "newData.isString() && newData.val().length <= 500" },
                 "dur": { ".validate": "newData.isNumber()" },
                 "explicit": { ".validate": "newData.isBoolean()" },
-                "kind": { ".validate": "newData.isString() && newData.val().matches(/^(audio|video)$/)" },
+                "kind": { ".validate": "newData.isString() && newData.val().matches(/^(audio|video|soundcloud)$/)" },
+                "why": { ".validate": "newData.isString() && newData.val() == 'format'" },
+                "url": { ".validate": "newData.isString() && newData.val().length <= 2048 && newData.val().matches(/^https:\\/\\/soundcloud\\.com\\//)" },
+                "img": { ".validate": "newData.isString() && newData.val().length <= 2048 && newData.val().matches(/^https:\\/\\//)" },
                 "date": { ".validate": "newData.isNumber()" },
                 "dismissed": { ".validate": "newData.isString() && newData.val().length <= 64" },
                 "$other": { ".validate": false }

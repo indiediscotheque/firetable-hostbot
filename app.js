@@ -886,6 +886,37 @@ var soundcloudTrack = function(cid, cb) {
   attempt(false).catch(failed);
 };
 
+// SoundCloud's track search (swap suggestions for lists kept to SoundCloud):
+// [{cid, title, user, dur (s), url, img, problem (flag code, 0 = plays in full)}]
+var soundcloudSearch = function(query) {
+  var shape = function(list) {
+    return (list || []).filter(function(tr) { return tr && tr.id && tr.kind !== "playlist"; }).map(function(tr) {
+      return { cid: String(tr.id), title: String(tr.title || ""), user: String((tr.user && tr.user.username) || ""),
+        dur: Math.round((Number(tr.full_duration || tr.duration) || 0) / 1000), url: String(tr.permalink_url || ""),
+        img: String(tr.artwork_url || (tr.user && tr.user.avatar_url) || ""), problem: checks.soundcloudProblem(tr) };
+    });
+  };
+  var failed = function(res) {
+    var err = new Error("SoundCloud answered HTTP " + res.status);
+    err.status = res.status;
+    throw err;
+  };
+  if (!scOfficial) {
+    return http("https://api-v2.soundcloud.com/search/tracks?q=" + encodeURIComponent(query) + "&limit=20&client_id=" +
+      encodeURIComponent(process.env.SOUNDCLOUD_KEY || ""), { timeout: 20000, maxBytes: 4 * 1024 * 1024 }).then(function(res) {
+      if (res.status !== 200 || !res.json) return failed(res);
+      return shape(res.json.collection);
+    });
+  }
+  return scAccessToken(false).then(function(token) {
+    return http("https://api.soundcloud.com/tracks?q=" + encodeURIComponent(query) + "&limit=20&linked_partitioning=true", {
+      timeout: 20000, maxBytes: 4 * 1024 * 1024, headers: { Authorization: "OAuth " + token, Accept: "application/json; charset=utf-8" } });
+  }).then(function(res) {
+    if (res.status !== 200 || !res.json) return failed(res);
+    return shape(Array.isArray(res.json) ? res.json : res.json.collection);
+  });
+};
+
 // ─── Starting a track ───────────────────────────────────────────────────────
 var songLoading = false; // a track is being looked up (between turns); !skip waits
 var songRanOut = false; // the song on the decks reached its end (for last.fm)
@@ -2096,6 +2127,9 @@ var swapper = function() {
       album: ytmusic.albumTracks,
       apple: process.env.APPLE_LOOKUP === "false" ? null : apple.searchSongs,
       maxDeep: SWAP_MAX_DEEP,
+      // SoundCloud's search, with the same web client id as the track checks
+      // (SOUNDCLOUD_KEY, no registered app); SOUNDCLOUD_SWAPS=false turns it off
+      scSearch: process.env.SOUNDCLOUD_SWAPS === "false" ? null : soundcloudSearch,
       siblings: songSiblings,
       library: yearPlaylistTracks,
       apiSearch: function(q) { return youtubeSearch(q); },

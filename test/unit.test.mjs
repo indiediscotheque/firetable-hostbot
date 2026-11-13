@@ -444,7 +444,7 @@ test("swap cache: 'no match' answers saved before the catalog fix are searched a
   assert.equal(swaps.usableCache(null, t), false);
 });
 
-test("swap runner: playlists kept to SoundCloud aren't read; video playlists never get audio tracks", async () => {
+test("swap runner: playlists kept to SoundCloud get SoundCloud copies; video playlists never get audio tracks", async () => {
   const data = {
     queues: { u1: { a: broken("dead0000001", "Radiohead - Karma Police") } },
     playlists: { u1: {
@@ -457,23 +457,34 @@ test("swap runner: playlists kept to SoundCloud aren't read; video playlists nev
   };
   const { db, at } = fakeDb(data);
   const searches = [];
+  const scSearches = [];
   const sw = swaps.createSwapper({
     db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0,
     search: async (q) => { searches.push(q); return realSearch([songRow]); },
+    scSearch: async (q) => {
+      scSearches.push(q);
+      return /Lucky/.test(q) ? [
+        { cid: "111", title: "Radiohead - Lucky (preview)", user: "Someone", dur: 30, url: "https://soundcloud.com/x/lucky", problem: 5 }, // a preview: never
+        { cid: "222", title: "Lucky", user: "Radiohead", dur: 259, url: "https://soundcloud.com/radiohead/lucky", img: "https://i1.sndcdn.com/a.jpg", problem: 0 }
+      ] : [];
+    },
     verify: async (ids) => Object.fromEntries(ids.map((i) => [i, 0])), notify: () => {}
   });
   const stats = await sw.run();
   assert.deepEqual(searches.sort(), ["Radiohead Let Down", "Radiohead No Surprises"], "YouTube Music's audio tracks only for YouTube Music and unset playlists");
-  assert.equal(stats.skippedLists, 2);
-  assert.equal(stats.lists, 5, "SoundCloud playlists are read, only to clear old suggestions");
+  assert.deepEqual(scSearches.sort(), ["Radiohead Karma Police", "Radiohead Lucky"], "SoundCloud's search for SoundCloud playlists");
+  assert.equal(stats.lists, 5);
+  const sc = data.playlists.u1.scList.list.a.swap;
+  assert.deepEqual([sc.cid, sc.kind, sc.url, sc.img, sc.artist], ["222", "soundcloud", "https://soundcloud.com/radiohead/lucky", "https://i1.sndcdn.com/a.jpg", "Radiohead"]);
   assert.equal(data.playlists.u1.vidList.list.a.swap, undefined, "no audio track for a video playlist");
-  assert.match(swaps.summary(stats), /2 SoundCloud playlists not searched for/);
+  assert.match(swaps.summary(stats), /2 SoundCloud searches/);
 
-  // a track flagged while playing from a SoundCloud playlist: no lookup at all
+  // a track flagged while playing from a SoundCloud playlist: SoundCloud only (remembered)
   searches.length = 0;
-  const r = await sw.track("u1", db.ref("playlists/u1/scList/list"), "a", "scList");
-  assert.equal(r, null);
+  scSearches.length = 0;
+  await sw.track("u1", db.ref("playlists/u1/scList/list"), "a", "scList");
   assert.equal(searches.length, 0);
+  assert.equal(scSearches.length, 0, "already remembered");
   await sw.track("u1", db.ref("playlists/u1/plain/list"), "a", "plain");
   assert.equal(searches.length, 0, "already remembered, no new search");
 });
@@ -753,4 +764,93 @@ test("swap runner: suggestions that don't fit the playlist's format are cleared,
   assert.deepEqual([y.b.swap.cid, y.b.swap.kind], ["studio00001", "audio"], "an old one that fits stays, and now says what it is");
   assert.ok(stats.cleared >= 2);
   assert.match(swaps.summary(stats), /didn't fit the playlist's format cleared/);
+});
+
+test("swap runner: tracks that play but don't fit their playlist's format get a copy that does", async () => {
+  const yt = (cid, name) => ({ type: 1, cid, name });
+  const sc = (cid, name) => ({ type: 2, cid, name, duration: 262 });
+  const data = {
+    playlists: { u1: {
+      ytm: { name: "YTM", list: {
+        v: yt("kpvideo0001", "Radiohead - Karma Police"), // a music video
+        s: sc(333, "Radiohead - Karma Police"), // a SoundCloud track
+        a: yt("studio00001", "Radiohead - Karma Police"), // fits
+        old: Object.assign(yt("nsstudio001", "Radiohead - No Surprises"), { swap: { cid: "nsvideo0001", kind: "audio", why: "format", date: 1 } }) // fits now
+      } },
+      vids: { name: "Videos", list: { a: yt("studio00001", "Radiohead - Karma Police") } }, // an audio track in a video list
+      any: { name: "Any", list: { v: yt("kpvideo0001", "Radiohead - Karma Police") } } // no format: anything goes, not read whole
+    } },
+    playlistPrefs: { u1: { format: { ytm: "ytm", vids: "video" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const verified = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0, twinDelayMs: 0,
+    search: async () => realSearch([songRow]),
+    counterpart: async (cid) => (cid === "studio00001" ? { cid: "kpvideo0001", artist: "Radiohead", title: "Karma Police", dur: 270, kind: "MUSIC_VIDEO_TYPE_OMV" } : null),
+    verify: async (ids) => {
+      verified.push(...ids);
+      return vfy({
+        kpvideo0001: { problem: 0, audio: false, dur: 270, channel: "RadioheadVEVO", title: "Radiohead - Karma Police (Official Music Video)" },
+        studio00001: { problem: 0, audio: true, dur: 262, channel: "Radiohead - Topic", title: "Karma Police" },
+        nsstudio001: { problem: 0, audio: true, dur: 229, channel: "Radiohead - Topic", title: "No Surprises" }
+      })(ids);
+    },
+    notify: () => {}
+  });
+  const stats = await sw.run();
+  const y = data.playlists.u1.ytm.list;
+  assert.deepEqual([y.v.swap.cid, y.v.swap.kind, y.v.swap.why], ["studio00001", "audio", "format"], "the video gets its audio track");
+  assert.equal(y.v.flagged, undefined, "nothing is flagged");
+  assert.deepEqual([y.s.swap.cid, y.s.swap.why], ["studio00001", "format"], "the SoundCloud track gets the audio track");
+  assert.equal(y.a.swap, undefined, "an audio track fits");
+  assert.equal(y.old.swap, undefined, "a format suggestion on a track that fits now is cleared");
+  const v = data.playlists.u1.vids.list.a.swap;
+  assert.deepEqual([v.cid, v.kind, v.why], ["kpvideo0001", "video", "format"], "the audio track gets its official video, through the toggle");
+  assert.equal(data.playlists.u1.any.list.v.swap, undefined, "a list with no format set takes anything");
+  assert.deepEqual(data.trackKinds, { kpvideo0001: "v3", studio00001: "a", nsstudio001: "a" }, "what each upload is (a video: how it ranks), remembered");
+  assert.equal(stats.offFormat, 3);
+  assert.match(swaps.summary(stats), /3 tracks that don't fit their playlist's format/);
+
+  // next run: the kinds come from trackKinds, not YouTube
+  verified.length = 0;
+  await sw.run({ full: true });
+  assert.ok(!verified.includes("nsstudio001"), "an upload's kind is asked once");
+});
+
+test("swap runner: a video list's promoter and fan uploads get the official music video, where there is one", async () => {
+  const yt = (cid, name) => ({ type: 1, cid, name });
+  const data = {
+    playlists: { u1: { vids: { name: "Videos", list: {
+      p: yt("promoter001", "Radiohead - Karma Police"), // a promoter's upload
+      o: yt("kpvideo0001", "Radiohead - Karma Police"), // the official video: nothing to do
+      r: yt("remix000001", "Radiohead - Karma Police (Some DJ Remix)"), // an independent remix: no official video, stays
+      c: yt("artistch001", "Radiohead - No Surprises") // the artist's own upload, not titled official; the official one exists
+    } } } },
+    playlistPrefs: { u1: { format: { vids: "video" } } }
+  };
+  const { db, at } = fakeDb(data);
+  const info = (channel, title, dur) => ({ problem: 0, audio: false, dur, channel, title });
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0, twinDelayMs: 0,
+    search: async () => realSearch([]),
+    webSearch: async (q) => (/Karma/.test(q) ? [{ cid: "kpvideo0001", title: "Radiohead - Karma Police (Official Music Video)", channel: "RadioheadVEVO", dur: 270 }]
+      : /Surprises/.test(q) ? [{ cid: "nsvideo0001", title: "Radiohead - No Surprises (Official Video)", channel: "Radiohead", dur: 230 }] : []),
+    verify: vfy({
+      promoter001: info("Majestic Casual", "Radiohead - Karma Police", 268),
+      kpvideo0001: info("RadioheadVEVO", "Radiohead - Karma Police (Official Music Video)", 270),
+      remix000001: info("Some DJ", "Radiohead - Karma Police (Some DJ Remix)", 300),
+      artistch001: info("Radiohead", "No Surprises", 229),
+      nsvideo0001: info("Radiohead", "Radiohead - No Surprises (Official Video)", 230)
+    }),
+    notify: () => {}
+  });
+  await sw.run();
+  const l = data.playlists.u1.vids.list;
+  assert.deepEqual([l.p.swap.cid, l.p.swap.kind, l.p.swap.why], ["kpvideo0001", "video", "format"], "the promoter's upload gets the official video");
+  assert.equal(l.o.swap, undefined);
+  assert.equal(l.r.swap, undefined, "a remix with no official video stays as it is");
+  assert.equal(l.r.flagged, undefined);
+  assert.equal(l.c.swap.cid, "nsvideo0001", "the artist's plain upload gets their official video");
+  assert.deepEqual([data.trackKinds.promoter001, data.trackKinds.kpvideo0001, data.trackKinds.artistch001], ["v0", "v3", "v2"]);
 });
