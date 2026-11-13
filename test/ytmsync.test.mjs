@@ -530,3 +530,207 @@ test("channelArtist and isTopic", () => {
   assert.equal(ytmsync.isTopic("Chromeo - Topic"), true);
   assert.equal(ytmsync.isTopic("Chromeo"), false);
 });
+
+// ------------------------------------- the swap search's sources (lookup)
+
+test("with the swap search's lookup: broken tracks get YouTube Music audio tracks even when YouTube Music's search is dead", async () => {
+  const swaps = require("../lib/swaps.js");
+  const k = (n) => pushKey(Date.UTC(2021, 0, n));
+  const keys = { lib: k(1), list: k(2), vid: k(3), none: k(4), stale: k(5), manual: k(6), off: k(7) };
+  const db = fakeDb({ playlists: { [BOT]: { ytm: { name: "YOUTUBE MUSIC", list: {
+    [keys.lib]: { type: 1, cid: "kpdead00001", name: "Radiohead - Karma Police", duration: 262, flagged: { date: 1, code: 2 } }, // in a year playlist under another upload
+    [keys.list]: { type: 1, cid: "nsdead00001", name: "Radiohead - No Surprises", duration: 229 }, // gone: a YouTube playlist has its audio track
+    [keys.vid]: { type: 1, cid: "lcdead00001", name: "Phoenix - Lisztomania", duration: 241 }, // gone: only a music video anywhere
+    [keys.none]: { type: 1, cid: "nomatch0001", name: "Nobody - Unfindable Song", duration: 200 },
+    [keys.stale]: { type: 1, cid: "playsnow001", name: "Chromeo - Night By Night", flagged: { date: 1, code: 3 }, swap: { cid: "x" } }, // blocked once, plays now
+    [keys.manual]: { type: 1, cid: "manual00001", name: "Band - Garbled", flagged: { date: 1, code: 8 } }, // a mod's "broken": stays flagged
+    [keys.off]: { type: 1, cid: "offtheme001", name: "Some Band - Off Theme", flagged: { date: 1, code: 10 } }
+  } } } } });
+  const videos = {
+    kpstudio001: { problem: 0, dur: 262, title: "Karma Police", channel: "Radiohead - Topic", audio: true },
+    nsstudio001: { problem: 0, dur: 229, title: "No Surprises", channel: "Radiohead - Topic", audio: true },
+    lcvideo0001: { problem: 0, dur: 245, title: "Phoenix - Lisztomania (Official Video)", channel: "PhoenixVEVO", audio: false },
+    playsnow001: { problem: 0, dur: 230, title: "Night By Night", channel: "Chromeo - Topic", audio: true },
+    manual00001: { problem: 0, dur: 200, title: "Garbled", channel: "Band - Topic", audio: true },
+    offtheme001: { problem: 0, dur: 200, title: "Off Theme", channel: "Some Band - Topic", audio: true }
+  };
+  const verify = async (ids) => Object.fromEntries(ids.filter((id) => videos[id]).map((id) => [id, videos[id]]));
+  const swapper = swaps.createSwapper({
+    db, shallowKeys: async () => [], delayMs: 0, now: () => T0, log: () => {},
+    search: async () => { const res = ytmusic.parseSearch(fixture.answer([])); return { songs: [], any: res.length, catalog: 0 }; }, // "No results" for everything
+    library: async () => [{ cid: "kpstudio001", artist: "Radiohead", title: "Karma Police", dur: 262, kind: "MUSIC_VIDEO_TYPE_ATV" }],
+    playlistSearch: async (q) => (/Surprises|Lisztomania/.test(q) ? [{ id: "PLfan" + q.length, title: q }] : []),
+    playlist: async () => ({ tracks: [
+      { cid: "nsstudio001", artist: "Radiohead", title: "No Surprises", dur: 229 },
+      { cid: "lcvideo0001", artist: "Phoenix", title: "Lisztomania", dur: 245 }
+    ] }),
+    webSearch: async (q) => (/Lisztomania/.test(q) ? [{ cid: "lcvideo0001", title: "Phoenix - Lisztomania (Official Video)", channel: "PhoenixVEVO", dur: 245 }] : []),
+    verify
+  });
+  const sync = ytmsync.createSync({
+    db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}),
+    videos: async (ids) => verify(ids),
+    playlist: async () => ({ title: "2010", tracks: [] }),
+    search: async () => { throw new Error("not used with lookup"); },
+    lookup: (items, o) => swapper.lookup(items, o),
+    sources: [{ year: 2010, id: "PL2010" }], delayMs: 0, now: () => T0, log: () => {}
+  });
+  const s = await sync.run();
+  const list = db.get("playlists/" + BOT + "/ytm/list");
+  const byCid = Object.fromEntries(Object.values(list).map((t) => [t.cid, t]));
+  assert.ok(byCid.kpstudio001, "found in the year playlists");
+  assert.equal(byCid.kpstudio001.flagged, undefined);
+  assert.deepEqual(byCid.kpstudio001.swappedFrom, { type: 1, cid: "kpdead00001", date: T0 });
+  assert.ok(byCid.nsstudio001, "found in a YouTube playlist");
+  assert.ok(!byCid.lcvideo0001, "a music video is never put in");
+  assert.deepEqual(byCid.lcdead00001.flagged, { date: T0, code: 2 }, "no audio track: kept, flagged");
+  assert.ok(byCid.nomatch0001.flagged);
+  assert.equal(byCid.playsnow001.flagged, undefined, "an automatic flag on a track that plays again is cleared");
+  assert.equal(byCid.playsnow001.swap, undefined);
+  assert.deepEqual(byCid.manual00001.flagged, { date: 1, code: 8 }, "a mod's flag stays");
+  assert.deepEqual(byCid.offtheme001.flagged, { date: 1, code: 10 });
+  assert.equal(s.replaced, 2);
+  assert.equal(s.unflagged, 1);
+  assert.equal(s.noMatch, 3);
+  assert.deepEqual(s.from, { room: 0, library: 1, twin: 0, ytm: 0, lists: 1, web: 0, artist: 0, album: 0, api: 0, soundcloud: 0 });
+  assert.match(ytmsync.summary(s), /2 broken tracks replaced \(found in 1 year playlists, 1 YouTube playlists\)/);
+  assert.match(ytmsync.summary(s), /1 track that play again unflagged/);
+  assert.match(ytmsync.summary(s), /2 tracks wait for the next sync/, "what no source could answer is tried again");
+  const line = "YOUTUBE MUSIC (daily at 5:00): " + ytmsync.brief(s);
+  assert.ok(line.length <= 240, line);
+  assert.match(line, /2 broken tracks replaced, 3 still broken, 1 unflagged/);
+
+  // the next sync reuses what was learned: nothing is searched again for the found ones
+  const s2 = await sync.run();
+  assert.equal(s2.replaced, 0);
+  assert.equal(s2.noMatch, 3);
+  assert.ok(s2.remembered >= 1, "the song no source had an audio track for is remembered, not searched again");
+});
+
+test("track() with the lookup: a freshly flagged track gets its audio track straight away", async () => {
+  const swaps = require("../lib/swaps.js");
+  const key = pushKey(Date.UTC(2021, 0, 1));
+  const db = fakeDb({ playlists: { [BOT]: { ytm: { name: "YOUTUBE MUSIC", list: {
+    [key]: { type: 1, cid: "kpdead00001", name: "Radiohead - Karma Police", duration: 262, flagged: { date: 5, code: 2 } } } } } } });
+  const verify = async (ids) => Object.fromEntries(ids.filter((id) => id === "kpstudio001").map((id) => [id, { problem: 0, dur: 262, audio: true, channel: "Radiohead - Topic" }]));
+  const swapper = swaps.createSwapper({ db, shallowKeys: async () => [], delayMs: 0, now: () => T0, verify,
+    library: async () => [{ cid: "kpstudio001", artist: "Radiohead", title: "Karma Police", dur: 262, kind: "MUSIC_VIDEO_TYPE_ATV" }] });
+  const sync = ytmsync.createSync({ db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}), videos: verify,
+    playlist: async () => ({ tracks: [] }), lookup: (items, o) => swapper.lookup(items, o), sources: [], now: () => T0 });
+  await sync.findList();
+  assert.equal(await sync.track(db.ref("playlists/" + BOT + "/ytm/list"), key), true);
+  assert.equal(db.get("playlists/" + BOT + "/ytm/list/" + key).cid, "kpstudio001");
+});
+
+// ------------------------------- more free ways to find audio tracks
+
+const panel = (cid, title, artist, dur, kind) => ({ playlistPanelVideoRenderer: { videoId: cid, title: { runs: [{ text: title }] },
+  longBylineText: { runs: [{ text: artist, navigationEndpoint: { browseEndpoint: { browseId: "UCx", browseEndpointContextSupportedConfigs: { browseEndpointContextMusicConfig: { pageType: "MUSIC_PAGE_TYPE_ARTIST" } } } } }] },
+  lengthText: { runs: [{ text: Math.floor(dur / 60) + ":" + String(dur % 60).padStart(2, "0") }] },
+  navigationEndpoint: { watchEndpoint: { videoId: cid, watchEndpointMusicSupportedConfigs: { watchEndpointMusicConfig: { musicVideoType: "MUSIC_VIDEO_TYPE_" + kind } } } } } });
+const watchAnswer = (items) => ({ contents: { singleColumnMusicWatchNextResultsRenderer: { tabbedRenderer: { watchNextTabbedResultsRenderer: { tabs: [{ tabRenderer: { content: {
+  musicQueueRenderer: { content: { playlistPanelRenderer: { contents: items } } } } } }] } } } } });
+const twinAnswer = (video, audio) => watchAnswer([{ playlistPanelVideoWrapperRenderer: {
+  primaryRenderer: panel(video, "Karma Police (Official Video)", "Radiohead", 290, "OMV"),
+  counterpart: [{ counterpartRenderer: panel(audio, "Karma Police", "Radiohead", 262, "ATV") }] } },
+  panel("othersong01", "Creep", "Radiohead", 238, "ATV")]);
+
+test("the Song / Video toggle: a music video's audio track", () => {
+  const t = ytmusic.parseCounterpart(twinAnswer("kpvideo0001", "kpstudio001"), "kpvideo0001");
+  assert.deepEqual([t.cid, t.title, t.artist, t.dur, t.kind], ["kpstudio001", "Karma Police", "Radiohead", 262, "MUSIC_VIDEO_TYPE_ATV"]);
+  assert.equal(ytmusic.parseCounterpart(watchAnswer([panel("lonely00001", "Song", "Band", 200, "OMV")]), "lonely00001"), null, "no toggle: none");
+  assert.equal(ytmusic.parseCounterpart(twinAnswer("kpvideo0001", "kpstudio001"), "someoneelse"), null, "another video's toggle doesn't count");
+});
+
+const twoRow = (id, title) => ({ musicTwoRowItemRenderer: { title: { runs: [{ text: title }] }, navigationEndpoint: { browseEndpoint: { browseId: id } } } });
+const carousel = (title, items) => ({ musicCarouselShelfRenderer: { header: { musicCarouselShelfBasicHeaderRenderer: { title: { runs: [{ text: title }] } } }, contents: items } });
+
+test("artist pages, album pages, the web app's session and Apple's songs", () => {
+  const search = fixture.answer([{ cid: "kpvideo0001", title: "Karma Police", artists: ["Radiohead"], dur: 290, kind: "OMV", label: "Video" }]);
+  assert.deepEqual(ytmusic.parseArtists(search), [{ id: "UC9", name: "Radiohead" }], "artists linked from a song row");
+  const page = { header: { musicImmersiveHeaderRenderer: { title: { runs: [{ text: "Radiohead" }] } } }, contents: { singleColumnBrowseResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [
+    { musicShelfRenderer: { contents: [fixture.row({ cid: "creep000001", title: "Creep", artists: [], dur: 238 })] } },
+    carousel("Albums", [twoRow("MPREokc", "OK Computer"), twoRow("MPREbends", "The Bends")]),
+    carousel("Singles & EPs", [twoRow("MPREkp", "Karma Police")]),
+    carousel("Videos", [twoRow("MPREno", "Not a release")])
+  ] } } } }] } } };
+  const a = ytmusic.parseArtistPage(page);
+  assert.equal(a.name, "Radiohead");
+  assert.deepEqual(a.releases, [{ id: "MPREokc", title: "OK Computer", kind: "album" }, { id: "MPREbends", title: "The Bends", kind: "album" }, { id: "MPREkp", title: "Karma Police", kind: "single" }]);
+  assert.deepEqual(a.songs.map((s) => [s.cid, s.artist]), [["creep000001", "Radiohead"]], "top songs, with the artist's name");
+  const album = { contents: { twoColumnBrowseResultsRenderer: {
+    tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicResponsiveHeaderRenderer: { title: { runs: [{ text: "OK Computer" }] },
+      straplineTextOne: { runs: [{ text: "Radiohead", navigationEndpoint: { browseEndpoint: { browseId: "UCr", browseEndpointContextSupportedConfigs: { browseEndpointContextMusicConfig: { pageType: "MUSIC_PAGE_TYPE_ARTIST" } } } } }] } } }] } } } }],
+    secondaryContents: { sectionListRenderer: { contents: [{ musicShelfRenderer: { contents: [fixture.row({ cid: "kpstudio001", title: "Karma Police", artists: [], dur: 262 })] } }] } } } },
+    microformat: { microformatDataRenderer: { urlCanonical: "x" } }, background: { audioPlaylistId: "OLAK5uy_okcomputer00000" } };
+  const al = ytmusic.parseAlbum(album);
+  assert.deepEqual([al.title, al.artist, al.playlistId], ["OK Computer", "Radiohead", "OLAK5uy_okcomputer00000"]);
+  assert.deepEqual(al.tracks.map((t) => [t.cid, t.artist, t.album, t.dur]), [["kpstudio001", "Radiohead", "OK Computer", 262]]);
+  assert.deepEqual(ytmusic.parseSession('<script>ytcfg.set({"INNERTUBE_CLIENT_VERSION":"1.20261111.01.00","VISITOR_DATA":"CgtBQkNE%3D%3D"})</script>'),
+    { version: "1.20261111.01.00", visitorData: "CgtBQkNE%3D%3D" });
+  const apple = require("../lib/apple.js");
+  assert.deepEqual(apple.parseSongs({ results: [
+    { kind: "song", artistName: "Radiohead", trackName: "Karma Police", collectionName: "OK Computer", trackTimeMillis: 264067, trackExplicitness: "notExplicit" },
+    { kind: "music-video", artistName: "Radiohead", trackName: "Karma Police" }
+  ] }), [{ artist: "Radiohead", title: "Karma Police", album: "OK Computer", dur: 264, explicit: false }]);
+});
+
+test("searchSongs: 'No results' gets a fresh session, then the other app, before the full search", async () => {
+  const realFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, init) => {
+    url = String(url);
+    if (url === "https://music.youtube.com/") { calls.push("home"); return new Response('"INNERTUBE_CLIENT_VERSION":"1.20991231.00.00","VISITOR_DATA":"CgtmcmVzaA%3D%3D"', { status: 200 }); }
+    const body = JSON.parse(init.body);
+    const who = body.context.client.clientName + (body.params ? ":songs" : ":all");
+    calls.push(who + "@" + body.context.client.clientVersion);
+    const songs = [{ cid: "kpstudio001", title: "Karma Police", artists: ["Radiohead"], dur: 262 }];
+    return new Response(JSON.stringify(fixture.answer(body.context.client.clientName === "ANDROID_MUSIC" ? songs : [])), { status: 200 });
+  };
+  try {
+    const r = await ytmusic.searchSongs("Radiohead Karma Police");
+    assert.equal(r.songs[0].cid, "kpstudio001");
+    assert.equal(r.via, "android");
+    assert.deepEqual(calls.map((c) => c.replace(/@.*/, "")), ["WEB_REMIX:songs", "home", "WEB_REMIX:songs", "ANDROID_MUSIC:songs"]);
+    assert.match(calls[2], /@1\.20991231\.00\.00$/, "the web app's current version from its page");
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("lookup: the Song / Video toggle, artist pages, and Apple's album pointing at its YouTube Music playlist", async () => {
+  const swaps = require("../lib/swaps.js");
+  const db = fakeDb({});
+  const audio = { kpstudio001: 262, nsstudio001: 229, lcstudio001: 241, hsstudio001: 200 };
+  const verify = async (ids) => Object.fromEntries(ids.filter((id) => audio[id]).map((id) => [id, { problem: 0, dur: audio[id], audio: true }]));
+  const asked = { twin: [], apple: [], lists: [], album: [] };
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async () => [], delayMs: 0, appleDelayMs: 0, twinDelayMs: 0, now: () => T0, log: () => {}, verify,
+    search: async () => ({ songs: [], any: 0, catalog: 0 }),
+    webSearch: async (q) => (/No Surprises/.test(q) ? [{ cid: "nsvideo0001", title: "Radiohead - No Surprises (Official Video)", channel: "RadioheadVEVO", dur: 235 }] : [{ cid: "junk0000001", title: "something", channel: "x", dur: 1 }]),
+    counterpart: async (cid) => {
+      asked.twin.push(cid);
+      return { kpvideo0001: { cid: "kpstudio001", artist: "Radiohead", title: "Karma Police", dur: 262, kind: "MUSIC_VIDEO_TYPE_ATV" },
+        nsvideo0001: { cid: "nsstudio001", artist: "Radiohead", title: "No Surprises", dur: 229, kind: "MUSIC_VIDEO_TYPE_ATV" } }[cid] || null;
+    },
+    artists: async (name) => [{ id: "UC" + name, name }],
+    artistPage: async (id) => (id === "UCPhoenix" ? { name: "Phoenix", songs: [], releases: [{ id: "MPRElisz", title: "Lisztomania", kind: "single" }] } : { name: "", songs: [], releases: [] }),
+    album: async (id) => { asked.album.push(id); return { title: "Lisztomania", tracks: [{ cid: "lcstudio001", artist: "Phoenix", title: "Lisztomania", dur: 241, kind: "MUSIC_VIDEO_TYPE_ATV" }] }; },
+    apple: async (q) => { asked.apple.push(q); return /Hidden/.test(q) ? [{ artist: "Quiet Band", title: "Hidden Song", album: "Deep Cuts", dur: 200 }] : []; },
+    playlistSearch: async (q) => { asked.lists.push(q); return /Deep Cuts/.test(q) ? [{ id: "PLfan00000001", title: "fan" }, { id: "OLAK5uy_deepcuts0000000", title: "Album - Deep Cuts" }] : []; },
+    playlist: async (id) => ({ tracks: id === "OLAK5uy_deepcuts0000000" ? [{ cid: "hsstudio001", artist: "Quiet Band", title: "Hidden Song", dur: 200, kind: "MUSIC_VIDEO_TYPE_ATV" }] : [] })
+  });
+  const r = await sw.lookup([
+    { name: "Radiohead - Karma Police", dur: 290, slack: 60, uploads: [{ type: 1, cid: "kpvideo0001", live: true }] }, // a video that plays: its toggle
+    { name: "Radiohead - No Surprises", dur: 229, uploads: [{ type: 1, cid: "nsdead00001" }] }, // gone: the toggle of the official video YouTube finds
+    { name: "Phoenix - Lisztomania", dur: 241, uploads: [{ type: 1, cid: "lcdead00001" }] }, // the single on the artist's page
+    { name: "Quiet Band - Hidden Song", dur: 200, uploads: [{ type: 1, cid: "hsdead00001" }] } // Apple: on "Deep Cuts", whose YouTube Music playlist has it
+  ]);
+  assert.deepEqual(r.picks.map((p) => p[0] && p[0].cid), ["kpstudio001", "nsstudio001", "lcstudio001", "hsstudio001"]);
+  assert.deepEqual(r.picks.map((p) => p[0].src), ["twin", "twin", "album", "album"]);
+  assert.deepEqual(asked.twin.slice(0, 2), ["kpvideo0001", "nsvideo0001"]);
+  assert.ok(!asked.album.includes("OLAK5uy_deepcuts0000000") && asked.lists.some((q) => /Quiet Band Deep Cuts/.test(q)), "Apple's album is found as its playlist");
+  assert.equal(r.stats.from.twin, 2);
+  assert.equal(r.stats.from.album, 2);
+  assert.match(swaps.summary(r.stats), /Song \/ Video toggle/);
+});

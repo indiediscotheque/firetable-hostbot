@@ -28,6 +28,7 @@ var checks = require('./lib/checks');
 var ytmusic = require('./lib/ytmusic');
 var swaps = require('./lib/swaps');
 var ytmsync = require('./lib/ytmsync');
+var apple = require('./lib/apple');
 var discover = require('./lib/discover');
 var ytplaylists = require('./lib/ytplaylists');
 
@@ -883,6 +884,37 @@ var soundcloudTrack = function(cid, cb) {
     });
   };
   attempt(false).catch(failed);
+};
+
+// SoundCloud's track search (swap suggestions for lists kept to SoundCloud):
+// [{cid, title, user, dur (s), url, img, problem (flag code, 0 = plays in full)}]
+var soundcloudSearch = function(query) {
+  var shape = function(list) {
+    return (list || []).filter(function(tr) { return tr && tr.id && tr.kind !== "playlist"; }).map(function(tr) {
+      return { cid: String(tr.id), title: String(tr.title || ""), user: String((tr.user && tr.user.username) || ""),
+        dur: Math.round((Number(tr.full_duration || tr.duration) || 0) / 1000), url: String(tr.permalink_url || ""),
+        img: String(tr.artwork_url || (tr.user && tr.user.avatar_url) || ""), problem: checks.soundcloudProblem(tr) };
+    });
+  };
+  var failed = function(res) {
+    var err = new Error("SoundCloud answered HTTP " + res.status);
+    err.status = res.status;
+    throw err;
+  };
+  if (!scOfficial) {
+    return http("https://api-v2.soundcloud.com/search/tracks?q=" + encodeURIComponent(query) + "&limit=20&client_id=" +
+      encodeURIComponent(process.env.SOUNDCLOUD_KEY || ""), { timeout: 20000, maxBytes: 4 * 1024 * 1024 }).then(function(res) {
+      if (res.status !== 200 || !res.json) return failed(res);
+      return shape(res.json.collection);
+    });
+  }
+  return scAccessToken(false).then(function(token) {
+    return http("https://api.soundcloud.com/tracks?q=" + encodeURIComponent(query) + "&limit=20&linked_partitioning=true", {
+      timeout: 20000, maxBytes: 4 * 1024 * 1024, headers: { Authorization: "OAuth " + token, Accept: "application/json; charset=utf-8" } });
+  }).then(function(res) {
+    if (res.status !== 200 || !res.json) return failed(res);
+    return shape(Array.isArray(res.json) ? res.json : res.json.collection);
+  });
 };
 
 // ─── Starting a track ───────────────────────────────────────────────────────
@@ -1926,19 +1958,22 @@ var swapsOn = process.env.SWAP_SUGGESTIONS !== "false";
 var SWAP_HOUR = parseInt(process.env.SWAP_HOUR, 10);
 if (!(SWAP_HOUR >= 0 && SWAP_HOUR <= 23)) SWAP_HOUR = 4;
 var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 600;
+// songs a run looks up on artist and album pages and in Apple's catalog
+// (each a few requests, so capped apart)
+var SWAP_MAX_DEEP = parseInt(process.env.SWAP_MAX_DEEP, 10) || 300;
 var SWAP_API_UNITS = parseInt(process.env.SWAP_API_UNITS, 10);
 if (!(SWAP_API_UNITS >= 0)) SWAP_API_UNITS = 1000;
 
 // Can these YouTube videos play here, and are they YouTube Music audio
 // tracks? One videos.list call (1 unit) for up to 50. Resolves {id: {problem
-// (flag code, 0 = fine), audio, dur}}; ids YouTube doesn't know are left out
+// (flag code, 0 = fine), audio, dur, channel, title}}; ids YouTube doesn't know are left out
 // (gone). Rejects when YouTube can't answer (quota, key, network).
 var youtubeProblems = function(ids) {
   var url = new URL("https://www.googleapis.com/youtube/v3/videos");
   url.searchParams.set("part", "snippet,contentDetails,status");
   url.searchParams.set("id", ids.join(","));
   url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
+  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
   url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
   return http(url, { timeout: 30000 }).then(function(res) {
     if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
@@ -1949,7 +1984,8 @@ var youtubeProblems = function(ids) {
     res.json.items.forEach(function(item) {
       var sn = item.snippet || {};
       out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
-        audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }) };
+        audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }),
+        channel: String(sn.channelTitle || ""), title: String(sn.title || "") };
     });
     return out;
   });
@@ -2085,6 +2121,15 @@ var swapper = function() {
       webSearch: ytmusic.webSearch,
       playlistSearch: ytmusic.webPlaylists,
       playlist: function(id) { return ytmusic.playlistTracks(id, { maxPages: 1 }); },
+      counterpart: ytmusic.counterpart,
+      artists: ytmusic.searchArtists,
+      artistPage: ytmusic.artistPage,
+      album: ytmusic.albumTracks,
+      apple: process.env.APPLE_LOOKUP === "false" ? null : apple.searchSongs,
+      maxDeep: SWAP_MAX_DEEP,
+      // SoundCloud's search, with the same web client id as the track checks
+      // (SOUNDCLOUD_KEY, no registered app); SOUNDCLOUD_SWAPS=false turns it off
+      scSearch: process.env.SOUNDCLOUD_SWAPS === "false" ? null : soundcloudSearch,
       siblings: songSiblings,
       library: yearPlaylistTracks,
       apiSearch: function(q) { return youtubeSearch(q); },
@@ -2199,11 +2244,14 @@ var ytmSync = function() {
       playlist: cachedPlaylist,
       playlistItems: youtubePlaylistItems,
       search: ytmusic.searchSongs,
+      // every source the swap suggestions use (YouTube Music audio tracks only)
+      lookup: function(items, o) { return swapper().lookup(items, o); },
       log: console.log,
       listName: process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC",
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
       dupeSeconds: YTM_DUPE_SECONDS,
-      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 400,
+      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 1000,
+      maxDeep: parseInt(process.env.YTMUSIC_MAX_DEEP, 10) || 500,
       delayMs: 2500
     });
   }
@@ -3070,7 +3118,7 @@ var handleChat = function(chatID, feedKey) {
             talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");
           } else {
             var ytmLast = ytmSync().state.last;
-            talk(fitChat(ytmName + " (synced daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.summary(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
+            talk(fitChat(ytmName + " (daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.brief(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
           }
         } else if (command == "genrelists") {
           if (!genrePlaylistsOn) {
