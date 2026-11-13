@@ -2199,11 +2199,13 @@ var ytmSync = function() {
       playlist: cachedPlaylist,
       playlistItems: youtubePlaylistItems,
       search: ytmusic.searchSongs,
+      // every source the swap suggestions use (YouTube Music audio tracks only)
+      lookup: function(items, o) { return swapper().lookup(items, o); },
       log: console.log,
       listName: process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC",
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
       dupeSeconds: YTM_DUPE_SECONDS,
-      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 400,
+      maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 1000,
       delayMs: 2500
     });
   }
@@ -3070,7 +3072,7 @@ var handleChat = function(chatID, feedKey) {
             talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");
           } else {
             var ytmLast = ytmSync().state.last;
-            talk(fitChat(ytmName + " (synced daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.summary(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
+            talk(fitChat(ytmName + " (daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.brief(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
           }
         } else if (command == "genrelists") {
           if (!genrePlaylistsOn) {

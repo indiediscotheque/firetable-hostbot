@@ -530,3 +530,94 @@ test("channelArtist and isTopic", () => {
   assert.equal(ytmsync.isTopic("Chromeo - Topic"), true);
   assert.equal(ytmsync.isTopic("Chromeo"), false);
 });
+
+// ------------------------------------- the swap search's sources (lookup)
+
+test("with the swap search's lookup: broken tracks get YouTube Music audio tracks even when YouTube Music's search is dead", async () => {
+  const swaps = require("../lib/swaps.js");
+  const k = (n) => pushKey(Date.UTC(2021, 0, n));
+  const keys = { lib: k(1), list: k(2), vid: k(3), none: k(4), stale: k(5), manual: k(6), off: k(7) };
+  const db = fakeDb({ playlists: { [BOT]: { ytm: { name: "YOUTUBE MUSIC", list: {
+    [keys.lib]: { type: 1, cid: "kpdead00001", name: "Radiohead - Karma Police", duration: 262, flagged: { date: 1, code: 2 } }, // in a year playlist under another upload
+    [keys.list]: { type: 1, cid: "nsdead00001", name: "Radiohead - No Surprises", duration: 229 }, // gone: a YouTube playlist has its audio track
+    [keys.vid]: { type: 1, cid: "lcdead00001", name: "Phoenix - Lisztomania", duration: 241 }, // gone: only a music video anywhere
+    [keys.none]: { type: 1, cid: "nomatch0001", name: "Nobody - Unfindable Song", duration: 200 },
+    [keys.stale]: { type: 1, cid: "playsnow001", name: "Chromeo - Night By Night", flagged: { date: 1, code: 3 }, swap: { cid: "x" } }, // blocked once, plays now
+    [keys.manual]: { type: 1, cid: "manual00001", name: "Band - Garbled", flagged: { date: 1, code: 8 } }, // a mod's "broken": stays flagged
+    [keys.off]: { type: 1, cid: "offtheme001", name: "Some Band - Off Theme", flagged: { date: 1, code: 10 } }
+  } } } } });
+  const videos = {
+    kpstudio001: { problem: 0, dur: 262, title: "Karma Police", channel: "Radiohead - Topic", audio: true },
+    nsstudio001: { problem: 0, dur: 229, title: "No Surprises", channel: "Radiohead - Topic", audio: true },
+    lcvideo0001: { problem: 0, dur: 245, title: "Phoenix - Lisztomania (Official Video)", channel: "PhoenixVEVO", audio: false },
+    playsnow001: { problem: 0, dur: 230, title: "Night By Night", channel: "Chromeo - Topic", audio: true },
+    manual00001: { problem: 0, dur: 200, title: "Garbled", channel: "Band - Topic", audio: true },
+    offtheme001: { problem: 0, dur: 200, title: "Off Theme", channel: "Some Band - Topic", audio: true }
+  };
+  const verify = async (ids) => Object.fromEntries(ids.filter((id) => videos[id]).map((id) => [id, videos[id]]));
+  const swapper = swaps.createSwapper({
+    db, shallowKeys: async () => [], delayMs: 0, now: () => T0, log: () => {},
+    search: async () => { const res = ytmusic.parseSearch(fixture.answer([])); return { songs: [], any: res.length, catalog: 0 }; }, // "No results" for everything
+    library: async () => [{ cid: "kpstudio001", artist: "Radiohead", title: "Karma Police", dur: 262, kind: "MUSIC_VIDEO_TYPE_ATV" }],
+    playlistSearch: async (q) => (/Surprises|Lisztomania/.test(q) ? [{ id: "PLfan" + q.length, title: q }] : []),
+    playlist: async () => ({ tracks: [
+      { cid: "nsstudio001", artist: "Radiohead", title: "No Surprises", dur: 229 },
+      { cid: "lcvideo0001", artist: "Phoenix", title: "Lisztomania", dur: 245 }
+    ] }),
+    webSearch: async (q) => (/Lisztomania/.test(q) ? [{ cid: "lcvideo0001", title: "Phoenix - Lisztomania (Official Video)", channel: "PhoenixVEVO", dur: 245 }] : []),
+    verify
+  });
+  const sync = ytmsync.createSync({
+    db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}),
+    videos: async (ids) => verify(ids),
+    playlist: async () => ({ title: "2010", tracks: [] }),
+    search: async () => { throw new Error("not used with lookup"); },
+    lookup: (items, o) => swapper.lookup(items, o),
+    sources: [{ year: 2010, id: "PL2010" }], delayMs: 0, now: () => T0, log: () => {}
+  });
+  const s = await sync.run();
+  const list = db.get("playlists/" + BOT + "/ytm/list");
+  const byCid = Object.fromEntries(Object.values(list).map((t) => [t.cid, t]));
+  assert.ok(byCid.kpstudio001, "found in the year playlists");
+  assert.equal(byCid.kpstudio001.flagged, undefined);
+  assert.deepEqual(byCid.kpstudio001.swappedFrom, { type: 1, cid: "kpdead00001", date: T0 });
+  assert.ok(byCid.nsstudio001, "found in a YouTube playlist");
+  assert.ok(!byCid.lcvideo0001, "a music video is never put in");
+  assert.deepEqual(byCid.lcdead00001.flagged, { date: T0, code: 2 }, "no audio track: kept, flagged");
+  assert.ok(byCid.nomatch0001.flagged);
+  assert.equal(byCid.playsnow001.flagged, undefined, "an automatic flag on a track that plays again is cleared");
+  assert.equal(byCid.playsnow001.swap, undefined);
+  assert.deepEqual(byCid.manual00001.flagged, { date: 1, code: 8 }, "a mod's flag stays");
+  assert.deepEqual(byCid.offtheme001.flagged, { date: 1, code: 10 });
+  assert.equal(s.replaced, 2);
+  assert.equal(s.unflagged, 1);
+  assert.equal(s.noMatch, 3);
+  assert.deepEqual(s.from, { room: 0, library: 1, ytm: 0, lists: 1, web: 0, api: 0 });
+  assert.match(ytmsync.summary(s), /2 broken tracks replaced \(found in 1 year playlists, 1 YouTube playlists\)/);
+  assert.match(ytmsync.summary(s), /1 track that play again unflagged/);
+  assert.match(ytmsync.summary(s), /2 tracks wait for the next sync/, "what no source could answer is tried again");
+  const line = "YOUTUBE MUSIC (daily at 5:00): " + ytmsync.brief(s);
+  assert.ok(line.length <= 240, line);
+  assert.match(line, /2 broken tracks replaced, 3 still broken, 1 unflagged/);
+
+  // the next sync reuses what was learned: nothing is searched again for the found ones
+  const s2 = await sync.run();
+  assert.equal(s2.replaced, 0);
+  assert.equal(s2.noMatch, 3);
+  assert.ok(s2.remembered >= 1, "the song no source had an audio track for is remembered, not searched again");
+});
+
+test("track() with the lookup: a freshly flagged track gets its audio track straight away", async () => {
+  const swaps = require("../lib/swaps.js");
+  const key = pushKey(Date.UTC(2021, 0, 1));
+  const db = fakeDb({ playlists: { [BOT]: { ytm: { name: "YOUTUBE MUSIC", list: {
+    [key]: { type: 1, cid: "kpdead00001", name: "Radiohead - Karma Police", duration: 262, flagged: { date: 5, code: 2 } } } } } } });
+  const verify = async (ids) => Object.fromEntries(ids.filter((id) => id === "kpstudio001").map((id) => [id, { problem: 0, dur: 262, audio: true, channel: "Radiohead - Topic" }]));
+  const swapper = swaps.createSwapper({ db, shallowKeys: async () => [], delayMs: 0, now: () => T0, verify,
+    library: async () => [{ cid: "kpstudio001", artist: "Radiohead", title: "Karma Police", dur: 262, kind: "MUSIC_VIDEO_TYPE_ATV" }] });
+  const sync = ytmsync.createSync({ db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}), videos: verify,
+    playlist: async () => ({ tracks: [] }), lookup: (items, o) => swapper.lookup(items, o), sources: [], now: () => T0 });
+  await sync.findList();
+  assert.equal(await sync.track(db.ref("playlists/" + BOT + "/ytm/list"), key), true);
+  assert.equal(db.get("playlists/" + BOT + "/ytm/list/" + key).cid, "kpstudio001");
+});
