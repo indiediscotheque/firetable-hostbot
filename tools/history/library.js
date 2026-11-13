@@ -145,17 +145,40 @@ function buildLibrary(db, opts) {
   db.prepare("SELECT id, artist, title, plays, first_play_at, first_play_dj, last_play_at FROM tracks WHERE plays > 0").all().forEach(function(t) {
     tracks.set(t.id, t);
   });
-  // a playable upload for each: the one played last, else any
-  var uploadOf = new Map();
-  db.prepare("SELECT track_id, type, cid, max(at) at FROM plays WHERE cid IS NOT NULL AND cid != '' GROUP BY track_id").all().forEach(function(u) {
-    uploadOf.set(u.track_id, { type: Number(u.type) || 1, cid: String(u.cid) });
-  });
+  // a playable upload for each: the one played last, else any; never one the
+  // room tags as another version (Discover shows the track's name over it,
+  // so "Kites" must not play "Kites (Limousines Remix)")
+  var versionOf = new Map();
+  var trackVersion = function(id) {
+    if (!versionOf.has(id)) {
+      var t = tracks.get(id);
+      versionOf.set(id, t ? tags.keysOf(tags.parse(t.artist || "", t.title || "")).version : null);
+    }
+    return versionOf.get(id);
+  };
+  var tagged = new Map(); // "type_cid" -> the room's tags for the upload now
   var uploadsByTrack = new Map();
-  db.prepare("SELECT track_id, type, cid FROM uploads").all().forEach(function(u) {
+  db.prepare("SELECT track_id, type, cid, artist, title FROM uploads").all().forEach(function(u) {
     if (!u.cid) return;
-    if (!uploadOf.has(u.track_id)) uploadOf.set(u.track_id, { type: Number(u.type) || 1, cid: String(u.cid) });
+    tagged.set(u.type + "_" + u.cid, u);
     if (!uploadsByTrack.has(u.track_id)) uploadsByTrack.set(u.track_id, []);
     uploadsByTrack.get(u.track_id).push(u);
+  });
+  var fits = function(trackId, type, cid) {
+    var u = tagged.get(type + "_" + cid);
+    if (!u || !u.title) return true;
+    var v = trackVersion(trackId);
+    return v == null || tags.sameVersion(v, tags.keysOf(tags.parse(u.artist || "", u.title)).version);
+  };
+  var uploadOf = new Map();
+  db.prepare("SELECT track_id, type, cid, max(at) at FROM plays WHERE cid IS NOT NULL AND cid != '' GROUP BY track_id, type, cid ORDER BY at DESC").all().forEach(function(u) {
+    if (uploadOf.has(u.track_id) || !tracks.has(u.track_id) || !fits(u.track_id, u.type, u.cid)) return;
+    uploadOf.set(u.track_id, { type: Number(u.type) || 1, cid: String(u.cid) });
+  });
+  uploadsByTrack.forEach(function(list, id) {
+    if (uploadOf.has(id) || !tracks.has(id)) return;
+    var u = list.find(function(x) { return fits(id, x.type, x.cid); });
+    if (u) uploadOf.set(id, { type: Number(u.type) || 1, cid: String(u.cid) });
   });
   var row = function(id, extra) {
     var t = tracks.get(id);

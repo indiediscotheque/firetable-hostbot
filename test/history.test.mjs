@@ -33,6 +33,60 @@ test("versions that sound different stay apart; the song key still joins them", 
   assert.notEqual(key("Artist", "Song Part 1"), key("Artist", "Song Part 2"));
 });
 
+test("sameVersion: an original is never its remix; a remixer's name may be spelled two ways", () => {
+  const v = (a, t) => tags.keysOf(tags.parse(a, t)).version;
+  assert.equal(tags.sameVersion(v("Geographer", "Kites"), v("Geographer", "Kites (Original Mix)")), true);
+  assert.equal(tags.sameVersion(v("Geographer", "Kites"), v("Geographer", "Kites (Limousines Remix)")), false);
+  assert.equal(tags.sameVersion(v("Geographer", "Kites (Limousines Remix)"), v("Geographer", "Kites")), false);
+  assert.equal(tags.sameVersion(v("Toro Y Moi", "Still Sound"), v("Toro Y Moi", "Still Sound (Live)")), false);
+  assert.equal(tags.sameVersion(v("Box of Wolves", "Let's Start Again (Aimes Remix)"), v("Box of Wolves", "Let's Start Again (Meloder Remix)")), false);
+  assert.equal(tags.sameVersion(v("Metronomy", "The Bay (2 Bears Remix)"), v("Metronomy", "The Bay (The 2 Bears Remix)")), true);
+  assert.equal(tags.sameVersion(v("DATA", "One in a Million (Drixxxé Remix)"), v("DATA", "One in a Million (Drixxxie Remix)")), true);
+  assert.equal(tags.sameVersion(v("Miike Snow", "Silvia (Robotberget Remix)"), v("Miike Snow", "Silvia (Roboberget Remix)")), true);
+});
+
+test("toolkit: an upload tagged as the original and as its remix is the remix (its tag now), and the original keeps its own uploads", () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8", env: { PATH: process.env.PATH } });
+  const fb = join(dir, "remix.json");
+  const t0 = 1700000000000;
+  writeFileSync(fb, JSON.stringify({
+    users: { uidChris: { username: "Chris" } },
+    globalTracks: {
+      "1origorigori": { artist: "Geographer", title: "Kites", first_play_date: t0, first_play_dj: "Chris", last_play_date: t0 + 9e8, last_play_dj: "Chris", type: 1 },
+      "1remixremixr": { artist: "Geographer", title: "Kites (Limousines Remix)", first_play_date: t0 + 1e8, first_play_dj: "Chris", last_play_date: t0 + 8e8, last_play_dj: "Chris", type: 1 },
+      "1remix2remix": { artist: "Geographer", title: "Kites (Limousines Remix)", first_play_date: t0 + 2e8, first_play_dj: "Chris", last_play_date: t0 + 2e8, last_play_dj: "Chris", type: 1 }
+    },
+    // the remix upload was played three times under the original's name before a mod fixed it
+    songHistory: {
+      "-r1": { artist: "Geographer", title: "Kites", dj: "Chris", djid: "uidChris", type: 1, cid: "remixremixr", when: t0 + 3e8 },
+      "-r2": { artist: "Geographer", title: "Kites", dj: "Chris", djid: "uidChris", type: 1, cid: "remixremixr", when: t0 + 4e8 },
+      "-r3": { artist: "Geographer", title: "Kites", dj: "Chris", djid: "uidChris", type: 1, cid: "remixremixr", when: t0 + 5e8 },
+      "-o1": { artist: "Geographer", title: "Kites", dj: "Chris", djid: "uidChris", type: 1, cid: "origorigori", when: t0 + 6e8 }
+    }
+  }));
+  try {
+    run("import-firebase", fb);
+    run("reconcile");
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const trackOf = (cid) => db.prepare("SELECT t.id, t.title FROM uploads u JOIN tracks t ON t.id = u.track_id WHERE u.cid = ?").get(cid);
+    const orig = trackOf("origorigori");
+    const remix = trackOf("remixremixr");
+    assert.equal(orig.title, "Kites");
+    assert.equal(remix.title, "Kites (Limousines Remix)");
+    assert.notEqual(orig.id, remix.id, "the remix upload isn't filed under the original");
+    assert.equal(trackOf("remix2remix").id, remix.id, "both remix uploads are one track");
+    const playsOn = (cid) => db.prepare("SELECT DISTINCT track_id FROM plays WHERE cid = ?").all(cid).map((r) => r.track_id);
+    assert.deepEqual(playsOn("remixremixr"), [remix.id], "plays of the remix upload count for the remix, whatever it was called then");
+    assert.deepEqual(playsOn("origorigori"), [orig.id]);
+    assert.equal(db.prepare("SELECT song_id FROM tracks WHERE id = ?").get(orig.id).song_id, db.prepare("SELECT song_id FROM tracks WHERE id = ?").get(remix.id).song_id, "still one song (all versions)");
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("artists: order, &/and, accents and case don't matter; 'The X' and 'X' are different artists", () => {
   assert.equal(key("Simon & Garfunkel", "The Boxer"), key("Simon and Garfunkel", "The Boxer"));
   assert.notEqual(key("The Rolling Stones", "Angie"), key("Rolling Stones", "Angie"));

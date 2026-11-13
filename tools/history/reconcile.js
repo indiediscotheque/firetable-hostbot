@@ -379,16 +379,27 @@ function reconcile(db, opts) {
   });
   var uploadMain = new Map(); // up -> its main spelling
   var conflicts = 0;
+  var versionSplits = 0;
   uploadSpellings.forEach(function(m, up) {
+    // An upload is one recording. Tagged as two versions ("Kites" and "Kites
+    // (Limousines Remix)"), the room's current tag for it (what mods fix)
+    // says which: only spellings of that version can be its main one.
+    var cur = uploadCurrent.get(up);
+    var curSi = cur ? spellingIndex.get(cur.artist + "\u0001" + cur.title) : undefined;
+    var curOk = curSi !== undefined && m.has(curSi) && !spellings[curSi].weak;
     var best = -1;
     var bestW = -Infinity;
     m.forEach(function(w, si) {
+      if (curOk && !spellings[si].weak && !sameVersion(spellings[si], spellings[curSi])) return;
       var adj = w + (spellings[si].weak ? -100 : 0) + tags.quality(spellings[si].artist, spellings[si].title) * 0.1;
       if (adj > bestW) { bestW = adj; best = si; }
     });
     uploadMain.set(up, best);
     m.forEach(function(w, si) {
       if (si === best || spellings[si].weak || spellings[best].weak) return;
+      // the same title as another version: a slip in the tags, never a reason
+      // to make the remix and the original one track
+      if (sameTitle(spellings[best], spellings[si]) && !sameVersion(spellings[best], spellings[si])) { versionSplits++; return; }
       if (compatible(spellings[best], spellings[si])) join(best, si, "same-upload", 0.99);
       else if (uf.find(best) !== uf.find(si) && !onlyFrom(spellings[si], WEAK_PLATFORM) && !onlyFrom(spellings[best], WEAK_PLATFORM)) {
         conflicts++;
@@ -398,6 +409,7 @@ function reconcile(db, opts) {
       }
     });
   });
+  if (versionSplits) log("  " + versionSplits + " upload tags naming another version of the song kept apart");
 
   // A spelling with only vague tags (the bot saved "Remember (feat. The
   // Presets)" as the artist, with no title) is the track of the upload it was
@@ -1155,7 +1167,13 @@ function onlyFrom(sp, set) {
 }
 function uploadUrl(up) { return up[0] === "1" ? "https://youtu.be/" + up.slice(1) : up[0] === "2" ? "https://api.soundcloud.com/tracks/" + up.slice(1) : up; }
 
+// Two spellings of one recording: close enough tags, and the same version
+// (an original is never a remix of itself; "Kites" and "Kites (Limousines
+// Remix)" are two tracks of one song).
 function compatible(a, b) {
+  return sameVersion(a, b) && sameTitle(a, b);
+}
+function sameTitle(a, b) {
   if (a.keys.title === b.keys.title) return true;
   var sameArtist = a.keys.artist === b.keys.artist || overlap(artistSets(a).full, artistSets(b).full);
   var s = tags.similarity(a.keys.title, b.keys.title);
@@ -1164,6 +1182,7 @@ function compatible(a, b) {
   if (a.keys.title.indexOf(b.keys.artist) !== -1 && b.keys.artist.length > 3 && (a.keys.title.indexOf(b.keys.title) !== -1)) return true;
   return s >= 0.85;
 }
+function sameVersion(a, b) { return tags.sameVersion(a.keys.version, b.keys.version); }
 function artistSets(sp) {
   if (sp._sets) return sp._sets;
   var primary = sp.keys.artist.split("+").filter(Boolean);
