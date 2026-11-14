@@ -787,11 +787,17 @@ test("ADAM DATA's five tabs: every play keeps its DJ and its upload", () => {
     assert.match(out, /djs\.csv: djs sheet/, "a djs tab (id, name, firsts, lasts) is read as DJs, not artists");
     assert.match(out, /trax_raw\.csv: links sheet/, "TRAX RAW (id, track_id, link, source_id) is read as each track's upload");
     assert.match(out, /playz\.csv: plays sheet/);
-    run("reconcile", "--adam-tz", "0");
+    // the copies moved into globalTracks in 2023, on a clock 5 hours off
+    const moved = join(dir, "moved.json");
+    writeFileSync(moved, JSON.stringify({ globalTracks: { "1Wp0y9MZBQE0": { artist: "Foals", title: "My Number", type: 1,
+      first_play_date: "2017-03-04 23:00:00", first_play_dj: "citizensips", last_play_date: "2017-03-07 01:00:00", last_play_dj: "eve" } } }));
+    run("import-firebase", moved);
+    const joined = run("reconcile", "--adam-tz", "0");
+    assert.match(joined, /2 first\/last plays from ADAM's era lined up with none of its plays: left out/);
     const store = require("../tools/history/store.js");
     const db = store.open(dir);
     const plays = db.prepare("SELECT t.artist, p.dj, p.type, p.cid FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
-    assert.equal(plays.length, 6, "TRAX's first and last plays are the same plays as PLAYZ's, counted once");
+    assert.equal(plays.length, 6, "TRAX's and globalTracks' first and last plays are the same plays as PLAYZ's, counted once");
     assert.deepEqual(plays.map((p) => p.dj), ["citizensips", "eve", "eve", "citizensips", "eve", "citizensips"]);
     assert.ok(plays.filter((p) => p.artist === "Foals").every((p) => p.type === 1 && p.cid === "Wp0y9MZBQE0"), "source_id 1 is YouTube");
     assert.ok(plays.filter((p) => p.artist === "Bear Hands").every((p) => p.type === 2 && p.cid === "48189395"), "source_id 0 is SoundCloud");

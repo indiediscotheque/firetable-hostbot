@@ -646,13 +646,27 @@ function reconcile(db, opts) {
   }
 
   var events = new Map(); // root -> [[at, src, role, dj, up]]
+  var adamPlays = null;   // when ADAM's every-play log (PLAYZ) starts and ends, if imported
   obsList.forEach(function(o) {
     if (!o[2] || o[1] === "tag") return;
     var at = toUtc(o[2], o[3], zones);
     var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     var src = sourceNames[o[4]];
+    if (src === "adam" && o[1] === "play") {
+      if (!adamPlays) adamPlays = { from: at, to: at, n: 0 };
+      adamPlays.from = Math.min(adamPlays.from, at);
+      adamPlays.to = Math.max(adamPlays.to, at);
+      adamPlays.n++;
+    }
     push(events, root, [at, src, o[1], djOf(o[5], src), o[6]]);
   });
+  // With ADAM's every play, its era's first and last plays (TRAX, and the
+  // copies moved into globalTracks) are only ever those same plays again: one
+  // that lines up with no play is a clock mismatch, never a play of its own
+  var markersDropped = 0;
+  var markerOnly = function(g) {
+    return !g.hasPlay && adamPlays && g.start >= adamPlays.from - windowMs && g.start <= adamPlays.to + windowMs;
+  };
 
   // ------------------------------------------------------------- write
   log("writing results...");
@@ -950,14 +964,18 @@ function reconcile(db, opts) {
     var g = null;
     ev.forEach(function(e) {
       var fits = g && e[0] - g.start <= windowMs && (!g.srcs.has(e[1]) || e[0] - g.lastAt < 2 * MIN || e[2] !== "play");
-      if (!fits) { g = { start: e[0], at: e[0], srcs: new Set(), dj: null, djRank: 99, lastAt: e[0], playAt: null, up: null, scrobbled: false }; groups.push(g); }
+      if (!fits) { g = { start: e[0], at: e[0], srcs: new Set(), dj: null, djRank: 99, lastAt: e[0], playAt: null, up: null, scrobbled: false, hasPlay: false }; groups.push(g); }
       g.srcs.add(e[1]);
+      if (e[2] === "play") g.hasPlay = true;
       g.lastAt = e[0];
       if (e[2] === "play" && (g.playAt == null || djRank(e[1]) < 99)) g.playAt = g.playAt == null || !isLastfm(e[1]) ? (g.playAt == null ? e[0] : Math.min(g.playAt, e[0])) : g.playAt;
       if (isLastfm(e[1])) g.scrobbled = true;
       if (e[3] && djRank(e[1]) < g.djRank) { g.dj = e[3]; g.djRank = djRank(e[1]); }
       if (e[4] && !g.up) g.up = e[4];
     });
+    var kept = groups.filter(function(x) { return !markerOnly(x); });
+    markersDropped += groups.length - kept.length;
+    groups = kept;
     t.plays = groups.length;
     t.scrobbles = groups.filter(function(x) { return x.scrobbled; }).length;
     var djsHere = new Set();
@@ -983,6 +1001,7 @@ function reconcile(db, opts) {
       if (fd && fd === f) djStat(f.dj).firsts++;
     }
   });
+  if (markersDropped) log("  " + markersDropped + " first/last plays from ADAM's era lined up with none of its plays: left out (ADAM's own log has every play)");
   // the name played under most (whatever its case), written the way it is most often
   function djName(k) {
     if (!k) return null;
@@ -1114,7 +1133,7 @@ function reconcile(db, opts) {
 
   var summary = {
     observations: obsList.length, spellings: spellings.length, tracks: trackRows.length, songs: songMembers.size,
-    uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length,
+    uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length, adamMarkersDropped: markersDropped,
     artistAliases: aliasReasons.length, review: review.length, accentFixes: accentFixes.length, adamClock: zone, adamMovedClock: zones[2],
     seconds: Math.round((Date.now() - started) / 1000)
   };

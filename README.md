@@ -164,7 +164,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!ytmusic`: how the last sync of the bot's YOUTUBE MUSIC playlist went, or what it's doing now (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)). `!ytsync` (mods) runs one now.
 
 ## play history
-`tools/history` joins the room's database (with ADAM's history, which was moved into it) and Last.fm into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
+`tools/history` joins ADAM's every play (its export, the ADAM DATA sheet), the room's database and Last.fm into one history of every play since the room began. Every spelling and upload of a song counts as one track, and the room gets true first plays (back past 2023, to its first play) and its own play counts. It runs as a GitHub Action (Actions → **Play history**: weekly, or by hand with a preview first) or from the command line; see [tools/history/README.md](tools/history/README.md). Publishing refuses to replace a better history (fewer tracks or plays than last time, mass tag changes).
 
 Once published (deploy `firebase-rules.json` first), for every song the bot:
 - links each upload to its track by its tags (`globalTracks/<upload>/song` → `globalSongs`), so a new copy of an old song shows its real first play
