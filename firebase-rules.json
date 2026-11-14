@@ -6,9 +6,10 @@
       ".read": true,
       "$comment": {
         ".read": true,
+        ".validate": "$comment.matches(/^[A-Za-z0-9_-]{1,40}$/)",
         ".write": "(auth.uid != null && (newData.child('chatID').exists() || root.child('users/' + auth.uid + '/hostbot').val() == true)&& ((!data.exists() || root.child('users/' + auth.uid + '/hostbot').val() == true || newData.child('hidden').val() == true) && root.child('banned/' + auth.uid).val() != true))",
         "chatID":{
-          ".validate": "newData.isString() && newData.parent().parent().parent().child('chatData').child(newData.val()).exists() && (!newData.parent().parent().parent().child('chatData').child(newData.val()).child('feedID').exists() || newData.parent().parent().parent().child('chatData').child(newData.val()).child('feedID').val() == $comment)"
+          ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.parent().parent().parent().child('chatData').child(newData.val()).exists() && (!newData.parent().parent().parent().child('chatData').child(newData.val()).child('feedID').exists() || newData.parent().parent().parent().child('chatData').child(newData.val()).child('feedID').val() == $comment)"
         },
         "hidden":{
              ".validate": "newData.isBoolean() && (auth.uid != null && (root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/mod').val() == true))"
@@ -23,7 +24,7 @@
       "$comment": {
         ".read": "root.child('banned/' + auth.uid).val() != true && (root.child('blocks').child(auth.uid).child(data.child('id').val()).val() != true && root.child('blocks').child(data.child('id').val()).child(auth.uid).val() != true)",
         ".write": "auth.uid != null && root.child('banned/' + auth.uid).val() != true && (root.child('users/' + auth.uid + '/hostbot').val() == true || (newData.exists() && newData.child('id').val() == auth.uid && (!data.exists() || data.child('id').val() == auth.uid)) || (!newData.exists() && data.child('id').val() == auth.uid))",
-        ".validate": "newData.hasChildren(['id', 'txt', 'time']) && newData.child('txt').isString() && newData.child('txt').val().length > 0 && newData.child('txt').val().length <= 240",
+        ".validate": "$comment.matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.hasChildren(['id', 'txt', 'time']) && newData.child('txt').isString() && newData.child('txt').val().length > 0 && newData.child('txt').val().length <= 240",
         "id": {
           ".validate": "newData.isString() && (!data.exists() || newData.val() == data.val())"
         },
@@ -49,7 +50,7 @@
           ".validate": "newData.isNumber()"
         },
         "feedID": {
-          ".validate": "newData.isString() && newData.parent().parent().parent().child('chatFeed').child(newData.val()).child('chatID').val() == $comment"
+          ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.parent().parent().parent().child('chatFeed').child(newData.val()).child('chatID').val() == $comment"
         },
         "reactions": {
           "$emoji": {

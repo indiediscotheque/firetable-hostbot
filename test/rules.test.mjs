@@ -53,6 +53,13 @@ await expect("DENIED", "extra field in a feed entry", eve.ref("chatFeed/f8").set
 await expect("DENIED", "feed entry chatID that's an object", eve.ref("chatFeed/f7").set({ chatID: { a: 1 } }));
 await expect("DENIED", "message with a card you don't own", eve.ref("chatData/cardx").set({ id: "eve", name: "eve", txt: "x", time: TS, card: "nope" }));
 await expect("DENIED", "message with a GRAB button", atomicChat("eve", "g1", "fg1", { grab: "c1" }));
+// The site puts chat keys in element ids: only push-style keys are allowed
+await expect("DENIED", "message key with selector characters", atomicChat("eve", "x,*", "fk1"));
+await expect("DENIED", "message key with markup", atomicChat("eve", "x\"><b>", "fk2"));
+await expect("DENIED", "message key with a space", eve.ref("chatData/a b").set({ id: "eve", name: "eve", txt: "x", time: TS }));
+await expect("DENIED", "feed key with selector characters", atomicChat("eve", "k3", "f,*"));
+await expect("DENIED", "feed entry pointing into a message", eve.ref("chatFeed/fk4").set({ chatID: "evemsg/txt" }));
+await expect("DENIED", "message key longer than 40", atomicChat("eve", "k".repeat(41), "fk5"));
 
 console.log("-- chat: normal use (ALLOWED)");
 await expect("ALLOWED", "message + feed entry in one write", atomicChat("eve", "a1", "fa1"));
