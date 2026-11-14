@@ -104,10 +104,11 @@ function report(db, dir, log) {
       genresLib.tagWeights(db).map(function(t) { return [t.tag, t.weight, t.artists, gmap.has(t.tag) ? (gmap.get(t.tag) || "(ignored)") : ""]; }));
   }
 
+  var houseDjs = new Set(store.getState(db, "house_djs") || []);
   files["djs.csv"] = csv.writeCsv(path.join(dir, "djs.csv"),
-    ["dj", "spellings_of_name", "plays", "first_plays", "tracks", "first_seen", "last_seen"],
+    ["dj", "spellings_of_name", "plays", "first_plays", "tracks", "first_seen", "last_seen", "room_bot"],
     db.prepare("SELECT * FROM djs ORDER BY plays DESC").iterate().map(function(d) {
-      return [d.name, d.aliases, d.plays, d.first_plays, d.tracks, iso(d.first_seen), iso(d.last_seen)];
+      return [d.name, d.aliases, d.plays, d.first_plays, d.tracks, iso(d.first_seen), iso(d.last_seen), houseDjs.has(d.name) ? "yes" : ""];
     }));
 
   files["merges.csv"] = csv.writeCsv(path.join(dir, "merges.csv"), ["track_id", "a", "b", "reason", "score"],
@@ -199,7 +200,8 @@ function report(db, dir, log) {
   add("## most first plays (the DJs who brought the most songs to the room)");
   add("| DJ | first plays | plays | active |");
   add("|---|---|---|---|");
-  db.prepare("SELECT * FROM djs ORDER BY first_plays DESC LIMIT 25").all().forEach(function(d) {
+  var house = new Set(store.getState(db, "house_djs") || []);
+  db.prepare("SELECT * FROM djs ORDER BY first_plays DESC").all().filter(function(d) { return !house.has(d.name); }).slice(0, 25).forEach(function(d) {
     add("| " + md(d.name) + " | " + n(d.first_plays) + " | " + n(d.plays) + " | " + iso(d.first_seen).slice(0, 4) + "–" + iso(d.last_seen).slice(0, 4) + " |");
   });
   add();

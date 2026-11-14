@@ -797,7 +797,12 @@ test("ADAM DATA's five tabs: every play keeps its DJ and its upload", () => {
     assert.ok(plays.filter((p) => p.artist === "Bear Hands").every((p) => p.type === 2 && p.cid === "48189395"), "source_id 0 is SoundCloud");
     const djs = Object.fromEntries(db.prepare("SELECT name, plays, first_plays FROM djs").all().map((d) => [d.name, [d.plays, d.first_plays]]));
     assert.deepEqual(djs, { citizensips: [3, 1], eve: [3, 1] }, "every play counts for its DJ, not only first and last plays");
+    // eve was the room's bot (house-djs.csv): her plays count for songs, but she gets no DJ page
+    assert.deepEqual(store.getState(db, "house_djs"), ["eve"]);
     db.close();
+    run("report");
+    assert.match(readFileSync(join(dir, "djs.csv"), "utf8"), /\neve,.*,yes\r?\n/, "djs.csv marks the room's bots");
+    assert.doesNotMatch(readFileSync(join(dir, "summary.md"), "utf8").split("## most first plays")[1].split("## files")[0], /\| eve \|/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -838,6 +843,15 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.ok(fav.every((r, i) => i === 0 || fav[i - 1].plays >= r.plays), "favorites: most played first");
     assert.ok(Object.values(u).every((v) => !JSON.stringify(v).includes('"' + djs[1] + '"')), "a DJ who hid their name shows nowhere");
     assert.ok(!Object.keys(u["discover/lib/djs"]).some((k) => u["discover/lib/djs"][k].name === djs[1]), "and has no DJ page");
+    // the room's bot (house-djs.csv): not in "who plays it", no DJ page, but its plays still count for songs
+    const whoIn = (lib) => Object.keys(lib).filter((k) => /^discover\/lib\/genre\//.test(k)).flatMap((k) => (lib[k].who || []).map((x) => x.dj));
+    const bot = whoIn(u)[0];
+    assert.ok(bot, "someone plays a genre");
+    store.setState(db, "house_djs", [bot]);
+    const asBot = library.buildLibrary(db, { users, bpm: {}, cards: {}, now: Date.UTC(2026, 10, 11) }).updates;
+    assert.ok(!whoIn(asBot).includes(bot), "a bot isn't in who plays a genre");
+    assert.ok(!Object.values(asBot["discover/lib/djs"]).some((d) => d.name === bot), "and has no DJ page");
+    assert.equal(asBot["discover/lib/genres"]["nu-disco"].plays, u["discover/lib/genres"]["nu-disco"].plays, "its plays still count");
     const year = u["discover/lib/year/2017"];
     assert.equal(year.more[0].cid, "notplayed01", "a year's songs not played here yet are its finds");
     assert.equal(u["discover/lib/years"][2017].songs, 2);

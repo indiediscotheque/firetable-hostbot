@@ -24,6 +24,7 @@ var fs = require("fs");
 var path = require("path");
 var tags = require("../../lib/tags");
 var genres = require("./genres");
+var store = require("./store");
 
 var DAY = 86400000;
 var ROWS = { fav: 100, newHere: 50, deep: 50, dj: 30, artist: 25, year: 40, yearMore: 24, rising: 20, onThisDay: 8 };
@@ -135,6 +136,10 @@ function buildLibrary(db, opts) {
     if (uid) uidOfDj.set(d.name, uid);
   });
   var hiddenDj = function(name) { var uid = name && uidOfDj.get(name); return !!(uid && hiddenUid.has(uid)); };
+  // the room's own bots (house-djs.csv): their plays count for songs, but they
+  // get no DJ page and aren't in "who plays it" or similar DJs
+  var houseDj = new Set(store.getState(db, "house_djs") || []);
+  var notDj = function(name) { return hiddenDj(name) || houseDj.has(name); };
   var whoOf = function(name) {
     if (!name || hiddenDj(name)) return {};
     return { dj: name, djid: uidOfDj.get(name) || null };
@@ -250,7 +255,7 @@ function buildLibrary(db, opts) {
     });
   });
   djTrack.forEach(function(m, dj) {
-    if (hiddenDj(dj)) return;
+    if (notDj(dj)) return;
     m.forEach(function(n, id) {
       (genreOf.get(id) || []).forEach(function(g) { var gi = genreIdx.get(g); gi.djs.set(dj, (gi.djs.get(dj) || 0) + n); });
     });
@@ -287,7 +292,7 @@ function buildLibrary(db, opts) {
   var djVec = new Map(); // dj -> {map: Map(track -> n), norm}
   var cardsOf = {};
   Object.keys(opts.cards || {}).forEach(function(k) { var o = (opts.cards[k] || {}).owner; if (o) cardsOf[o] = (cardsOf[o] || 0) + 1; });
-  var eligible = djRows.filter(function(d) { return (d.plays || 0) >= DJ_MIN_PLAYS && !hiddenDj(d.name) && djTrack.has(d.name); });
+  var eligible = djRows.filter(function(d) { return (d.plays || 0) >= DJ_MIN_PLAYS && !notDj(d.name) && djTrack.has(d.name); });
   eligible.forEach(function(d) {
     var m = djTrack.get(d.name);
     var top = Array.from(m.entries()).sort(function(a, b) { return b[1] - a[1]; }).slice(0, 400);
@@ -381,7 +386,7 @@ function buildLibrary(db, opts) {
   artistList.forEach(function(a) { a.tracks.forEach(function(id) { trackSet.add(id); }); });
   // who plays each artist most
   djTrack.forEach(function(m, dj) {
-    if (hiddenDj(dj)) return;
+    if (notDj(dj)) return;
     m.forEach(function(n, id) {
       if (!trackSet.has(id)) return;
       var t = tracks.get(id);

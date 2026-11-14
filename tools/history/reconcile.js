@@ -1018,6 +1018,22 @@ function reconcile(db, opts) {
     }
   });
 
+  // the room's own bots (house-djs.csv): DJs by the history, but never shown as one
+  var houseWanted = new Set();
+  listFiles(opts.dir, "house-djs.csv").forEach(function(f) {
+    if (!fs.existsSync(f)) return;
+    fs.readFileSync(f, "utf8").split(/\r?\n/).forEach(function(line) {
+      line = line.trim();
+      if (line && line[0] !== "#") houseWanted.add(line.toLowerCase());
+    });
+  });
+  var house = [];
+  djStats.forEach(function(st, k) {
+    var names = [djName(k)].concat(Array.from((djDisplay.get(k) || new Map()).keys()));
+    if (names.some(function(nm) { return nm && houseWanted.has(String(nm).toLowerCase()); })) house.push(djName(k));
+  });
+  if (house.length) log("  the room's bots, not counted as DJs: " + house.join(", "));
+
   store.tx(db, function() {
     ["variants", "tracks", "songs", "uploads", "plays", "djs", "merges", "review", "placeholders"].forEach(function(t) { db.exec("DELETE FROM " + t); });
     var insPh = db.prepare("INSERT INTO placeholders (upload, tag, action, artist, title, evidence, suggestion, logs, plays, first_at, last_at, djs, track_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -1087,6 +1103,7 @@ function reconcile(db, opts) {
     ytmWanted.sort(function(a, b) { return b.songs - a.songs; });
     store.setState(db, "ytm_wanted", ytmWanted);
     store.setState(db, "artist_accents", artistAccents);
+    store.setState(db, "house_djs", house);
     store.setState(db, "reconcile", {
       at: Date.now(), zone: zone, zones: zones, tz: tzReport, window: windowMs / MIN, conflicts: conflicts,
       accentFixes: accentFixes.length, seconds: Math.round((Date.now() - started) / 1000)
