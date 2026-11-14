@@ -52,6 +52,18 @@ test("a chart counts plays (not short skips), groups a song's uploads and names 
   assert.equal(hidden.rows[0].djid, null);
 });
 
+test("the room's bot isn't a DJ: its plays count for songs, never as who played them or in the DJ count", () => {
+  const plays = [play("A", 1, { djid: "bot", dj: "jarvis" }), play("A", 2, { djid: "bot", dj: "jarvis" }), play("A", 3), play("B", 4, { djid: "bot", dj: "jarvis" })];
+  const c = discover.buildChart(plays, { house: (uid) => uid === "bot" });
+  assert.equal(c.plays, 4);
+  assert.equal(c.djs, 1);
+  assert.deepEqual(c.rows.map((r) => [r.key, r.plays, r.dj]), [["A", 3, "dj1"], ["B", 1, null]]);
+  const fires = discover.djFires(plays.map((e) => Object.assign({ f: 1 }, e)), { house: (uid) => uid === "bot" });
+  assert.deepEqual(Object.keys(fires.djs), ["u1"]);
+  const nights = discover.themeNights(plays.map((e) => Object.assign({ th: "Italo Night" }, e)), { house: (uid) => uid === "bot" });
+  assert.deepEqual(nights[0].djs, ["dj1"]);
+});
+
 test("weekly movement: places up and down, new, back again, and weeks in a row", () => {
   const prev = { rows: [{ key: "A", wks: 3 }, { key: "B", wks: 1 }, { key: "C", wks: 2 }], seen: { A: 1, B: 1, C: 1, Z: 1 } };
   const rows = discover.withMovement([{ key: "B" }, { key: "A" }, { key: "Z" }, { key: "N" }, { key: "C" }], prev);

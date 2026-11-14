@@ -176,8 +176,17 @@ function reconcile(db, opts) {
 
   var rows = db.prepare("SELECT source, artist, title, type, cid, role, at, naive_tz, dj, weight, extra FROM obs ORDER BY id").iterate();
   var pendingAdamPlays = [];
+  var adamUpload = new Map(); // ADAM track id -> its upload (TRAX RAW)
+  var adamNoUpload = [];      // ADAM plays logged by track id only, waiting for it
   for (var row of rows) {
     var extra = row.extra ? JSON.parse(row.extra) : null;
+    if (row.source === "adam" && extra && extra.adam && row.role === "tag" && !row.artist && row.type && row.cid) {
+      adamUpload.set(String(extra.adam), row.type + "" + row.cid);
+    }
+    if (row.source === "adam" && extra && extra.adam && row.role !== "tag" && !row.cid && row.artist) {
+      adamNoUpload.push(row);
+      continue;
+    }
     if (row.source === "adam" && extra && extra.adam && row.role === "tag" && row.artist) {
       adamTags.set(String(extra.adam), [row.artist, row.title]);
       if (extra.adam_artist) {
@@ -216,6 +225,19 @@ function reconcile(db, opts) {
     }
     addObs(row, up);
   }
+  // ADAM's plays and first/last plays name the track, not the upload: give
+  // each the upload TRAX RAW has for that track (then on as any other row)
+  adamNoUpload.forEach(function(r) {
+    var u = adamUpload.get(String(JSON.parse(r.extra).adam));
+    if (u) { r.type = Number(u[0]); r.cid = u.slice(1); }
+    var up = u || null;
+    var plan = up && phPlan.get(up);
+    if (plan) {
+      if (plan.action !== "renamed") return;
+      if (ph.is(r.artist, r.title)) r = Object.assign({}, r, { artist: plan.artist, title: plan.title });
+    } else if (ph.is(r.artist, r.title)) return;
+    addObs(r, up);
+  });
   pendingAdamPlays.forEach(function(p) {
     var t = adamTags.get(String(JSON.parse(p[0].extra).adam));
     if (!t || ph.is(t[0], t[1])) return;
@@ -229,18 +251,23 @@ function reconcile(db, opts) {
     if (si === undefined) {
       si = spellings.length;
       spellingIndex.set(key, si);
-      spellings.push({ artist: tags.clean(r.artist), title: tags.clean(r.title), seen: 0, weight: 0, maxWeight: 0, plays: 0, scrobbles: 0, sources: new Set(), last: 0 });
+      spellings.push({ artist: tags.clean(r.artist), title: tags.clean(r.title), logs: 0, seen: 0, weight: 0, maxWeight: 0, plays: 0, scrobbles: 0, sources: new Set(), last: 0 });
     }
     var sp = spellings[si];
-    sp.seen++;
-    sp.weight += r.weight;
-    if (r.weight > sp.maxWeight) sp.maxWeight = r.weight;
+    // how a song or artist is written is the room's call: ADAM's logs count
+    // for plays, dates, DJs and uploads, and name a track or artist only
+    // where the room has nothing of its own (see ADAM_VOTE)
+    var vote = r.source === "adam" ? ADAM_VOTE : 1;
+    sp.logs++;
+    sp.seen += vote;
+    sp.weight += r.weight * vote;
+    if (r.weight * vote > sp.maxWeight) sp.maxWeight = r.weight * vote;
     sp.sources.add(r.source);
     if (r.at && r.at > sp.last) sp.last = r.at;
     if (r.role === "play") { sp.plays++; if (isLastfm(r.source)) sp.scrobbles++; }
     var s = sourceIdx.get(r.source);
     if (s === undefined) { s = sourceNames.length; sourceIdx.set(r.source, s); sourceNames.push(r.source); }
-    obsList.push([si, r.role, r.at, r.naive_tz, s, r.dj, up, r.weight]);
+    obsList.push([si, r.role, r.at, r.naive_tz, s, r.dj, up, r.weight * vote]);
   }
   log("  " + obsList.length + " observations, " + spellings.length + " spellings");
 
@@ -624,13 +651,27 @@ function reconcile(db, opts) {
   }
 
   var events = new Map(); // root -> [[at, src, role, dj, up]]
+  var adamPlays = null;   // when ADAM's every-play log (PLAYZ) starts and ends, if imported
   obsList.forEach(function(o) {
     if (!o[2] || o[1] === "tag") return;
     var at = toUtc(o[2], o[3], zones);
     var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     var src = sourceNames[o[4]];
+    if (src === "adam" && o[1] === "play") {
+      if (!adamPlays) adamPlays = { from: at, to: at, n: 0 };
+      adamPlays.from = Math.min(adamPlays.from, at);
+      adamPlays.to = Math.max(adamPlays.to, at);
+      adamPlays.n++;
+    }
     push(events, root, [at, src, o[1], djOf(o[5], src), o[6]]);
   });
+  // With ADAM's every play, its era's first and last plays (TRAX, and the
+  // copies moved into globalTracks) are only ever those same plays again: one
+  // that lines up with no play is a clock mismatch, never a play of its own
+  var markersDropped = 0;
+  var markerOnly = function(g) {
+    return !g.hasPlay && adamPlays && g.start >= adamPlays.from - windowMs && g.start <= adamPlays.to + windowMs;
+  };
 
   // ------------------------------------------------------------- write
   log("writing results...");
@@ -710,7 +751,7 @@ function reconcile(db, opts) {
         : "left as it is until YouTube Music is checked";
       if (!ytmChecked.has(c)) ytmWanted.push({ key: c, name: cur.name, accented: pick.word, logs: pick.n });
     }
-    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + pick.n + " logs)" : "", youtube_music: ref ? ref.name + " (" + ref.n + ")" : "", outcome: outcome, shown_as: name });
+    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + Math.round(pick.n) + " logs)" : "", youtube_music: ref ? ref.name + " (" + ref.n + ")" : "", outcome: outcome, shown_as: name });
     bestArtistName.set(c, { name: name, score: cur.score, by: by || "the room's usual spelling" });
   });
   // YouTube Music's most used spelling of an artist, from any of their keys
@@ -817,7 +858,7 @@ function reconcile(db, opts) {
     var titleLogs = accentBook(accentMin);
     members.forEach(function(si) { titleLogs.note("t", "t", spellings[si].title, spellings[si].seen, trusted(spellings[si])); });
     var tp = titleLogs.pick("t", "t", title);
-    if (tp) { title = tp.word; restoredFrom.push("title in " + tp.n + " logs" + (tp.trusted ? " (incl. a trusted source)" : "")); }
+    if (tp) { title = tp.word; restoredFrom.push("title in " + Math.round(tp.n) + " logs" + (tp.trusted ? " (incl. a trusted source)" : "")); }
     // the artist as other spellings of this track have it (an upload's own
     // YouTube/SoundCloud data counts here, on its own track)
     var artistLogs = accentBook(accentMin);
@@ -826,7 +867,7 @@ function reconcile(db, opts) {
     // YouTube Music knows this artist: only its accents
     var apRef = ap && chosen.parsed.artists.length === 1 ? ytmRef([chosen.keys.artist].concat(keysOfArtist.get(chosen.keys.artist) || [])) : null;
     if (apRef && (withAccentsOf(artist, apRef.name) || "").toLowerCase() !== ap.word.toLowerCase()) ap = null;
-    if (ap) { artist = ap.word; restoredFrom.push("artist in " + ap.n + " logs" + (ap.trusted ? " (incl. a trusted source)" : "")); }
+    if (ap) { artist = ap.word; restoredFrom.push("artist in " + Math.round(ap.n) + " logs" + (ap.trusted ? " (incl. a trusted source)" : "")); }
     // 2: word by word, from this artist's other songs ("Joga (Live)" -> "Jóga (Live)")
     var restoredWords = [];
     title = title.split(WORD_SPLIT).map(function(tok) {
@@ -837,7 +878,7 @@ function reconcile(db, opts) {
         if (p && (!best || p.n > best.n)) best = p;
       });
       if (!best) return tok;
-      restoredWords.push(tok + "→" + best.word + " (" + best.n + " logs)");
+      restoredWords.push(tok + "→" + best.word + " (" + Math.round(best.n) + " logs)");
       return matchCase(best.word, tok);
     }).join("");
     if (restoredWords.length) restoredFrom.push("words: " + restoredWords.join(", "));
@@ -928,14 +969,18 @@ function reconcile(db, opts) {
     var g = null;
     ev.forEach(function(e) {
       var fits = g && e[0] - g.start <= windowMs && (!g.srcs.has(e[1]) || e[0] - g.lastAt < 2 * MIN || e[2] !== "play");
-      if (!fits) { g = { start: e[0], at: e[0], srcs: new Set(), dj: null, djRank: 99, lastAt: e[0], playAt: null, up: null, scrobbled: false }; groups.push(g); }
+      if (!fits) { g = { start: e[0], at: e[0], srcs: new Set(), dj: null, djRank: 99, lastAt: e[0], playAt: null, up: null, scrobbled: false, hasPlay: false }; groups.push(g); }
       g.srcs.add(e[1]);
+      if (e[2] === "play") g.hasPlay = true;
       g.lastAt = e[0];
       if (e[2] === "play" && (g.playAt == null || djRank(e[1]) < 99)) g.playAt = g.playAt == null || !isLastfm(e[1]) ? (g.playAt == null ? e[0] : Math.min(g.playAt, e[0])) : g.playAt;
       if (isLastfm(e[1])) g.scrobbled = true;
       if (e[3] && djRank(e[1]) < g.djRank) { g.dj = e[3]; g.djRank = djRank(e[1]); }
       if (e[4] && !g.up) g.up = e[4];
     });
+    var kept = groups.filter(function(x) { return !markerOnly(x); });
+    markersDropped += groups.length - kept.length;
+    groups = kept;
     t.plays = groups.length;
     t.scrobbles = groups.filter(function(x) { return x.scrobbled; }).length;
     var djsHere = new Set();
@@ -961,6 +1006,7 @@ function reconcile(db, opts) {
       if (fd && fd === f) djStat(f.dj).firsts++;
     }
   });
+  if (markersDropped) log("  " + markersDropped + " first/last plays from ADAM's era lined up with none of its plays: left out (ADAM's own log has every play)");
   // the name played under most (whatever its case), written the way it is most often
   function djName(k) {
     if (!k) return null;
@@ -996,6 +1042,22 @@ function reconcile(db, opts) {
     }
   });
 
+  // the room's own bots (house-djs.csv): DJs by the history, but never shown as one
+  var houseWanted = new Set();
+  listFiles(opts.dir, "house-djs.csv").forEach(function(f) {
+    if (!fs.existsSync(f)) return;
+    fs.readFileSync(f, "utf8").split(/\r?\n/).forEach(function(line) {
+      line = line.trim();
+      if (line && line[0] !== "#") houseWanted.add(line.toLowerCase());
+    });
+  });
+  var house = [];
+  djStats.forEach(function(st, k) {
+    var names = [djName(k)].concat(Array.from((djDisplay.get(k) || new Map()).keys()));
+    if (names.some(function(nm) { return nm && houseWanted.has(String(nm).toLowerCase()); })) house.push(djName(k));
+  });
+  if (house.length) log("  the room's bots, not counted as DJs: " + house.join(", "));
+
   store.tx(db, function() {
     ["variants", "tracks", "songs", "uploads", "plays", "djs", "merges", "review", "placeholders"].forEach(function(t) { db.exec("DELETE FROM " + t); });
     var insPh = db.prepare("INSERT INTO placeholders (upload, tag, action, artist, title, evidence, suggestion, logs, plays, first_at, last_at, djs, track_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -1005,7 +1067,7 @@ function reconcile(db, opts) {
     });
     var insV = db.prepare("INSERT INTO variants (artist, title, track_key, song_key, track_id, seen, plays, scrobbles, sources, weak, suspect) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
     spellings.forEach(function(sp, i) {
-      insV.run(sp.artist, sp.title, sp.raw.track, sp.keys.song, spellingTrack[i], sp.seen, sp.plays, sp.scrobbles, Array.from(sp.sources).sort().join(","), sp.weak ? 1 : 0, sp.parsed.suspect);
+      insV.run(sp.artist, sp.title, sp.raw.track, sp.keys.song, spellingTrack[i], sp.logs, sp.plays, sp.scrobbles, Array.from(sp.sources).sort().join(","), sp.weak ? 1 : 0, sp.parsed.suspect);
     });
     var insT = db.prepare(`INSERT INTO tracks (id, song_id, artist, title, version, plays, scrobbles, djs, first_play_at, first_play_dj, first_dj, first_dj_at,
       last_play_at, last_play_dj, uploads, spellings, confidence, keys, tidy_junk, tidy_rsn, protected) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -1065,6 +1127,7 @@ function reconcile(db, opts) {
     ytmWanted.sort(function(a, b) { return b.songs - a.songs; });
     store.setState(db, "ytm_wanted", ytmWanted);
     store.setState(db, "artist_accents", artistAccents);
+    store.setState(db, "house_djs", house);
     store.setState(db, "reconcile", {
       at: Date.now(), zone: zone, zones: zones, tz: tzReport, window: windowMs / MIN, conflicts: conflicts,
       accentFixes: accentFixes.length, seconds: Math.round((Date.now() - started) / 1000)
@@ -1075,7 +1138,7 @@ function reconcile(db, opts) {
 
   var summary = {
     observations: obsList.length, spellings: spellings.length, tracks: trackRows.length, songs: songMembers.size,
-    uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length,
+    uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length, adamMarkersDropped: markersDropped,
     artistAliases: aliasReasons.length, review: review.length, accentFixes: accentFixes.length, adamClock: zone, adamMovedClock: zones[2],
     seconds: Math.round((Date.now() - started) / 1000)
   };
@@ -1089,6 +1152,11 @@ function reconcile(db, opts) {
 // accentMin logs have it, or a trusted source does; it doesn't need to beat
 // the plain one, which years of stripping for the old Last.fm bug made common.
 var YTM_SURE = 3; // uploads from an artist's Topic channel that make YouTube Music's spelling theirs
+// One of ADAM's logs against one of the room's, in how a track or artist is
+// written: all of ADAM's 640,000 plays together weigh less than one of the
+// room's own tags, so the room's cleaned-up tags always win, and ADAM's only
+// decide between ADAM's own spellings (a track or artist the room never tagged)
+var ADAM_VOTE = 1e-6;
 var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
 function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;

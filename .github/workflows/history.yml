@@ -42,7 +42,7 @@ on:
         type: boolean
         default: false
       adam_csv:
-        description: "Rarely needed (ADAM's history is already in the database): link to a separate ADAM export to import and keep"
+        description: "ADAM's export, once: link to the ADAM DATA Google Sheet (anyone with the link). Every tab, PLAYZ's every play and DJ included, is imported and kept"
         type: string
         default: ""
       rebuild:

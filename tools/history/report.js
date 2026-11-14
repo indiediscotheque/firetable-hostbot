@@ -104,11 +104,43 @@ function report(db, dir, log) {
       genresLib.tagWeights(db).map(function(t) { return [t.tag, t.weight, t.artists, gmap.has(t.tag) ? (gmap.get(t.tag) || "(ignored)") : ""]; }));
   }
 
+  var houseDjs = new Set(store.getState(db, "house_djs") || []);
   files["djs.csv"] = csv.writeCsv(path.join(dir, "djs.csv"),
-    ["dj", "spellings_of_name", "plays", "first_plays", "tracks", "first_seen", "last_seen"],
+    ["dj", "spellings_of_name", "plays", "first_plays", "tracks", "first_seen", "last_seen", "room_bot"],
     db.prepare("SELECT * FROM djs ORDER BY plays DESC").iterate().map(function(d) {
-      return [d.name, d.aliases, d.plays, d.first_plays, d.tracks, iso(d.first_seen), iso(d.last_seen)];
+      return [d.name, d.aliases, d.plays, d.first_plays, d.tracks, iso(d.first_seen), iso(d.last_seen), houseDjs.has(d.name) ? "yes" : ""];
     }));
+
+  // ADAM's spellings against the names the room chose: the room's tags name
+  // every track it has; ADAM names only the ones it alone knows
+  var adamRows = [];
+  var adamTally = { roomNamed: 0, differ: 0, adamOnly: 0 };
+  var byTrack = new Map();
+  db.prepare("SELECT v.artist, v.title, v.plays, v.sources, v.track_id, t.artist ta, t.title tt, t.plays tp FROM variants v JOIN tracks t ON t.id = v.track_id").all().forEach(function(v) {
+    if (!byTrack.has(v.track_id)) byTrack.set(v.track_id, { shown: v.ta + " - " + v.tt, plays: v.tp, adam: [], room: [] });
+    var srcs = String(v.sources || "").split(",");
+    var e = byTrack.get(v.track_id);
+    if (srcs.indexOf("adam") !== -1) e.adam.push(v.artist + " - " + v.title);
+    if (srcs.some(function(x) { return x && x !== "adam"; })) e.room.push(v.artist + " - " + v.title);
+  });
+  byTrack.forEach(function(e, id) {
+    if (!e.adam.length) return;
+    if (!e.room.length) {
+      adamTally.adamOnly++;
+      adamRows.push([id, "only ADAM has it", e.shown, e.adam.join(" | "), "", e.plays]);
+      return;
+    }
+    adamTally.roomNamed++;
+    var differ = e.adam.filter(function(a) { return a !== e.shown; });
+    if (!differ.length) return;
+    adamTally.differ++;
+    adamRows.push([id, "the room's tags", e.shown, differ.join(" | "), e.room.slice(0, 5).join(" | "), e.plays]);
+  });
+  adamRows.sort(function(a, b) { return (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) || b[5] - a[5]; });
+  if (adamRows.length || adamTally.roomNamed) {
+    files["adam_names.csv"] = csv.writeCsv(path.join(dir, "adam_names.csv"),
+      ["track_id", "named_by", "shown_as", "adam_spellings", "room_spellings", "plays"], adamRows);
+  }
 
   files["merges.csv"] = csv.writeCsv(path.join(dir, "merges.csv"), ["track_id", "a", "b", "reason", "score"],
     db.prepare("SELECT * FROM merges ORDER BY reason, score").iterate().map(function(m) { return [m.track_id, m.a, m.b, m.reason, m.score]; }));
@@ -199,10 +231,22 @@ function report(db, dir, log) {
   add("## most first plays (the DJs who brought the most songs to the room)");
   add("| DJ | first plays | plays | active |");
   add("|---|---|---|---|");
-  db.prepare("SELECT * FROM djs ORDER BY first_plays DESC LIMIT 25").all().forEach(function(d) {
+  var house = new Set(store.getState(db, "house_djs") || []);
+  db.prepare("SELECT * FROM djs ORDER BY first_plays DESC").all().filter(function(d) { return !house.has(d.name); }).slice(0, 25).forEach(function(d) {
     add("| " + md(d.name) + " | " + n(d.first_plays) + " | " + n(d.plays) + " | " + iso(d.first_seen).slice(0, 4) + "–" + iso(d.last_seen).slice(0, 4) + " |");
   });
   add();
+  if (adamTally.roomNamed || adamTally.adamOnly) {
+    add("## ADAM's names");
+    add("ADAM's logs count for plays, dates, DJs and uploads. How a track is written is the room's call wherever the room has tagged it; ADAM names only the tracks the room never tagged. `adam_names.csv` lists both.");
+    add();
+    add("| | tracks |");
+    add("|---|---|");
+    add("| named by the room's tags, ADAM spelled differently | " + n(adamTally.differ) + " |");
+    add("| named by the room's tags, ADAM spelled the same | " + n(adamTally.roomNamed - adamTally.differ) + " |");
+    add("| only ADAM has them (named by ADAM, artist as the room writes it) | " + n(adamTally.adamOnly) + " |");
+    add();
+  }
   add("## files");
   Object.keys(files).forEach(function(f) { add("- `" + f + "`: " + n(files[f]) + " rows"); });
   fs.writeFileSync(path.join(dir, "summary.md"), lines.join("\n") + "\n");

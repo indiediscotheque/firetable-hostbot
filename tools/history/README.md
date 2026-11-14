@@ -12,7 +12,7 @@ npm run history -- help
 `.github/workflows/history.yml` runs it all on GitHub: every Monday, or by hand from Actions → **Play history** → Run workflow.
 1. Add the bot's `.env` values as repository secrets (Settings → Secrets and variables → Actions): `FIREBASE_KEY`, `FIREBASE_DB`, `FIRETABLE_USER`, `FIRETABLE_PASS`, `LASTFM_APIKEY`, `LASTFM_USERNAME`, `YOUTUBE_KEY`, `SOUNDCLOUD_KEY`.
 2. Deploy `firebase-rules.json`.
-3. Run the workflow with **publish** unticked. ADAM's history was moved into the room's database in 2023: each upload's first and last play and DJ in `globalTracks` (keyed by type + upload id, so early SoundCloud ids as short as `217819` are read as uploads too). It comes in with everything else. The run's log describes how each path is laid out (fields and kinds of values, no data); if something there isn't read yet, that log line is what to send. ADAM's own ids, raw tags, artists and DJs (`globalTrackRaws`, `globalArtists`, `globalDjs`) are read too if they ever turn up there. The **ADAM sheet tab** field is only for a separate ADAM export, if one ever turns up.
+3. Run the workflow with **publish** unticked. ADAM's history was moved into the room's database in 2023: each upload's first and last play and DJ in `globalTracks` (keyed by type + upload id, so early SoundCloud ids as short as `217819` are read as uploads too). It comes in with everything else. The run's log describes how each path is laid out (fields and kinds of values, no data); if something there isn't read yet, that log line is what to send. ADAM's own ids, raw tags, artists and DJs (`globalTrackRaws`, `globalArtists`, `globalDjs`) are read too if they ever turn up there. Those are only each upload's first and last play: to give every 2016–2022 play its DJ, paste the **ADAM DATA** Google Sheet's link into **adam_csv** once (see below).
 4. Read the run's summary page and its reports (downloadable in a private repository). When it looks right, run it again with **publish** ticked.
 5. From then on the Monday runs refresh everything and show a preview. To have them publish too, add the repository variable `HISTORY_AUTO_PUBLISH` = `true` (Settings → Secrets and variables → Actions → Variables).
 
@@ -28,7 +28,7 @@ Tick **force** to send it anyway. A preview never writes anything.
 **Undo.** Every publish first saves the old tags of each upload it changes (`historyArchive/tagBackups` in the room's database). To undo the last publish, run the Action with **undo** ticked (or `publish --off` then `undo-tags --write`): the bot goes back on its old counts and the upload tags come back, except on uploads someone has retagged since. `undo-tags --run <id>` undoes an earlier one.
 
 ## first run (on a computer or the bot server)
-1. **ADAM** is already in the room's database (its first and last plays, in `globalTracks`) and comes in with step 2. Only if you have a separate ADAM export (CSV, one per sheet): `npm run history -- import-adam file.csv`. Google Sheets turns some titles into times and numbers (`2:00` becomes `2:00 AM`); those are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`.
+1. **ADAM**: the room's database has each upload's first and last play from ADAM (`globalTracks`), which comes in with step 2. ADAM's own export, the **ADAM DATA** Google Sheet, has every play: `npm run history -- import-adam --archive <the sheet's link>` (or paste the link into the Action's **adam_csv** once). A link to the whole sheet imports every tab: `TRAX` (each track's tags and first and last play), `ARTISTS` and `djs` (names by id), `TRAX RAW` (each track's upload: `source_id` 1 is YouTube, 0 SoundCloud) and `PLAYZ` (all 642,696 plays from May 2016 to Nov 2022, each with its DJ). `--archive` keeps a copy in the room's database, so every later run has it. Google Sheets turns some titles into times and numbers (`2:00` becomes `2:00 AM`); those are repaired where any other source has the real title, and listed in `spreadsheet_damage.csv`.
 2. **The room's database**, read as the bot: global tags and ADAM's moved history, Recent, Fresh, every DJ's playlists and queues, the play and tag logs, mods' review answers. `npm run history -- probe` shows how each path is laid out first, without its data.
    ```bash
    npm run history -- fetch-firebase
@@ -93,6 +93,8 @@ Rohn Standard Notation is the guide for *recognising* a song, never a rule for r
 - **Typos**: swapped letters and very close titles are merged; anything less certain goes to review. Numbers never count as typos (`Part 1` ≠ `Part 2`).
 - **Vague tags** (`Unknown - Intro`, `Track 3`) are never matched across uploads. One that is only ever logged for uploads of one track (the bot once saved `Remember (feat. The Presets)` as the artist, with no title) is that track's.
 
+**ADAM never outvotes the room's tags.** ADAM's logs count for plays, first and last plays, DJs and uploads, but in how a track or artist is written all of them together weigh less than one of the room's own tags, so the names the room has cleaned up stay as they are, and no upload is retagged to ADAM's spelling. ADAM names only the tracks the room never tagged, with each artist written the room's way. `adam_names.csv` lists every track where ADAM's spelling differs from the one shown, and every track only ADAM has.
+
 **The best spelling** for each track is chosen in this order: a mod's fix (`tagLog`, then the room's saved tags), then the most-used spelling, then cleanliness, with accents restored. YouTube and SoundCloud's own data is just one source: their trusted fields (Topic channels, SoundCloud's artist/title) count about as much as an ADAM tag, plain video titles hardly at all, and channel names never decide how an artist is written.
 
 **Plays** from different sources within 10 minutes of each other count once (`--window`). ADAM's clock had no time zone, so it's lined up against Last.fm automatically (or set it: `--adam-tz America/Chicago`). A track's first play is its earliest play in any source. When only Last.fm has that play, the date is known but the DJ isn't; `first_known_dj` gives the earliest play with a DJ.
@@ -127,9 +129,10 @@ Some pairs only a person can call ("are `Star Rain` and `Star Ruin` the same?").
 
 Answers are kept for good, in the room's database too (`historyDecisions`), and never asked again.
 
-Two files cover what the history can't know on its own (`alias,canonical` per line). Keep them in `tools/history/` and commit them, so the GitHub Action uses them too; one in `history-data/` is read as well:
-- `artist-aliases.csv`, e.g. `Shiina Ringo,椎名林檎`
+Three files cover what the history can't know on its own. Keep them in `tools/history/` and commit them, so the GitHub Action uses them too; one in `history-data/` is read as well:
+- `artist-aliases.csv` (`alias,canonical` per line), e.g. `Shiina Ringo,椎名林檎`
 - `dj-aliases.csv`, for a DJ who played under more than one name (`CJ-,CJ`), or one person's several accounts.
+- `house-djs.csv`, the room's own bots (`jarvis` now, `eve` before it), one name per line. Their plays count for the songs, but they aren't DJs: no DJ page, and never in DJ rankings, "who plays it", similar DJs or the summary's first plays (`djs.csv` marks them `room_bot`). The bot leaves itself out of the live charts, theme nights and fires the same way.
 
 **Who is who.** A DJ is an account: its username, every name it ever claimed (the room's `nameClaim` keeps old names after a rename) and its id, so a renamed DJ's plays stay together and a name that mimics someone else's (`citizensips`) goes to the account that took it. `dj-aliases.csv` only needs names from before claims existed, and accounts that are one person. Each DJ is shown as the name they played under most (case never matters); to show another, pin it with `=`: `Noumenon,=Andrew`. `djs.csv` lists every name each DJ played under.
 
@@ -161,6 +164,7 @@ To run it every Monday at 4:10 on the server (`crontab -e`):
 | `artist_accents.csv` | artists the logs would put accents on, what YouTube Music writes, and what was done |
 | `dead_uploads.csv` | uploads that are gone, with a working upload of the same track |
 | `djs.csv` | every DJ: plays, first plays, years active |
+| `adam_names.csv` | tracks the room named where ADAM spelled them differently, and tracks only ADAM has |
 | `merges.csv` | why each pair of spellings was joined |
 | `review.csv` | questions waiting for an answer |
 | `tidy_preview.csv` | what `--tidy junk` and `--tidy rsn` would show for each track, and which are left alone |

@@ -2331,6 +2331,7 @@ var discoverer = function() {
       db: firebase.database(),
       now: serverNow,
       hidden: function(uid) { return !!(uid && users[uid] && users[uid].publicName === false); },
+      house: function(uid) { return !!uid && uid === botid; }, // the bot's own plays aren't a DJ's
       uidOf: uidLookup,
       nameOf: function(uid) { return (users[uid] && users[uid].username) || null; },
       playlist: cachedPlaylist,

@@ -778,6 +778,92 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
   }
 });
 
+test("ADAM DATA's five tabs: every play keeps its DJ and its upload", () => {
+  const dir = mkdtempSync(join(tmpdir(), "adam-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const sheet = FIX + "adam-sheet/";
+    const out = run("import-adam", ...["djs", "artists", "trax", "trax_raw", "playz"].map((t) => sheet + t + ".csv"));
+    assert.match(out, /djs\.csv: djs sheet/, "a djs tab (id, name, firsts, lasts) is read as DJs, not artists");
+    assert.match(out, /trax_raw\.csv: links sheet/, "TRAX RAW (id, track_id, link, source_id) is read as each track's upload");
+    assert.match(out, /playz\.csv: plays sheet/);
+    // the copies moved into globalTracks in 2023, on a clock 5 hours off
+    const moved = join(dir, "moved.json");
+    // the room's own, cleaned-up tags: "Foals - My Number"; ADAM wrote "FOALS - My number" and "BEAR HANDS"
+    writeFileSync(moved, JSON.stringify({ globalTracks: {
+      "1Wp0y9MZBQE0": { artist: "Foals", title: "My Number", type: 1,
+        first_play_date: "2017-03-04 23:00:00", first_play_dj: "citizensips", last_play_date: "2017-03-07 01:00:00", last_play_dj: "eve" },
+      "1Agora000001": { artist: "Bear Hands", title: "Agora", type: 1 },
+      "1Agora000002": { artist: "Bear Hands", title: "Giants", type: 1 }
+    } }));
+    run("import-firebase", moved);
+    const joined = run("reconcile", "--adam-tz", "0");
+    assert.match(joined, /2 first\/last plays from ADAM's era lined up with none of its plays: left out/);
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const plays = db.prepare("SELECT t.artist, p.dj, p.type, p.cid FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
+    assert.equal(plays.length, 6, "TRAX's and globalTracks' first and last plays are the same plays as PLAYZ's, counted once");
+    assert.deepEqual(plays.map((p) => p.dj), ["citizensips", "eve", "eve", "citizensips", "eve", "citizensips"]);
+    assert.ok(plays.filter((p) => p.artist === "Foals").every((p) => p.type === 1 && p.cid === "Wp0y9MZBQE0"), "source_id 1 is YouTube");
+    // ADAM's six plays never outvote the room's one tag: the room names its tracks and artists
+    const names = db.prepare("SELECT artist || ' - ' || title n FROM tracks WHERE plays > 0 ORDER BY n").all().map((t) => t.n);
+    assert.deepEqual(names, ["Bear Hands - 2AM", "Foals - My Number"], "the room's spelling, and its way of writing an artist only ADAM played this song of");
+    assert.ok(plays.filter((p) => p.artist === "Bear Hands").every((p) => p.type === 2 && p.cid === "48189395"), "source_id 0 is SoundCloud");
+    const djs = Object.fromEntries(db.prepare("SELECT name, plays, first_plays FROM djs").all().map((d) => [d.name, [d.plays, d.first_plays]]));
+    assert.deepEqual(djs, { citizensips: [3, 1], eve: [3, 1] }, "every play counts for its DJ, not only first and last plays");
+    // eve was the room's bot (house-djs.csv): her plays count for songs, but she gets no DJ page
+    assert.deepEqual(store.getState(db, "house_djs"), ["eve"]);
+    db.close();
+    run("report");
+    assert.match(readFileSync(join(dir, "djs.csv"), "utf8"), /\neve,.*,yes\r?\n/, "djs.csv marks the room's bots");
+    const summary = readFileSync(join(dir, "summary.md"), "utf8");
+    assert.doesNotMatch(summary.split("## most first plays")[1].split("## ADAM's names")[0], /\| eve \|/);
+    assert.match(summary, /named by the room's tags, ADAM spelled differently \| 1 \|/);
+    assert.match(summary, /only ADAM has them .* \| 1 \|/);
+    const adamNames = readFileSync(join(dir, "adam_names.csv"), "utf8");
+    assert.match(adamNames, /,only ADAM has it,Bear Hands - 2AM,BEAR HANDS - 2AM,,2/);
+    assert.match(adamNames, /,the room's tags,Foals - My Number,FOALS - My number,Foals - My Number,4/);
+    run("publish", "--restore-accents");
+    const preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
+    assert.deepEqual(preview.tagChanges, [], "no upload's tags change to ADAM's");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ADAM never outvotes the room's tags: hundreds of ADAM plays leave the room's names and uploads as they are", () => {
+  const dir = mkdtempSync(join(tmpdir(), "adam-names-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const q = (...v) => v.map((x) => JSON.stringify(String(x))).join(",");
+    const day = (i) => new Date(Date.UTC(2017, 0, 1) + i * 86400000).toISOString().slice(0, 19).replace("T", " ");
+    const trax = [q("id", "artist_id", "artist name", "name", "first_play_dj", "first DJ name", "first_play_date", "last_play_dj", "last DJ name", "last_play_date"),
+      q(1, 10, "FOALS", "My number", 1, "chris", day(0), 1, "chris", day(299)), q(2, 11, "BEAR HANDS", "2AM", 1, "chris", day(0), 1, "chris", day(299))];
+    const raw = [q("id", "track_id", "link", "source_id"), q(1, 1, "Wp0y9MZBQE0", 1), q(2, 2, "48189395", 0)];
+    const playz = [q("id", "track_id", "dj_id", "played_at", "artist", "track", "DJ")];
+    for (let i = 0; i < 300; i++) playz.push(q(2 * i + 1, 1, 1, day(i), "FOALS", "My number", "chris"), q(2 * i + 2, 2, 1, day(i).replace(" 00:", " 12:"), "BEAR HANDS", "2AM", "chris"));
+    for (const [f, rows] of [["trax.csv", trax], ["trax_raw.csv", raw], ["playz.csv", playz]]) writeFileSync(join(dir, f), rows.join("\n") + "\n");
+    // the room's cleaned-up tags: one entry each
+    writeFileSync(join(dir, "room.json"), JSON.stringify({ globalTracks: {
+      "1Wp0y9MZBQE0": { artist: "Foals", title: "My Number", type: 1 },
+      "1Agora000001": { artist: "Bear Hands", title: "Agora", type: 1 }
+    } }));
+    run("import-adam", join(dir, "trax.csv"), join(dir, "trax_raw.csv"), join(dir, "playz.csv"));
+    run("import-firebase", join(dir, "room.json"));
+    run("reconcile", "--adam-tz", "0");
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const names = db.prepare("SELECT artist || ' - ' || title n, plays FROM tracks WHERE plays > 0 ORDER BY n").all().map((t) => t.n + ":" + t.plays);
+    db.close();
+    assert.deepEqual(names, ["Bear Hands - 2AM:300", "Foals - My Number:300"], "300 ADAM plays each, named as the room writes them");
+    run("publish", "--restore-accents");
+    const preview = JSON.parse(readFileSync(join(dir, "publish-preview.json"), "utf8"));
+    assert.deepEqual(preview.tagChanges, [], "no upload's tags change to ADAM's");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Discover's library: genres, DJs, artists, years, Rising and On this day, and names hidden on request", () => {
   const dir = mkdtempSync(join(tmpdir(), "library-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
@@ -813,6 +899,15 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.ok(fav.every((r, i) => i === 0 || fav[i - 1].plays >= r.plays), "favorites: most played first");
     assert.ok(Object.values(u).every((v) => !JSON.stringify(v).includes('"' + djs[1] + '"')), "a DJ who hid their name shows nowhere");
     assert.ok(!Object.keys(u["discover/lib/djs"]).some((k) => u["discover/lib/djs"][k].name === djs[1]), "and has no DJ page");
+    // the room's bot (house-djs.csv): not in "who plays it", no DJ page, but its plays still count for songs
+    const whoIn = (lib) => Object.keys(lib).filter((k) => /^discover\/lib\/genre\//.test(k)).flatMap((k) => (lib[k].who || []).map((x) => x.dj));
+    const bot = whoIn(u)[0];
+    assert.ok(bot, "someone plays a genre");
+    store.setState(db, "house_djs", [bot]);
+    const asBot = library.buildLibrary(db, { users, bpm: {}, cards: {}, now: Date.UTC(2026, 10, 11) }).updates;
+    assert.ok(!whoIn(asBot).includes(bot), "a bot isn't in who plays a genre");
+    assert.ok(!Object.values(asBot["discover/lib/djs"]).some((d) => d.name === bot), "and has no DJ page");
+    assert.equal(asBot["discover/lib/genres"]["nu-disco"].plays, u["discover/lib/genres"]["nu-disco"].plays, "its plays still count");
     const year = u["discover/lib/year/2017"];
     assert.equal(year.more[0].cid, "notplayed01", "a year's songs not played here yet are its finds");
     assert.equal(u["discover/lib/years"][2017].songs, 2);
