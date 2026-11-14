@@ -93,6 +93,8 @@ Rohn Standard Notation is the guide for *recognising* a song, never a rule for r
 - **Typos**: swapped letters and very close titles are merged; anything less certain goes to review. Numbers never count as typos (`Part 1` ≠ `Part 2`).
 - **Vague tags** (`Unknown - Intro`, `Track 3`) are never matched across uploads. One that is only ever logged for uploads of one track (the bot once saved `Remember (feat. The Presets)` as the artist, with no title) is that track's.
 
+**ADAM never outvotes the room's tags.** ADAM's logs count for plays, first and last plays, DJs and uploads, but in how a track or artist is written all of them together weigh less than one of the room's own tags, so the names the room has cleaned up stay as they are, and no upload is retagged to ADAM's spelling. ADAM names only the tracks the room never tagged, with each artist written the room's way. `adam_names.csv` lists every track where ADAM's spelling differs from the one shown, and every track only ADAM has.
+
 **The best spelling** for each track is chosen in this order: a mod's fix (`tagLog`, then the room's saved tags), then the most-used spelling, then cleanliness, with accents restored. YouTube and SoundCloud's own data is just one source: their trusted fields (Topic channels, SoundCloud's artist/title) count about as much as an ADAM tag, plain video titles hardly at all, and channel names never decide how an artist is written.
 
 **Plays** from different sources within 10 minutes of each other count once (`--window`). ADAM's clock had no time zone, so it's lined up against Last.fm automatically (or set it: `--adam-tz America/Chicago`). A track's first play is its earliest play in any source. When only Last.fm has that play, the date is known but the DJ isn't; `first_known_dj` gives the earliest play with a DJ.
@@ -162,6 +164,7 @@ To run it every Monday at 4:10 on the server (`crontab -e`):
 | `artist_accents.csv` | artists the logs would put accents on, what YouTube Music writes, and what was done |
 | `dead_uploads.csv` | uploads that are gone, with a working upload of the same track |
 | `djs.csv` | every DJ: plays, first plays, years active |
+| `adam_names.csv` | tracks the room named where ADAM spelled them differently, and tracks only ADAM has |
 | `merges.csv` | why each pair of spellings was joined |
 | `review.csv` | questions waiting for an answer |
 | `tidy_preview.csv` | what `--tidy junk` and `--tidy rsn` would show for each track, and which are left alone |

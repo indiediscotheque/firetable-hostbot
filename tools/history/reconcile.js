@@ -251,18 +251,23 @@ function reconcile(db, opts) {
     if (si === undefined) {
       si = spellings.length;
       spellingIndex.set(key, si);
-      spellings.push({ artist: tags.clean(r.artist), title: tags.clean(r.title), seen: 0, weight: 0, maxWeight: 0, plays: 0, scrobbles: 0, sources: new Set(), last: 0 });
+      spellings.push({ artist: tags.clean(r.artist), title: tags.clean(r.title), logs: 0, seen: 0, weight: 0, maxWeight: 0, plays: 0, scrobbles: 0, sources: new Set(), last: 0 });
     }
     var sp = spellings[si];
-    sp.seen++;
-    sp.weight += r.weight;
-    if (r.weight > sp.maxWeight) sp.maxWeight = r.weight;
+    // how a song or artist is written is the room's call: ADAM's logs count
+    // for plays, dates, DJs and uploads, and name a track or artist only
+    // where the room has nothing of its own (see ADAM_VOTE)
+    var vote = r.source === "adam" ? ADAM_VOTE : 1;
+    sp.logs++;
+    sp.seen += vote;
+    sp.weight += r.weight * vote;
+    if (r.weight * vote > sp.maxWeight) sp.maxWeight = r.weight * vote;
     sp.sources.add(r.source);
     if (r.at && r.at > sp.last) sp.last = r.at;
     if (r.role === "play") { sp.plays++; if (isLastfm(r.source)) sp.scrobbles++; }
     var s = sourceIdx.get(r.source);
     if (s === undefined) { s = sourceNames.length; sourceIdx.set(r.source, s); sourceNames.push(r.source); }
-    obsList.push([si, r.role, r.at, r.naive_tz, s, r.dj, up, r.weight]);
+    obsList.push([si, r.role, r.at, r.naive_tz, s, r.dj, up, r.weight * vote]);
   }
   log("  " + obsList.length + " observations, " + spellings.length + " spellings");
 
@@ -746,7 +751,7 @@ function reconcile(db, opts) {
         : "left as it is until YouTube Music is checked";
       if (!ytmChecked.has(c)) ytmWanted.push({ key: c, name: cur.name, accented: pick.word, logs: pick.n });
     }
-    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + pick.n + " logs)" : "", youtube_music: ref ? ref.name + " (" + ref.n + ")" : "", outcome: outcome, shown_as: name });
+    if (outcome) artistAccents.push({ name: cur.name, logs_suggest: pick ? pick.word + " (" + Math.round(pick.n) + " logs)" : "", youtube_music: ref ? ref.name + " (" + ref.n + ")" : "", outcome: outcome, shown_as: name });
     bestArtistName.set(c, { name: name, score: cur.score, by: by || "the room's usual spelling" });
   });
   // YouTube Music's most used spelling of an artist, from any of their keys
@@ -853,7 +858,7 @@ function reconcile(db, opts) {
     var titleLogs = accentBook(accentMin);
     members.forEach(function(si) { titleLogs.note("t", "t", spellings[si].title, spellings[si].seen, trusted(spellings[si])); });
     var tp = titleLogs.pick("t", "t", title);
-    if (tp) { title = tp.word; restoredFrom.push("title in " + tp.n + " logs" + (tp.trusted ? " (incl. a trusted source)" : "")); }
+    if (tp) { title = tp.word; restoredFrom.push("title in " + Math.round(tp.n) + " logs" + (tp.trusted ? " (incl. a trusted source)" : "")); }
     // the artist as other spellings of this track have it (an upload's own
     // YouTube/SoundCloud data counts here, on its own track)
     var artistLogs = accentBook(accentMin);
@@ -862,7 +867,7 @@ function reconcile(db, opts) {
     // YouTube Music knows this artist: only its accents
     var apRef = ap && chosen.parsed.artists.length === 1 ? ytmRef([chosen.keys.artist].concat(keysOfArtist.get(chosen.keys.artist) || [])) : null;
     if (apRef && (withAccentsOf(artist, apRef.name) || "").toLowerCase() !== ap.word.toLowerCase()) ap = null;
-    if (ap) { artist = ap.word; restoredFrom.push("artist in " + ap.n + " logs" + (ap.trusted ? " (incl. a trusted source)" : "")); }
+    if (ap) { artist = ap.word; restoredFrom.push("artist in " + Math.round(ap.n) + " logs" + (ap.trusted ? " (incl. a trusted source)" : "")); }
     // 2: word by word, from this artist's other songs ("Joga (Live)" -> "Jóga (Live)")
     var restoredWords = [];
     title = title.split(WORD_SPLIT).map(function(tok) {
@@ -873,7 +878,7 @@ function reconcile(db, opts) {
         if (p && (!best || p.n > best.n)) best = p;
       });
       if (!best) return tok;
-      restoredWords.push(tok + "→" + best.word + " (" + best.n + " logs)");
+      restoredWords.push(tok + "→" + best.word + " (" + Math.round(best.n) + " logs)");
       return matchCase(best.word, tok);
     }).join("");
     if (restoredWords.length) restoredFrom.push("words: " + restoredWords.join(", "));
@@ -1062,7 +1067,7 @@ function reconcile(db, opts) {
     });
     var insV = db.prepare("INSERT INTO variants (artist, title, track_key, song_key, track_id, seen, plays, scrobbles, sources, weak, suspect) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
     spellings.forEach(function(sp, i) {
-      insV.run(sp.artist, sp.title, sp.raw.track, sp.keys.song, spellingTrack[i], sp.seen, sp.plays, sp.scrobbles, Array.from(sp.sources).sort().join(","), sp.weak ? 1 : 0, sp.parsed.suspect);
+      insV.run(sp.artist, sp.title, sp.raw.track, sp.keys.song, spellingTrack[i], sp.logs, sp.plays, sp.scrobbles, Array.from(sp.sources).sort().join(","), sp.weak ? 1 : 0, sp.parsed.suspect);
     });
     var insT = db.prepare(`INSERT INTO tracks (id, song_id, artist, title, version, plays, scrobbles, djs, first_play_at, first_play_dj, first_dj, first_dj_at,
       last_play_at, last_play_dj, uploads, spellings, confidence, keys, tidy_junk, tidy_rsn, protected) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -1147,6 +1152,11 @@ function reconcile(db, opts) {
 // accentMin logs have it, or a trusted source does; it doesn't need to beat
 // the plain one, which years of stripping for the old Last.fm bug made common.
 var YTM_SURE = 3; // uploads from an artist's Topic channel that make YouTube Music's spelling theirs
+// One of ADAM's logs against one of the room's, in how a track or artist is
+// written: all of ADAM's 640,000 plays together weigh less than one of the
+// room's own tags, so the room's cleaned-up tags always win, and ADAM's only
+// decide between ADAM's own spellings (a track or artist the room never tagged)
+var ADAM_VOTE = 1e-6;
 var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
 function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;
