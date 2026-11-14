@@ -22,9 +22,9 @@ var HELP = `play history: join ADAM, Last.fm and the room's database into one hi
   npm run history -- <command> [options]
 
 getting the data in
-  import-adam <file.csv|link> [more]  optional: an ADAM CSV export, one per sheet (TRAX, plays, ...); a Google
-        Sheets link to a tab works if it's shared as "anyone with the link"
-        [--kind tracks|plays|raws|artists|djs]   if it can't tell from the columns
+  import-adam <file.csv|link> [more]  ADAM's export: CSVs, one per tab (TRAX, ARTISTS, djs, TRAX RAW, PLAYZ),
+        or a Google Sheets link shared as "anyone with the link" (the whole sheet imports every tab)
+        [--kind tracks|plays|links|raws|artists|djs]   if it can't tell from the columns
         [--archive]   keep a copy in the room's database, so any rebuild (e.g. the GitHub Action) has it
   fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot, ADAM's
         moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs)
@@ -109,17 +109,19 @@ async function main() {
   switch (cmd) {
     case "import-adam": {
       if (!args._.length) throw new Error("which file? import-adam <file.csv or link>");
-      for (var f of args._) {
-        var input = await archive.fetchInput(f, dir);
+      var inputs = [];
+      for (var f of args._) (await archive.fetchInputs(f, dir)).forEach(function(x) { x.from = f; inputs.push(x); });
+      if (inputs.length > 1 && args.kind) throw new Error("--kind only works with one file or tab at a time");
+      for (var input of inputs) {
         var r = await sources.importAdam(db, input.file, args.kind, log);
-        log(input.name + ": " + r.rows + " rows read, " + r.written + " observations" + (r.skipped ? ", " + r.skipped + " empty rows skipped" : ""));
+        log((input.tab ? "tab " + input.tab + " (" + input.name + ")" : input.name) + ": " + r.rows + " rows read, " + r.written + " observations" + (r.skipped ? ", " + r.skipped + " empty rows skipped" : ""));
         if (args.archive) {
           var saved = await archive.saveFile(require("./firebase").client(env), input.name, input.file, r.kind);
           // this copy is already imported: don't restore it again
           store.setState(db, saved.stateKey, true);
           log("  kept a copy in the room's database (historyArchive), so the history can be rebuilt anywhere");
         }
-        if (input.file !== f) require("fs").unlinkSync(input.file);
+        if (input.file !== input.from) require("fs").unlinkSync(input.file);
       }
       break;
     }

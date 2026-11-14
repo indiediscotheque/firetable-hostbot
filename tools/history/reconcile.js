@@ -176,8 +176,17 @@ function reconcile(db, opts) {
 
   var rows = db.prepare("SELECT source, artist, title, type, cid, role, at, naive_tz, dj, weight, extra FROM obs ORDER BY id").iterate();
   var pendingAdamPlays = [];
+  var adamUpload = new Map(); // ADAM track id -> its upload (TRAX RAW)
+  var adamNoUpload = [];      // ADAM plays logged by track id only, waiting for it
   for (var row of rows) {
     var extra = row.extra ? JSON.parse(row.extra) : null;
+    if (row.source === "adam" && extra && extra.adam && row.role === "tag" && !row.artist && row.type && row.cid) {
+      adamUpload.set(String(extra.adam), row.type + "" + row.cid);
+    }
+    if (row.source === "adam" && extra && extra.adam && row.role !== "tag" && !row.cid && row.artist) {
+      adamNoUpload.push(row);
+      continue;
+    }
     if (row.source === "adam" && extra && extra.adam && row.role === "tag" && row.artist) {
       adamTags.set(String(extra.adam), [row.artist, row.title]);
       if (extra.adam_artist) {
@@ -216,6 +225,19 @@ function reconcile(db, opts) {
     }
     addObs(row, up);
   }
+  // ADAM's plays and first/last plays name the track, not the upload: give
+  // each the upload TRAX RAW has for that track (then on as any other row)
+  adamNoUpload.forEach(function(r) {
+    var u = adamUpload.get(String(JSON.parse(r.extra).adam));
+    if (u) { r.type = Number(u[0]); r.cid = u.slice(1); }
+    var up = u || null;
+    var plan = up && phPlan.get(up);
+    if (plan) {
+      if (plan.action !== "renamed") return;
+      if (ph.is(r.artist, r.title)) r = Object.assign({}, r, { artist: plan.artist, title: plan.title });
+    } else if (ph.is(r.artist, r.title)) return;
+    addObs(r, up);
+  });
   pendingAdamPlays.forEach(function(p) {
     var t = adamTags.get(String(JSON.parse(p[0].extra).adam));
     if (!t || ph.is(t[0], t[1])) return;

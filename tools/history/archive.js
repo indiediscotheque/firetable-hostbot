@@ -15,6 +15,35 @@ var tags = require("../../lib/tags");
 
 var CHUNK = 4 * 1024 * 1024; // the database keeps strings up to 10 MB
 
+// The tabs of a Google Sheet shared as "anyone with the link", in order:
+// [{name, gid}], read from its public view page.
+async function sheetTabs(id) {
+  var res = await fetch("https://docs.google.com/spreadsheets/d/" + id + "/htmlview", { redirect: "follow", signal: AbortSignal.timeout(120000) });
+  if (!res.ok) throw new Error("couldn't open the sheet (HTTP " + res.status + "): share it as \"anyone with the link\"");
+  var html = await res.text();
+  var tabs = [];
+  var re = /items\.push\(\{name: "((?:[^"\\]|\\.)*)"[^}]*?gid: "(\d+)"/g;
+  for (var m; (m = re.exec(html));) tabs.push({ name: JSON.parse('"' + m[1] + '"'), gid: m[2] });
+  return tabs;
+}
+
+// Local files or links, each becoming one or more CSVs to import. A link to a
+// whole Google Sheet (no #gid=) brings in every tab; a link to one tab, that tab.
+async function fetchInputs(input, dir) {
+  var sheet = /^https?:\/\//i.test(input) && input.match(/docs\.google\.com\/spreadsheets\/d\/([^/?#]+)/);
+  if (!sheet || /[#&?]gid=\d+/.test(input)) return [await fetchInput(input, dir)];
+  var tabs = await sheetTabs(sheet[1]);
+  if (!tabs.length) return [await fetchInput(input, dir)];
+  var out = [];
+  for (var t of tabs) {
+    var one = await fetchInput("https://docs.google.com/spreadsheets/d/" + sheet[1] + "/edit#gid=" + t.gid, dir);
+    one.tab = t.name;
+    one.name = "sheet-" + sheet[1].slice(0, 8) + "-" + t.name.replace(/[^A-Za-z0-9]+/g, "_") + ".csv";
+    out.push(one);
+  }
+  return out;
+}
+
 // A local file, or a link to one. Google Sheets links become that tab's CSV
 // (the sheet must be shared as "anyone with the link").
 async function fetchInput(input, dir) {
@@ -104,4 +133,4 @@ function loadDecisions(db, node) {
   return n;
 }
 
-module.exports = { fetchInput: fetchInput, saveFile: saveFile, restoreFiles: restoreFiles, decisionUpdates: decisionUpdates, loadDecisions: loadDecisions };
+module.exports = { fetchInput: fetchInput, fetchInputs: fetchInputs, sheetTabs: sheetTabs, saveFile: saveFile, restoreFiles: restoreFiles, decisionUpdates: decisionUpdates, loadDecisions: loadDecisions };

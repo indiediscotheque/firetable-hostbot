@@ -778,6 +778,31 @@ test("ADAM's history as it is in globalTracks: short SoundCloud ids, 'undefined'
   }
 });
 
+test("ADAM DATA's five tabs: every play keeps its DJ and its upload", () => {
+  const dir = mkdtempSync(join(tmpdir(), "adam-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const sheet = FIX + "adam-sheet/";
+    const out = run("import-adam", ...["djs", "artists", "trax", "trax_raw", "playz"].map((t) => sheet + t + ".csv"));
+    assert.match(out, /djs\.csv: djs sheet/, "a djs tab (id, name, firsts, lasts) is read as DJs, not artists");
+    assert.match(out, /trax_raw\.csv: links sheet/, "TRAX RAW (id, track_id, link, source_id) is read as each track's upload");
+    assert.match(out, /playz\.csv: plays sheet/);
+    run("reconcile", "--adam-tz", "0");
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const plays = db.prepare("SELECT t.artist, p.dj, p.type, p.cid FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
+    assert.equal(plays.length, 6, "TRAX's first and last plays are the same plays as PLAYZ's, counted once");
+    assert.deepEqual(plays.map((p) => p.dj), ["citizensips", "eve", "eve", "citizensips", "eve", "citizensips"]);
+    assert.ok(plays.filter((p) => p.artist === "Foals").every((p) => p.type === 1 && p.cid === "Wp0y9MZBQE0"), "source_id 1 is YouTube");
+    assert.ok(plays.filter((p) => p.artist === "Bear Hands").every((p) => p.type === 2 && p.cid === "48189395"), "source_id 0 is SoundCloud");
+    const djs = Object.fromEntries(db.prepare("SELECT name, plays, first_plays FROM djs").all().map((d) => [d.name, [d.plays, d.first_plays]]));
+    assert.deepEqual(djs, { citizensips: [3, 1], eve: [3, 1] }, "every play counts for its DJ, not only first and last plays");
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Discover's library: genres, DJs, artists, years, Rising and On this day, and names hidden on request", () => {
   const dir = mkdtempSync(join(tmpdir(), "library-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });

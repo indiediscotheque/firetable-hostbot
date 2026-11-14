@@ -58,7 +58,7 @@ async function importAdam(db, file, kind, log) {
       Object.keys(raw).forEach(function(k) { cols[h(k)] = k; });
       map = adamColumns(Object.keys(cols), kind);
       log("  " + file + ": " + map.kind + " sheet (" + Object.keys(cols).join(", ") + ")");
-      if (map.kind === "unknown") throw new Error("can't tell what " + file + " holds; pass --kind tracks|plays|raws|artists|djs");
+      if (map.kind === "unknown") throw new Error("can't tell what " + file + " holds; pass --kind tracks|plays|links|raws|artists|djs");
     }
     var get = function(c) { return c ? String(raw[cols[c]] == null ? "" : raw[cols[c]]).trim() : ""; };
     if (map.kind === "tracks") {
@@ -87,6 +87,14 @@ async function importAdam(db, file, kind, log) {
         type: sourceType(get(map.source)), cid: cidOf(get(map.link)), role: "play", at: at2, naive: true,
         dj: get(map.dj) || get(map.djId), extra: tr ? { adam: tr } : null
       });
+    } else if (map.kind === "links") {
+      // TRAX RAW: which upload each ADAM track was (no tag of its own; the
+      // track's TRAX tag names it when the history is joined)
+      var lt = get(map.trackId);
+      var lc = cidOf(get(map.link));
+      if (!lt || !lc) { skipped++; return; }
+      w.add({ source: "adam", ref: "link:" + (get(map.id) || n), artist: "", title: "", role: "tag", weight: 0.5,
+        type: adamSourceType(get(map.source), lc), cid: lc, extra: { adam: lt } });
     } else if (map.kind === "raws") {
       var parts = splitRaw(get(map.raw));
       if (!parts[0]) { skipped++; return; }
@@ -125,14 +133,15 @@ function adamColumns(c, kind) {
     trackId: pick(c, ["track_id", "trackid"]),
     raw: pick(c, ["song_name", "raw", "raw_name", "string"]),
     link: pick(c, ["link", "cid", "url", "video_id"]),
-    source: pick(c, ["source", "type", "platform"]),
+    source: pick(c, ["source", "source_id", "type", "platform"]),
     name: pick(c, ["name", "username", "dj_name", "artist_name"])
   };
   if (kind) m.kind = kind;
   else if (m.firstDate || m.lastDate || (m.artist && m.title && !m.date)) m.kind = "tracks";
   else if (m.date && (m.trackId || m.raw || m.title)) m.kind = "plays";
   else if (m.raw) m.kind = "raws";
-  else if (m.id && m.name && c.length <= 4) m.kind = /dj|user/.test(c.join(",")) ? "djs" : "artists";
+  else if (m.trackId && m.link && m.trackId !== m.id) m.kind = "links";
+  else if (m.id && m.name && c.length <= 4) m.kind = /dj|user|^firsts$|^lasts$/m.test(c.join("\n")) ? "djs" : "artists";
   else m.kind = "unknown";
   if (m.kind === "plays" && m.id === m.trackId) m.id = null;
   return m;
@@ -147,6 +156,13 @@ function sourceType(s) {
   if (s === "1" || s.indexOf("youtube") !== -1 || s === "yt") return 1;
   if (s === "2" || s.indexOf("soundcloud") !== -1 || s === "sc") return 2;
   return null;
+}
+// TRAX RAW's source_id: 1 YouTube, 0 SoundCloud; an all-digit id is SoundCloud's
+function adamSourceType(s, cid) {
+  s = String(s || "").trim();
+  if (s === "0") return 2;
+  if (s === "1") return 1;
+  return sourceType(s) || (/^\d+$/.test(cid) ? 2 : /^[A-Za-z0-9_-]{11}$/.test(cid) ? 1 : null);
 }
 // a YouTube/SoundCloud id from a link (or the id itself)
 function cidOf(link) {
