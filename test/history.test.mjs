@@ -864,6 +864,39 @@ test("ADAM never outvotes the room's tags: hundreds of ADAM plays leave the room
   }
 });
 
+test("a dropped connection to YouTube is tried again, and never stops the run", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ytm-"));
+  const fb = require("../tools/history/firebase.js");
+  const store = require("../tools/history/store.js");
+  const verify = require("../tools/history/verify.js");
+  const realFetch = globalThis.fetch;
+  const realSleep = fb.sleep;
+  fb.sleep = async () => {};
+  const db = store.open(dir);
+  try {
+    store.setState(db, "ytm_wanted", [{ key: "sigurros", name: "Sigur Ros", song: "Hoppipolla" }, { key: "bjork", name: "Bjork", song: "Joga" }]);
+    const dropped = () => { throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }); };
+    // drops twice, then answers; then never answers again
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      if (calls <= 2 || calls > 3) dropped();
+      return new Response(JSON.stringify({ items: [{ snippet: { channelTitle: "Sigur Rós - Topic", title: "Hoppípolla" } }] }), { status: 200 });
+    };
+    const lines = [];
+    const got = await verify.checkArtists(db, { YOUTUBE_KEY: "k" }, {}, (l) => lines.push(l));
+    assert.equal(got.checked, 1, "the first artist was looked up after two dropped connections");
+    assert.equal(got.quotaUsed, 100, "only the call YouTube answered used quota");
+    assert.match(lines.join("\n"), /YouTube Music check stopped: no answer from YouTube \(ECONNRESET\); the next run carries on/);
+    assert.deepEqual(JSON.parse(db.prepare("SELECT result FROM lookups WHERE kind = 'ytm' AND query = 'sigurros'").get().result).names, ["Sigur Rós"]);
+  } finally {
+    globalThis.fetch = realFetch;
+    fb.sleep = realSleep;
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("Discover's library: genres, DJs, artists, years, Rising and On this day, and names hidden on request", () => {
   const dir = mkdtempSync(join(tmpdir(), "library-"));
   const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
