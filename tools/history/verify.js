@@ -13,6 +13,26 @@ var fb = require("./firebase");
 
 var DAY = 86400000;
 
+// A YouTube Data API call. A dropped connection or a 5xx is tried again (4
+// tries in all); if it never answers, { error } says why and the caller stops
+// there for this run, as on a quota error: the next run carries on.
+async function youtube(url) {
+  var last = null;
+  for (var attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await fb.sleep(2000 * Math.pow(2, attempt - 1));
+    try {
+      var res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      var j = await res.json().catch(function() { return null; });
+      if (res.status >= 500) { last = "HTTP " + res.status; continue; }
+      if (!res.ok || !j || !Array.isArray(j.items)) return { answered: true, error: j && j.error && j.error.message || "HTTP " + res.status };
+      return { answered: true, json: j };
+    } catch (e) {
+      last = (e && e.cause && e.cause.code) || (e && e.message) || String(e);
+    }
+  }
+  return { answered: false, error: "no answer from YouTube (" + last + ")" };
+}
+
 async function verifyUploads(db, env, opts, log) {
   var recheck = (Number(opts.recheckDays) || 90) * DAY;
   var limit = Number(opts.limit) || Infinity;
@@ -51,14 +71,14 @@ async function verifyUploads(db, env, opts, log) {
       url.searchParams.set("id", ids.join(","));
       url.searchParams.set("fields", "items(id,snippet(title,channelTitle,publishedAt),contentDetails(duration),status(privacyStatus,uploadStatus,embeddable))");
       url.searchParams.set("key", env.YOUTUBE_KEY);
-      var res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-      var j = await res.json().catch(function() { return null; });
-      counts.quotaUsed++;
-      if (!res.ok || !j || !Array.isArray(j.items)) {
-        var msg = j && j.error && j.error.message || "HTTP " + res.status;
-        log("  YouTube stopped: " + msg + (/quota/i.test(msg) ? " (the quota resets at midnight Pacific; run again then to carry on)" : ""));
+      var got = await youtube(url);
+      if (got.answered) counts.quotaUsed++;
+      if (got.error) {
+        var msg = got.error;
+        log("  YouTube stopped: " + msg + (/quota/i.test(msg) ? " (the quota resets at midnight Pacific; run again then to carry on)" : "; the next run carries on"));
         break;
       }
+      var j = got.json;
       var found = new Map(j.items.map(function(it) { return [it.id, it]; }));
       store.tx(db, function() {
         ids.forEach(function(id) {
@@ -150,14 +170,13 @@ async function checkArtists(db, env, opts, log) {
     url.searchParams.set("q", q);
     url.searchParams.set("fields", "items(snippet(channelTitle,title))");
     url.searchParams.set("key", env.YOUTUBE_KEY);
-    var res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-    var j = await res.json().catch(function() { return null; });
-    counts.quotaUsed += 100;
-    if (!res.ok || !j || !Array.isArray(j.items)) {
-      var msg = j && j.error && j.error.message || "HTTP " + res.status;
-      log("  YouTube Music check stopped: " + msg);
+    var got = await youtube(url);
+    if (got.answered) counts.quotaUsed += 100;
+    if (got.error) {
+      log("  YouTube Music check stopped: " + got.error + "; the next run carries on");
       break;
     }
+    var j = got.json;
     // the artist's Topic channel (YouTube Music) if it's there, else their own
     // channel ("Artist", "ArtistVEVO", "Artist Official") with the same letters
     var same = tags.squash(w.name);
