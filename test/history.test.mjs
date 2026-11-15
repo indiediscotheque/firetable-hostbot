@@ -1240,6 +1240,32 @@ test("placeholders, published: an upload an earlier publish took out comes back 
   }
 });
 
+test("the room's tags as they are now: an upload taken out of globalTracks loses its old tags (not its plays), and its placeholder comes back named through the proper path", () => {
+  const store = require("../tools/history/store.js");
+  const sources = require("../tools/history/sources.js");
+  const dir = mkdtempSync(join(tmpdir(), "prune-"));
+  const db = store.open(dir);
+  try {
+    const w = store.obsWriter(db);
+    for (let i = 0; i < 20; i++) w.add({ source: "fb:globalTracks", ref: "1keep00000" + String(i).padStart(2, "0"), artist: "A", title: "T" + i, type: 1, cid: "keep00000" + String(i).padStart(2, "0") });
+    w.add({ source: "fb:globalTracks", ref: "1gone0000001", artist: "Unavailable", title: "Unavailable", type: 1, cid: "gone0000001" });
+    w.add({ source: "fb:globalTracks", ref: "1gone0000001:first", artist: "Unavailable", title: "Unavailable", type: 1, cid: "gone0000001", role: "first", at: 1600000000000, dj: "eve" });
+    const now = {};
+    for (let i = 0; i < 20; i++) now["1keep00000" + String(i).padStart(2, "0")] = {};
+    assert.equal(sources.pruneGone(db, "fb:globalTracks", {}), 0, "an empty read lets nothing go");
+    assert.equal(sources.pruneGone(db, "fb:globalTracks", { "1keep0000000": {} }), 0, "nor a read much smaller than what the history has");
+    assert.equal(sources.pruneGone(db, "fb:globalTracks", now), 1, "the gone upload's tag goes");
+    assert.ok(db.prepare("SELECT 1 FROM obs WHERE ref = '1gone0000001:first'").get(), "its first play stays");
+    assert.equal(db.prepare("SELECT count(*) n FROM obs WHERE source = 'fb:globalTracks' AND role = 'tag'").get().n, 20);
+    const ph = require("../tools/history/placeholders.js").load();
+    assert.ok(ph.is("video inavailable", "Video Unavailable") && ph.is("unavailable", "Unavvailable") && ph.is("unavailable @chris", "Don't Work"), "the room's misspelled placeholders");
+    assert.ok(!ph.is("unavailable", "Airline Boarding Methods"), "a real video tagged with 'unavailable' as its artist isn't one");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("how new members found the room: the Discover page they first landed on, by month, totals only", () => {
   const { foundViaReport, writeFoundVia } = require("../tools/history/library.js");
   const at = (y, m, d) => new Date(y, m - 1, d, 12).getTime();

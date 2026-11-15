@@ -445,6 +445,24 @@ function importFirebaseFile(db, file, log) {
 }
 
 // The same, read live as the bot. Playlists and queues are read DJ by DJ.
+// The room's tags are what they are now: an upload taken out of globalTracks
+// (by a publish, or by hand) leaves its old tags behind in the history unless
+// they're let go. Only the tags go: its first and last plays were plays, and
+// stay. Not done on a read that came back much smaller than what the history
+// has (a failed read).
+function pruneGone(db, source, node) {
+  var keep = new Set(Object.keys(node || {}));
+  var rows = db.prepare("SELECT id, ref FROM obs WHERE source = ? AND role = 'tag'").all(source);
+  var known = new Set(rows.map(function(r) { return String(r.ref).split(/[:/]/)[0]; }));
+  if (!keep.size || keep.size < known.size * 0.9) return 0;
+  var del = db.prepare("DELETE FROM obs WHERE id = ?");
+  return store.tx(db, function() {
+    var n = 0;
+    rows.forEach(function(r) { if (!keep.has(String(r.ref).split(/[:/]/)[0])) { del.run(r.id); n++; } });
+    return n;
+  });
+}
+
 async function fetchFirebase(db, env, opts, log) {
   var c = fb.client(env);
   var counts = {};
@@ -481,6 +499,10 @@ async function fetchFirebase(db, env, opts, log) {
       log("  " + p + ": " + describe(node));
       counts[p] = writeNode(db, p, node, log, ctx);
       log("  " + p + ": " + counts[p] + " observations");
+      if (p === "globalTracks") {
+        var gone = pruneGone(db, "fb:globalTracks", node);
+        if (gone) log("  globalTracks: the old tags of " + gone + " uploads no longer in the room's tags let go");
+      }
     } catch (e) {
       log("  " + p + ": skipped (" + e.message + ")");
     }
@@ -702,7 +724,7 @@ async function enrichArtists(db, apiKey, limit, log) {
   return todo.length;
 }
 
-module.exports = {
+module.exports = { pruneGone: pruneGone,
   importAdam: importAdam,
   importFirebaseFile: importFirebaseFile,
   fetchFirebase: fetchFirebase,
