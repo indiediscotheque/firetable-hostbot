@@ -192,6 +192,7 @@ async function publish(db, env, opts, log) {
   for (var u of db.prepare(`SELECT u.*, t.artist ta, t.title tt, t.confidence FROM uploads u JOIN tracks t ON t.id = u.track_id`).iterate()) {
     var tid = trackIdMap.get(u.track_id);
     if (!tid) continue;
+    if (u.artist == null && !validUpload(u.type, u.cid)) continue; // never link a broken id the room has no tags for
     var up = "globalTracks/" + u.type + u.cid + "/";
     updates[up + "song"] = tid;
     counts.links++;
@@ -229,6 +230,19 @@ async function publish(db, env, opts, log) {
       counts[kind] = (counts[kind] || 0) + 1;
       preview.push({ upload: u.type + u.cid, from: current, to: wanted, why: placeholder ? "placeholder, named from its logs" : accentOnly ? "accents" : tidied ? "tidy " + level : "best spelling" });
     }
+  }
+
+  // ADAM's YouTube ids that lost a hyphen (10 letters, not 11) aren't uploads
+  // (the join repairs them to the room's): a link to a song that an earlier
+  // publish made under one goes, if that's all it is
+  var brokenIds = db.prepare("SELECT DISTINCT type, cid FROM obs WHERE source = 'adam' AND cid IS NOT NULL AND cid != ''").all()
+    .filter(function(r) { return r.type && !validUpload(r.type, r.cid); });
+  for (var br of brokenIds) {
+    var bk = "globalTracks/" + br.type + br.cid;
+    var stub = opts.write ? await c.get(bk) : null;
+    if (opts.write && !(stub && Object.keys(stub).length === 1 && stub.song)) continue;
+    updates[bk] = null;
+    counts.brokenLinksRemoved = (counts.brokenLinksRemoved || 0) + 1;
   }
 
   // uploads with a placeholder tag and no real name: out of the room's tags
@@ -425,6 +439,7 @@ async function writeAll(c, updates, log, progress) {
   }
   return skipped;
 }
+var validUpload = require("./sources").validUpload;
 function fits(v) { return typeof v === "string" && v.length <= 500; }
 
 function checks(counts, previous, db) {

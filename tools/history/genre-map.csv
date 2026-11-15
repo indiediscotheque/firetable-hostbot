@@ -198,16 +198,16 @@ fusion,Jazz & Swing
 hard bop,Jazz & Swing
 bebop,Jazz & Swing
 saxophone,Jazz & Swing
-# --- Folk
-folk,Folk
-indie folk,Folk
-freak folk,Folk
-acoustic,Folk
-singer songwriter,Folk
-# --- Reggae & Dancehall
-reggae,Reggae & Dancehall
-dancehall,Reggae & Dancehall
-dub,Reggae & Dancehall
+# --- no longer the room's genres (Folk, Reggae & Dancehall): their tags are
+# ignored, so their songs take their other genres, or a fallback
+folk,
+indie folk,
+freak folk,
+acoustic,
+singer songwriter,
+reggae,
+dancehall,
+dub,
 # --- where a track comes from, not how it sounds: ignored
 soundtrack,
 video game music,

@@ -1348,6 +1348,51 @@ test("the Discord plays kept in the room's database come back on a rebuild", asy
   }
 });
 
+test("ADAM's YouTube ids that lost a hyphen are repaired to the room's upload, or name none; a publish takes out the bare links an earlier one made for them", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "broken-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  const fb = require("../tools/history/firebase.js");
+  const realClient = fb.client;
+  try {
+    const sources = require("../tools/history/sources.js");
+    assert.ok(sources.validUpload(1, "aaaaaaaaaaa") && sources.validUpload(2, "283002195"));
+    assert.ok(!sources.validUpload(1, "Jm-9WefnhM") && !sources.validUpload(2, "abc"));
+    assert.equal(sources.repairAdamId("Jm-9WefnhM", new Set(["1Jm--9WefnhM"])), "Jm--9WefnhM");
+    assert.equal(sources.repairAdamId("Jm-9WefnhM", new Set()), null, "not one the room has: can't be told");
+    assert.equal(sources.repairAdamId("a-b-cdefgh", new Set(["1a--b-cdefgh", "1a-b--cdefgh"])), null, "two that fit: can't be told");
+    const q = (...v) => v.map((x) => JSON.stringify(String(x))).join(",");
+    writeFileSync(join(dir, "trax.csv"), [q("id", "artist_id", "artist name", "name", "first_play_dj", "first DJ name", "first_play_date", "last_play_dj", "last DJ name", "last_play_date"),
+      q(1, 1, "Foals", "My Number", 1, "Chris", "2018-03-01 20:00:00", 1, "Chris", "2018-03-01 20:00:00"),
+      q(2, 2, "Kraftwerk", "Radioactivity", 1, "Chris", "2018-03-02 20:00:00", 1, "Chris", "2018-03-02 20:00:00")].join("\n") + "\n");
+    writeFileSync(join(dir, "trax_raw.csv"), [q("id", "track_id", "link", "source_id"), q(1, 1, "Jm-9WefnhM", 1), q(2, 2, "X-F5b5IdqU", 1)].join("\n") + "\n");
+    writeFileSync(join(dir, "playz.csv"), [q("id", "track_id", "dj_id", "played_at", "artist", "track", "DJ"),
+      q(1, 1, 1, "2018-03-01 20:00:00", "Foals", "My Number", "Chris"), q(2, 2, 1, "2018-03-02 20:00:00", "Kraftwerk", "Radioactivity", "Chris")].join("\n") + "\n");
+    run("import-adam", join(dir, "trax.csv"), join(dir, "trax_raw.csv"), join(dir, "playz.csv"));
+    // the room has Kraftwerk's upload, with both hyphens
+    writeFileSync(join(dir, "room.json"), JSON.stringify({ globalTracks: { "1X--F5b5IdqU": { artist: "Kraftwerk", title: "Radioactivity", type: 1 } } }));
+    run("import-firebase", join(dir, "room.json"));
+    const joined = run("reconcile", "--adam-tz", "0");
+    assert.match(joined, /ADAM's YouTube ids that lost a hyphen: 1 of 2 matched to the room's upload/);
+    const store = require("../tools/history/store.js");
+    let db = store.open(dir);
+    assert.equal(db.prepare("SELECT count(*) n FROM uploads WHERE cid IN ('Jm-9WefnhM', 'X-F5b5IdqU')").get().n, 0, "no upload under a broken id");
+    assert.equal(db.prepare("SELECT count(*) n FROM plays WHERE cid = 'X--F5b5IdqU'").get().n, 1, "ADAM's play of the repaired one is the room's upload's");
+    assert.equal(db.prepare("SELECT plays FROM tracks WHERE artist = 'Foals'").get().plays, 1, "the other's play joins by its tags");
+    const root = { globalTracks: { "1Jm-9WefnhM": { song: "tOLD" }, "1X--F5b5IdqU": { artist: "Kraftwerk", title: "Radioactivity", type: 1 } } };
+    fb.client = () => ({ get: async (p) => JSON.parse(JSON.stringify(p.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), root) ?? null)),
+      getPaged: async () => {}, update: async (u) => { Object.entries(u).forEach(([p, v]) => { const ks = p.split("/").filter(Boolean); let o = root; ks.slice(0, -1).forEach((k) => { o = o[k] = o[k] || {}; }); if (v === null) delete o[ks[ks.length - 1]]; else o[ks[ks.length - 1]] = v; }); }, uid: async () => "bot" });
+    const { publish } = require("../tools/history/publish.js");
+    const counts = await publish(db, {}, { dir, write: true, force: true }, () => {});
+    db.close();
+    assert.equal(counts.brokenLinksRemoved, 1);
+    assert.equal(root.globalTracks["1Jm-9WefnhM"], undefined, "the bare link under a broken id goes");
+    assert.equal(root.globalTracks["1X--F5b5IdqU"].artist, "Kraftwerk", "the room's own upload stays");
+  } finally {
+    fb.client = realClient;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("how new members found the room: the Discover page they first landed on, by month, totals only", () => {
   const { foundViaReport, writeFoundVia } = require("../tools/history/library.js");
   const at = (y, m, d) => new Date(y, m - 1, d, 12).getTime();
