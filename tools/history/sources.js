@@ -92,9 +92,12 @@ async function importAdam(db, file, kind, log) {
       // track's TRAX tag names it when the history is joined)
       var lt = get(map.trackId);
       var lc = cidOf(get(map.link));
-      if (!lt || !lc) { skipped++; return; }
+      var lType = lc ? adamSourceType(get(map.source), lc) : null;
+      // 153 of ADAM's YouTube ids lost a letter (10, not 11): no upload to link
+      // to; those tracks' plays are joined by their tags
+      if (!lt || !lc || !validUpload(lType, lc)) { skipped++; return; }
       w.add({ source: "adam", ref: "link:" + (get(map.id) || n), artist: "", title: "", role: "tag", weight: 0.5,
-        type: adamSourceType(get(map.source), lc), cid: lc, extra: { adam: lt } });
+        type: lType, cid: lc, extra: { adam: lt } });
     } else if (map.kind === "raws") {
       var parts = splitRaw(get(map.raw));
       if (!parts[0]) { skipped++; return; }
@@ -163,6 +166,11 @@ function adamSourceType(s, cid) {
   if (s === "0") return 2;
   if (s === "1") return 1;
   return sourceType(s) || (/^\d+$/.test(cid) ? 2 : /^[A-Za-z0-9_-]{11}$/.test(cid) ? 1 : null);
+}
+/** A real upload id: YouTube's are 11 characters, SoundCloud's all digits. */
+function validUpload(type, cid) {
+  cid = String(cid || "");
+  return Number(type) === 1 ? /^[A-Za-z0-9_-]{11}$/.test(cid) : Number(type) === 2 ? /^\d+$/.test(cid) : false;
 }
 // a YouTube/SoundCloud id from a link (or the id itself)
 function cidOf(link) {
@@ -724,7 +732,7 @@ async function enrichArtists(db, apiKey, limit, log) {
   return todo.length;
 }
 
-module.exports = { pruneGone: pruneGone,
+module.exports = { pruneGone: pruneGone, validUpload: validUpload,
   importAdam: importAdam,
   importFirebaseFile: importFirebaseFile,
   fetchFirebase: fetchFirebase,

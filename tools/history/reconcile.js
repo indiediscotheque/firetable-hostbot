@@ -185,6 +185,8 @@ function reconcile(db, opts) {
   var adamNoUpload = [];      // ADAM plays logged by track id only, waiting for it
   for (var row of rows) {
     var extra = row.extra ? JSON.parse(row.extra) : null;
+    // ADAM's broken YouTube ids (10 letters, not 11) name no upload
+    if (row.source === "adam" && row.cid && !validUpload(row.type, row.cid)) { row.type = null; row.cid = null; }
     if (row.source === "adam" && extra && extra.adam && row.role === "tag" && !row.artist && row.type && row.cid) {
       adamUpload.set(String(extra.adam), row.type + "" + row.cid);
     }
@@ -1198,6 +1200,7 @@ var ADAM_VOTE = 1e-6;
 // The logs that only tell the room's history, never how a song is written:
 // ADAM's, and the Discord play log (discord.js)
 var HISTORY_ONLY = new Set(["adam", "discord"]);
+var validUpload = require("./sources").validUpload;
 // The logs with every play and its DJ, each for its own years: ADAM's (May
 // 2016 to Nov 2022), the Discord play log (to Oct 2026), the bot's play log
 var COMPLETE_LOGS = new Set(["adam", "discord", "fb:playLog"]);

@@ -168,7 +168,7 @@ function plan(db, ph, opts) {
   var adamUp = new Map();
   for (var l of db.prepare("SELECT type, cid, extra FROM obs WHERE source = 'adam' AND cid IS NOT NULL AND cid != '' AND extra IS NOT NULL").iterate()) {
     var le = JSON.parse(l.extra);
-    if (le && le.adam && l.type) adamUp.set(String(le.adam), l.type + "" + l.cid);
+    if (le && le.adam && l.type && require("./sources").validUpload(l.type, l.cid)) adamUp.set(String(le.adam), l.type + "" + l.cid);
   }
   var upOf = function(r) {
     if (r.cid) return r.type + "" + r.cid;

@@ -5,13 +5,11 @@ genre,axis
 # from the bot's tempo lookups. Change a number to move a genre; a genre not
 # listed sits in the middle (0.5).
 Rock,0.06
-Folk,0.05
 Jazz & Swing,0.04
 Funk,0.12
 Indie Rock,0.14
 Soul & R&B,0.17
 Psych,0.22
-Reggae & Dancehall,0.26
 Indie Pop,0.28
 Disco,0.30
 Dream Pop,0.34
