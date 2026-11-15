@@ -798,7 +798,7 @@ test("ADAM DATA's five tabs: every play keeps its DJ and its upload", () => {
     } }));
     run("import-firebase", moved);
     const joined = run("reconcile", "--adam-tz", "0");
-    assert.match(joined, /2 first\/last plays from ADAM's era lined up with none of its plays: left out/);
+    assert.match(joined, /2 plays no play log has, at times one was running, left out: 2 first\/last plays, 0 scrobbles, 0 others/);
     const store = require("../tools/history/store.js");
     const db = store.open(dir);
     const plays = db.prepare("SELECT t.artist, p.dj, p.type, p.cid FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
@@ -1298,19 +1298,26 @@ test("the Discord play log: read a message at a time, tests and chat skipped, ea
       playLog: { p1: { a: "Foals", t: "My Number", k: "1aaaaaaaaaaa", w: Date.parse("2026-11-05T20:00:30-06:00"), dj: "Chris", djid: "u1", p: 200 } } }));
     run("import-adam", join(dir, "trax.csv"), join(dir, "trax_raw.csv"), join(dir, "playz.csv"));
     run("import-firebase", join(dir, "room.json"));
+    // Last.fm: one scrobble of a Discord play, one doubled 40 minutes on while the Discord bot ran, one while it was down
+    const uts = (iso) => Date.parse(iso) / 1000;
+    writeFileSync(join(dir, "scrobbles.csv"), "artist,track,uts\n" + [
+      "Foals,My Number," + uts("2024-05-02T01:00:30Z"), "Foals,My Number," + uts("2024-05-02T01:40:00Z"), "Foals,My Number," + uts("2024-08-01T12:00:00Z")].join("\n"));
+    run("import-lastfm", join(dir, "scrobbles.csv"), "--user", "room");
     const out = run("import-discord", json, "--all");
     assert.match(out, /6 messages, 4 plays by 3 DJs \(2022-03-02 to 2026-11-06\); 4 kept/);
     const joined = run("reconcile", "--adam-tz", "0");
     assert.match(joined, /Discord play log: 2 plays used, 2 left to ADAM's log and the bot's play log/);
+    assert.match(joined, /1 plays no play log has, at times one was running, left out: 0 first\/last plays, 1 scrobbles, 0 others/);
     const store = require("../tools/history/store.js");
     const db = store.open(dir);
     const plays = db.prepare("SELECT t.artist || ' - ' || t.title s, p.dj, p.sources FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
     db.close();
     assert.deepEqual(plays.map((p) => [p.s, p.dj]), [
       ["Foals - My Number", "Chris"], ["Foals - My Number", "Chris"],   // ADAM's two
-      ["Foals - My Number", "scytheria"], ["Black Kids - Hit The Heartbrakes", "jarvis"], // the gap, from Discord
+      ["Foals - My Number", "scytheria"], ["Black Kids - Hit The Heartbrakes", "jarvis"], // the gap, from Discord (one scrobbled too)
+      ["Foals - My Number", null],                                         // scrobbled while the Discord bot was down
       ["Foals - My Number", "Chris"]                                       // the play log's
-    ], "each play once, named as the room writes it, with its DJ");
+    ], "each play once, named as the room writes it, with its DJ; a scrobble doubled while a log ran isn't a play");
     assert.ok(plays.some((p) => p.sources === "discord"), "the gap's plays come from Discord");
   } finally {
     rmSync(dir, { recursive: true, force: true });
