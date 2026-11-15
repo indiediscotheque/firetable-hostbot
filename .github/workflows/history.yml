@@ -45,6 +45,10 @@ on:
         description: "ADAM's export, once: link to the ADAM DATA Google Sheet (anyone with the link). Every tab, PLAYZ's every play and DJ included, is imported and kept"
         type: string
         default: ""
+      discord_json:
+        description: "The Discord play log, once: link to DiscordChatExporter's JSON of #last-played (Google Drive, anyone with the link). Its plays are imported and kept"
+        type: string
+        default: ""
       rebuild:
         description: "Start from scratch instead of from the last run's data"
         type: boolean
@@ -121,6 +125,12 @@ jobs:
         env:
           ADAM_CSV: ${{ inputs.adam_csv }}
         run: npm run history -- import-adam "$ADAM_CSV" --archive
+
+      - name: Import the Discord play log
+        if: ${{ inputs.discord_json != '' && !inputs.undo }}
+        env:
+          DISCORD_JSON: ${{ inputs.discord_json }}
+        run: npm run history -- import-discord "$DISCORD_JSON" --archive
 
       - name: Refresh (room database, Last.fm, uploads, matching)
         if: ${{ !inputs.undo }}

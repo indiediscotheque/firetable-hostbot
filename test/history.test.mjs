@@ -798,7 +798,7 @@ test("ADAM DATA's five tabs: every play keeps its DJ and its upload", () => {
     } }));
     run("import-firebase", moved);
     const joined = run("reconcile", "--adam-tz", "0");
-    assert.match(joined, /2 first\/last plays from ADAM's era lined up with none of its plays: left out/);
+    assert.match(joined, /2 plays no play log has, at times one was running, left out: 2 first\/last plays, 0 scrobbles, 0 others/);
     const store = require("../tools/history/store.js");
     const db = store.open(dir);
     const plays = db.prepare("SELECT t.artist, p.dj, p.type, p.cid FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
@@ -1260,6 +1260,88 @@ test("the room's tags as they are now: an upload taken out of globalTracks loses
     const ph = require("../tools/history/placeholders.js").load();
     assert.ok(ph.is("video inavailable", "Video Unavailable") && ph.is("unavailable", "Unavvailable") && ph.is("unavailable @chris", "Don't Work"), "the room's misspelled placeholders");
     assert.ok(!ph.is("unavailable", "Airline Boarding Methods"), "a real video tagged with 'unavailable' as its artist isn't one");
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Discord play log: read a message at a time, tests and chat skipped, each play's DJ, used only between ADAM's end and the play log's start", async () => {
+  const discord = require("../tools/history/discord.js");
+  const dir = mkdtempSync(join(tmpdir(), "discord-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const bot = { id: "1", name: "eve", isBot: true };
+    const emb = (title, by, url, dj) => [{ title, url, description: "by " + by, footer: { text: dj + " is DJing" } }];
+    const msg = (id, at, content, embeds, author = bot) => ({ id, type: "Default", timestamp: at, content, author, embeds });
+    const messages = [
+      msg("1", "2018-01-12T14:50:28.294-06:00", "chris sucks and also CJ- started playing Run Alone by 360. https://i.ytimg.com/vi/CIDO36isBUc/hqdefault.jpg", [{ url: "x" }]),
+      msg("2", "2018-01-12T15:00:00-06:00", "ban citizensips {not json} \"quoted\" ]", [], { id: "9", name: "mxew", isBot: false }),
+      msg("3", "2022-03-01T20:00:00-06:00", "", emb("My Number", "FOALS", "https://youtube.com/watch?v=aaaaaaaaaaa", "Chris")),             // ADAM has it
+      msg("4", "2024-05-01T20:00:00-05:00", "...", emb("My Number", "FOALS", "https://www.youtube.com/watch?v=aaaaaaaaaaa", "scytheria")), // the gap
+      msg("5", "2024-05-01T20:05:00-05:00", "", emb("Hit The Heartbrakes", "Black Kids", "http://soundcloud.com/black-kids/hit", "jarvis")),
+      msg("6", "2026-11-05T20:00:00-06:00", "", emb("My Number", "FOALS", "https://youtube.com/watch?v=aaaaaaaaaaa", "Chris"))              // the play log has it
+    ];
+    const json = join(dir, "export.json");
+    writeFileSync(json, JSON.stringify({ guild: { id: "g", name: "Indie Discotheque" }, channel: { name: "last-played" }, messages }, null, 2));
+    const seen = [];
+    assert.equal(await discord.eachMessage(json, (m) => { seen.push(m.id); }, 7), 6, "read in 7-byte pieces, strings with braces and brackets in them");
+    assert.deepEqual(seen, ["1", "2", "3", "4", "5", "6"]);
+    assert.deepEqual(messages.map((m) => discord.playOf(m) && discord.playOf(m).dj), [null, null, "Chris", "scytheria", "jarvis", "Chris"], "the January 2018 tests and people's messages aren't plays");
+    assert.deepEqual(discord.uploadOfLink("https://www.youtube.com/watch?v=aaaaaaaaaaa"), { type: 1, cid: "aaaaaaaaaaa" });
+
+    const q = (...v) => v.map((x) => JSON.stringify(String(x))).join(",");
+    writeFileSync(join(dir, "trax.csv"), [q("id", "artist_id", "artist name", "name", "first_play_dj", "first DJ name", "first_play_date", "last_play_dj", "last DJ name", "last_play_date"), q(1, 1, "FOALS", "My number", 1, "Chris", "2022-03-02 02:00:00", 1, "Chris", "2022-03-02 02:00:00")].join("\n") + "\n");
+    writeFileSync(join(dir, "trax_raw.csv"), [q("id", "track_id", "link", "source_id"), q(1, 1, "aaaaaaaaaaa", 1)].join("\n") + "\n");
+    writeFileSync(join(dir, "playz.csv"), [q("id", "track_id", "dj_id", "played_at", "artist", "track", "DJ"), q(1, 1, 1, "2022-03-02 02:00:00", "FOALS", "My number", "Chris"), q(2, 1, 1, "2022-11-10 23:00:00", "FOALS", "My number", "Chris")].join("\n") + "\n");
+    writeFileSync(join(dir, "room.json"), JSON.stringify({ globalTracks: { "1aaaaaaaaaaa": { artist: "Foals", title: "My Number", type: 1 } },
+      playLog: { p1: { a: "Foals", t: "My Number", k: "1aaaaaaaaaaa", w: Date.parse("2026-11-05T20:00:30-06:00"), dj: "Chris", djid: "u1", p: 200 } } }));
+    run("import-adam", join(dir, "trax.csv"), join(dir, "trax_raw.csv"), join(dir, "playz.csv"));
+    run("import-firebase", join(dir, "room.json"));
+    // Last.fm: one scrobble of a Discord play, one doubled 40 minutes on while the Discord bot ran, one while it was down
+    const uts = (iso) => Date.parse(iso) / 1000;
+    writeFileSync(join(dir, "scrobbles.csv"), "artist,track,uts\n" + [
+      "Foals,My Number," + uts("2024-05-02T01:00:30Z"), "Foals,My Number," + uts("2024-05-02T01:40:00Z"), "Foals,My Number," + uts("2024-08-01T12:00:00Z")].join("\n"));
+    run("import-lastfm", join(dir, "scrobbles.csv"), "--user", "room");
+    const out = run("import-discord", json, "--all");
+    assert.match(out, /6 messages, 4 plays by 3 DJs \(2022-03-02 to 2026-11-06\); 4 kept/);
+    const joined = run("reconcile", "--adam-tz", "0");
+    assert.match(joined, /Discord play log: 2 plays used, 2 left to ADAM's log and the bot's play log/);
+    assert.match(joined, /1 plays no play log has, at times one was running, left out: 0 first\/last plays, 1 scrobbles, 0 others/);
+    const store = require("../tools/history/store.js");
+    const db = store.open(dir);
+    const plays = db.prepare("SELECT t.artist || ' - ' || t.title s, p.dj, p.sources FROM plays p JOIN tracks t ON t.id = p.track_id ORDER BY p.at").all();
+    db.close();
+    assert.deepEqual(plays.map((p) => [p.s, p.dj]), [
+      ["Foals - My Number", "Chris"], ["Foals - My Number", "Chris"],   // ADAM's two
+      ["Foals - My Number", "scytheria"], ["Black Kids - Hit The Heartbrakes", "jarvis"], // the gap, from Discord (one scrobbled too)
+      ["Foals - My Number", null],                                         // scrobbled while the Discord bot was down
+      ["Foals - My Number", "Chris"]                                       // the play log's
+    ], "each play once, named as the room writes it, with its DJ; a scrobble doubled while a log ran isn't a play");
+    assert.ok(plays.some((p) => p.sources === "discord"), "the gap's plays come from Discord");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the Discord plays kept in the room's database come back on a rebuild", async () => {
+  const zlib = await import("zlib");
+  const archive = require("../tools/history/archive.js");
+  const discord = require("../tools/history/discord.js");
+  const store = require("../tools/history/store.js");
+  const dir = mkdtempSync(join(tmpdir(), "discord-archive-"));
+  const db = store.open(dir);
+  try {
+    const csvText = "id,at,dj,artist,title,link\n7,2024-05-02T01:00:00.000Z,scytheria,Foals,My Number,https://youtube.com/watch?v=aaaaaaaaaaa\n";
+    const gz = zlib.gzipSync(Buffer.from(csvText)).toString("base64");
+    const remote = { "historyArchive/files": { "discord-plays_csv": { name: "discord-plays.csv", kind: "discord", chunks: 1, at: 5 } }, "historyArchive/chunks/discord-plays_csv/0": gz };
+    const sources = require("../tools/history/sources.js");
+    let kinds = [];
+    const n = await archive.restoreFiles(db, { get: async (p) => remote[p] ?? null }, dir, (file, kind) => { kinds.push(kind); return kind === "discord" ? discord.importCsv(db, file) : null; }, () => {});
+    assert.equal(n, 1);
+    assert.deepEqual(kinds, ["discord"]);
+    assert.ok(db.prepare("SELECT 1 FROM obs WHERE source = 'discord' AND dj = 'scytheria' AND cid = 'aaaaaaaaaaa'").get());
+    assert.ok(typeof sources.pruneGone === "function");
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });

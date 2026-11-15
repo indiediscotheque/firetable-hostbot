@@ -99,7 +99,7 @@ function toUtc(ms, kind, zones) {
 var ZONES = ["UTC", "America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Berlin"];
 for (var off = -12; off <= 14; off++) if (off) ZONES.push(off);
 
-var SOURCE_DJ_RANK = ["fb:playLog", "fb:songHistory", "fb:newMusic", "adam", "fb:globalTracks"];
+var SOURCE_DJ_RANK = ["fb:playLog", "discord", "fb:songHistory", "fb:newMusic", "adam", "fb:globalTracks"];
 function djRank(src) {
   var i = SOURCE_DJ_RANK.indexOf(src);
   return i === -1 ? 99 : i;
@@ -262,7 +262,7 @@ function reconcile(db, opts) {
     // how a song or artist is written is the room's call: ADAM's logs count
     // for plays, dates, DJs and uploads, and name a track or artist only
     // where the room has nothing of its own (see ADAM_VOTE)
-    var vote = r.source === "adam" ? ADAM_VOTE : 1;
+    var vote = HISTORY_ONLY.has(r.source) ? ADAM_VOTE : 1;
     sp.logs++;
     sp.seen += vote;
     sp.weight += r.weight * vote;
@@ -657,25 +657,54 @@ function reconcile(db, opts) {
 
   var events = new Map(); // root -> [[at, src, role, dj, up]]
   var adamPlays = null;   // when ADAM's every-play log (PLAYZ) starts and ends, if imported
+  // The Discord play log is used only where no other log has every play and
+  // its DJ: after ADAM's last play and before the bot's play log began
+  var playLogFrom = null;
+  obsList.forEach(function(o) {
+    if (!o[2] || o[1] !== "play") return;
+    var src = sourceNames[o[4]];
+    if (src === "adam") {
+      var t = toUtc(o[2], o[3], zones);
+      if (!adamPlays) adamPlays = { from: t, to: t, n: 0 };
+      adamPlays.from = Math.min(adamPlays.from, t);
+      adamPlays.to = Math.max(adamPlays.to, t);
+      adamPlays.n++;
+    } else if (src === "fb:playLog" && (playLogFrom == null || o[2] < playLogFrom)) playLogFrom = o[2];
+  });
+  var discordUsed = 0, discordElsewhere = 0;
+  var discordTimes = []; // the Discord plays used, for unlogged() below
   obsList.forEach(function(o) {
     if (!o[2] || o[1] === "tag") return;
     var at = toUtc(o[2], o[3], zones);
-    var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     var src = sourceNames[o[4]];
-    if (src === "adam" && o[1] === "play") {
-      if (!adamPlays) adamPlays = { from: at, to: at, n: 0 };
-      adamPlays.from = Math.min(adamPlays.from, at);
-      adamPlays.to = Math.max(adamPlays.to, at);
-      adamPlays.n++;
+    if (src === "discord") {
+      if ((adamPlays && at <= adamPlays.to + windowMs) || (playLogFrom != null && at >= playLogFrom - windowMs)) { discordElsewhere++; return; }
+      discordUsed++;
     }
+    if (o[1] === "play" && src === "discord") discordTimes.push(at);
+    var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     push(events, root, [at, src, o[1], djOf(o[5], src), o[6]]);
   });
-  // With ADAM's every play, its era's first and last plays (TRAX, and the
-  // copies moved into globalTracks) are only ever those same plays again: one
-  // that lines up with no play is a clock mismatch, never a play of its own
-  var markersDropped = 0;
-  var markerOnly = function(g) {
-    return !g.hasPlay && adamPlays && g.start >= adamPlays.from - windowMs && g.start <= adamPlays.to + windowMs;
+  discordTimes.sort(function(a, b) { return a - b; });
+  if (discordUsed || discordElsewhere) log("  Discord play log: " + discordUsed + " plays used, " + discordElsewhere + " left to ADAM's log and the bot's play log, which have them");
+  // Where a log with every play and its DJ was running, the plays are its
+  // plays. A first or last play (globalTracks, TRAX) or a scrobble that lines
+  // up with none of them is a clock mismatch or a double, never a play of its
+  // own: left out. ADAM's log and the bot's play log were the room's own
+  // records, so they ran all through their years (a quiet hour there is a
+  // quiet room); the Discord bot could be down, so it counts as running only
+  // with a play of its own within the hour. Before ADAM, and in a Discord
+  // outage, first/last plays and scrobbles still count.
+  var unloggedDropped = { marks: 0, scrobbles: 0, other: 0 };
+  var unlogged = function(g) {
+    if (g.logged) return false;
+    if (adamPlays && g.start >= adamPlays.from - windowMs && g.start <= adamPlays.to + windowMs) return true;
+    if (playLogFrom != null && g.start >= playLogFrom - windowMs) return true;
+    if (!discordTimes.length) return false;
+    var lo = 0, hi = discordTimes.length - 1;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (discordTimes[mid] < g.start) lo = mid + 1; else hi = mid; }
+    var near = Math.min(Math.abs(discordTimes[lo] - g.start), lo > 0 ? Math.abs(discordTimes[lo - 1] - g.start) : Infinity);
+    return near <= LOG_RUNNING;
   };
 
   // ------------------------------------------------------------- write
@@ -974,18 +1003,21 @@ function reconcile(db, opts) {
     var g = null;
     ev.forEach(function(e) {
       var fits = g && e[0] - g.start <= windowMs && (!g.srcs.has(e[1]) || e[0] - g.lastAt < 2 * MIN || e[2] !== "play");
-      if (!fits) { g = { start: e[0], at: e[0], srcs: new Set(), dj: null, djRank: 99, lastAt: e[0], playAt: null, up: null, scrobbled: false, hasPlay: false }; groups.push(g); }
+      if (!fits) { g = { start: e[0], at: e[0], srcs: new Set(), dj: null, djRank: 99, lastAt: e[0], playAt: null, up: null, scrobbled: false, hasPlay: false, logged: false }; groups.push(g); }
       g.srcs.add(e[1]);
       if (e[2] === "play") g.hasPlay = true;
+      if (e[2] === "play" && COMPLETE_LOGS.has(e[1])) g.logged = true;
       g.lastAt = e[0];
       if (e[2] === "play" && (g.playAt == null || djRank(e[1]) < 99)) g.playAt = g.playAt == null || !isLastfm(e[1]) ? (g.playAt == null ? e[0] : Math.min(g.playAt, e[0])) : g.playAt;
       if (isLastfm(e[1])) g.scrobbled = true;
       if (e[3] && djRank(e[1]) < g.djRank) { g.dj = e[3]; g.djRank = djRank(e[1]); }
       if (e[4] && !g.up) g.up = e[4];
     });
-    var kept = groups.filter(function(x) { return !markerOnly(x); });
-    markersDropped += groups.length - kept.length;
-    groups = kept;
+    groups = groups.filter(function(x) {
+      if (!unlogged(x)) return true;
+      unloggedDropped[!x.hasPlay ? "marks" : x.scrobbled ? "scrobbles" : "other"]++;
+      return false;
+    });
     t.plays = groups.length;
     t.scrobbles = groups.filter(function(x) { return x.scrobbled; }).length;
     var djsHere = new Set();
@@ -1011,7 +1043,8 @@ function reconcile(db, opts) {
       if (fd && fd === f) djStat(f.dj).firsts++;
     }
   });
-  if (markersDropped) log("  " + markersDropped + " first/last plays from ADAM's era lined up with none of its plays: left out (ADAM's own log has every play)");
+  var droppedAll = unloggedDropped.marks + unloggedDropped.scrobbles + unloggedDropped.other;
+  if (droppedAll) log("  " + droppedAll + " plays no play log has, at times one was running, left out: " + unloggedDropped.marks + " first/last plays, " + unloggedDropped.scrobbles + " scrobbles, " + unloggedDropped.other + " others (the logs have every play then)");
   // the name played under most (whatever its case), written the way it is most often
   function djName(k) {
     if (!k) return null;
@@ -1143,7 +1176,7 @@ function reconcile(db, opts) {
 
   var summary = {
     observations: obsList.length, spellings: spellings.length, tracks: trackRows.length, songs: songMembers.size,
-    uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length, adamMarkersDropped: markersDropped,
+    uploads: uploadRows.length, plays: playRows.length, djs: djStats.size, merges: merges.length, unloggedDropped: unloggedDropped,
     artistAliases: aliasReasons.length, review: review.length, accentFixes: accentFixes.length, adamClock: zone, adamMovedClock: zones[2],
     seconds: Math.round((Date.now() - started) / 1000)
   };
@@ -1162,6 +1195,14 @@ var YTM_SURE = 3; // uploads from an artist's Topic channel that make YouTube Mu
 // room's own tags, so the room's cleaned-up tags always win, and ADAM's only
 // decide between ADAM's own spellings (a track or artist the room never tagged)
 var ADAM_VOTE = 1e-6;
+// The logs that only tell the room's history, never how a song is written:
+// ADAM's, and the Discord play log (discord.js)
+var HISTORY_ONLY = new Set(["adam", "discord"]);
+// The logs with every play and its DJ, each for its own years: ADAM's (May
+// 2016 to Nov 2022), the Discord play log (to Oct 2026), the bot's play log
+var COMPLETE_LOGS = new Set(["adam", "discord", "fb:playLog"]);
+// The Discord bot was running if it posted a play within the hour
+var LOG_RUNNING = 60 * MIN;
 var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
 function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;

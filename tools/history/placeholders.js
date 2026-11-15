@@ -115,7 +115,7 @@ function kindOf(source, extra) {
 }
 var NAMES = { "fb:tagLog": "the name before the retag", "fb:playlists": "DJs' playlists", "fb:queues": "DJs' queues", "fb:songHistory": "Recent",
   "fb:playLog": "the play log", "fb:newMusic": "Fresh", "fb:globalTracks": "the room's tags", adam: "ADAM", "yt:topic": "YouTube Music", "sc:meta": "SoundCloud",
-  "yt:archive": "its YouTube page in the Wayback Machine" };
+  "yt:archive": "its YouTube page in the Wayback Machine", discord: "the Discord play log" };
 function describe(sources) {
   var out = [];
   sources.forEach(function(n, s) {
