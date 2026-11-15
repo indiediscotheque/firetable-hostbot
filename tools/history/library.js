@@ -424,12 +424,17 @@ function buildLibrary(db, opts) {
     var plays = 0;
     var genreCount = new Map();
     var seen = new Set();
+    var seenTrack = new Set();
     list.forEach(function(it) {
       if (!it || !it.cid || seen.has(it.cid)) return;
       seen.add(it.cid);
       var id = trackOfUpload.get("1_" + it.cid);
       var t = id && tracks.get(id);
       if (t) {
+        // the playlist can hold one song under several uploads (an official
+        // video, a lyric video, a re-upload): one song, counted and listed once
+        if (seenTrack.has(id)) return;
+        seenTrack.add(id);
         played.push(id);
         plays += t.plays || 0;
         (genreOf.get(id) || []).slice(0, 1).forEach(function(g) { genreCount.set(g, (genreCount.get(g) || 0) + (t.plays || 0)); });
@@ -438,7 +443,7 @@ function buildLibrary(db, opts) {
       }
     });
     var top = Array.from(genreCount.entries()).sort(function(a, b) { return b[1] - a[1]; })[0];
-    yearIndex[year] = { songs: seen.size, plays: plays, played: played.length, genre: top ? top[0] : null };
+    yearIndex[year] = { songs: played.length + unplayed.length, plays: plays, played: played.length, genre: top ? top[0] : null };
     // finds not played here yet: spread across the list, the same each week
     var step = Math.max(1, Math.floor(unplayed.length / ROWS.yearMore));
     var more = [];
