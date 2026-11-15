@@ -7,3 +7,7 @@ Advert,Advert;
 # ADAM's form: the artist alone, no title
 Unavailable,
 Advert,
+# misspelled ones in the room's tags
+video inavailable,Video Unavailable
+unavailable,Unavvailable
+unavailable @chris,Don't Work
