@@ -167,7 +167,12 @@ function reconcile(db, opts) {
   // named from their other logs, or left out (placeholders.js)
   var placeholders = require("./placeholders");
   var ph = placeholders.load(opts.dir);
-  var phPlan = placeholders.plan(db, ph);
+  // ADAM's local times, on the clock the last run found (UTC until one has),
+  // so its plays of these uploads line up with the scrobbles sent then
+  var lastClock = (store.getState(db, "reconcile") || {}).zones || {};
+  var setTz = opts.adamTz != null && opts.adamTz !== "auto" ? (isNaN(Number(opts.adamTz)) ? opts.adamTz : Number(opts.adamTz)) : null;
+  var phZones = { 1: setTz != null ? setTz : lastClock[1] || 0, 2: setTz != null ? setTz : lastClock[2] || 0 };
+  var phPlan = placeholders.plan(db, ph, { toUtc: function(ms, kind) { return toUtc(ms, kind, phZones); } });
   if (phPlan.size) {
     var phNamed = 0;
     phPlan.forEach(function(p) { if (p.action === "renamed") phNamed++; });
@@ -1225,9 +1230,9 @@ function matchCase(word, like) {
   return word;
 }
 
-var WEAK_PLATFORM = new Set(["yt", "sc"]);
+var WEAK_PLATFORM = new Set(["yt", "sc", "yt:archive"]);
 var TRUSTED_PLATFORM = new Set(["yt:topic", "sc:meta"]);
-var ALL_PLATFORM = new Set(["yt", "sc", "yt:topic", "sc:meta"]);
+var ALL_PLATFORM = new Set(["yt", "sc", "yt:topic", "sc:meta", "yt:archive"]);
 function onlyFrom(sp, set) {
   if (!sp.sources.size) return false;
   for (var s of sp.sources) if (!set.has(s)) return false;
