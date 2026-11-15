@@ -166,9 +166,16 @@ function plan(db, ph, opts) {
   if (!ph.list.length) return out;
   // ADAM logged plays by its own track id; TRAX RAW says which upload each was
   var adamUp = new Map();
+  var roomSet = null;
+  var roomUploads = function() {
+    if (!roomSet) roomSet = new Set(db.prepare("SELECT DISTINCT type, cid FROM obs WHERE source LIKE 'fb:%' AND cid IS NOT NULL").all().map(function(r) { return r.type + "" + r.cid; }));
+    return roomSet;
+  };
   for (var l of db.prepare("SELECT type, cid, extra FROM obs WHERE source = 'adam' AND cid IS NOT NULL AND cid != '' AND extra IS NOT NULL").iterate()) {
     var le = JSON.parse(l.extra);
-    if (le && le.adam && l.type && require("./sources").validUpload(l.type, l.cid)) adamUp.set(String(le.adam), l.type + "" + l.cid);
+    if (!le || !le.adam || !l.type) continue;
+    var lcid = require("./sources").validUpload(l.type, l.cid) ? l.cid : require("./sources").repairAdamId(l.cid, roomUploads());
+    if (lcid) adamUp.set(String(le.adam), l.type + "" + lcid);
   }
   var upOf = function(r) {
     if (r.cid) return r.type + "" + r.cid;

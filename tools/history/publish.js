@@ -232,8 +232,9 @@ async function publish(db, env, opts, log) {
     }
   }
 
-  // ADAM's YouTube ids that lost a letter (10, not 11) name no upload: a link
-  // to a song that an earlier publish made under one goes, if that's all it is
+  // ADAM's YouTube ids that lost a hyphen (10 letters, not 11) aren't uploads
+  // (the join repairs them to the room's): a link to a song that an earlier
+  // publish made under one goes, if that's all it is
   var brokenIds = db.prepare("SELECT DISTINCT type, cid FROM obs WHERE source = 'adam' AND cid IS NOT NULL AND cid != ''").all()
     .filter(function(r) { return r.type && !validUpload(r.type, r.cid); });
   for (var br of brokenIds) {

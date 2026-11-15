@@ -93,9 +93,9 @@ async function importAdam(db, file, kind, log) {
       var lt = get(map.trackId);
       var lc = cidOf(get(map.link));
       var lType = lc ? adamSourceType(get(map.source), lc) : null;
-      // 153 of ADAM's YouTube ids lost a letter (10, not 11): no upload to link
-      // to; those tracks' plays are joined by their tags
-      if (!lt || !lc || !validUpload(lType, lc)) { skipped++; return; }
+      // ADAM's YouTube ids that lost a hyphen (10 letters, not 11) are kept as
+      // they are: the join repairs them against the room's uploads (repairAdamId)
+      if (!lt || !lc || !(validUpload(lType, lc) || (lType === 1 && lc.length === 10))) { skipped++; return; }
       w.add({ source: "adam", ref: "link:" + (get(map.id) || n), artist: "", title: "", role: "tag", weight: 0.5,
         type: lType, cid: lc, extra: { adam: lt } });
     } else if (map.kind === "raws") {
@@ -167,6 +167,25 @@ function adamSourceType(s, cid) {
   if (s === "1") return 1;
   return sourceType(s) || (/^\d+$/.test(cid) ? 2 : /^[A-Za-z0-9_-]{11}$/.test(cid) ? 1 : null);
 }
+/**
+ * ADAM DATA lost a hyphen from YouTube ids with two in a row ("Jm--9WefnhM"
+ * became "Jm-9WefnhM"): the id with each hyphen doubled, when exactly one of
+ * them is an upload the room has. Null when it can't be told.
+ * @param {string} cid - the 10-letter id
+ * @param {Set<string>} uploads - the room's uploads ("1" + id)
+ */
+function repairAdamId(cid, uploads) {
+  cid = String(cid || "");
+  if (cid.length !== 10 || cid.indexOf("-") === -1) return null;
+  var found = [];
+  for (var k = 0; k < cid.length; k++) {
+    if (cid[k] !== "-") continue;
+    var c = cid.slice(0, k) + "-" + cid.slice(k);
+    if (uploads.has("1" + c) && found.indexOf(c) === -1) found.push(c);
+  }
+  return found.length === 1 ? found[0] : null;
+}
+
 /** A real upload id: YouTube's are 11 characters, SoundCloud's all digits. */
 function validUpload(type, cid) {
   cid = String(cid || "");
@@ -732,7 +751,7 @@ async function enrichArtists(db, apiKey, limit, log) {
   return todo.length;
 }
 
-module.exports = { pruneGone: pruneGone, validUpload: validUpload,
+module.exports = { pruneGone: pruneGone, validUpload: validUpload, repairAdamId: repairAdamId,
   importAdam: importAdam,
   importFirebaseFile: importFirebaseFile,
   fetchFirebase: fetchFirebase,

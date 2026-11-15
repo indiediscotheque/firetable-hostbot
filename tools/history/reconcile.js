@@ -179,14 +179,21 @@ function reconcile(db, opts) {
     log("  " + phPlan.size + " uploads with placeholder tags: " + phNamed + " named, " + (phPlan.size - phNamed) + " left out");
   }
 
+  // the room's uploads, to repair ADAM's ids that lost a hyphen against
+  var roomUploads = new Set(db.prepare("SELECT DISTINCT type, cid FROM obs WHERE source LIKE 'fb:%' AND cid IS NOT NULL").all().map(function(r) { return r.type + "" + r.cid; }));
+  var adamRepaired = new Map(); // broken id -> the room's upload, or null
   var rows = db.prepare("SELECT source, artist, title, type, cid, role, at, naive_tz, dj, weight, extra FROM obs ORDER BY id").iterate();
   var pendingAdamPlays = [];
   var adamUpload = new Map(); // ADAM track id -> its upload (TRAX RAW)
   var adamNoUpload = [];      // ADAM plays logged by track id only, waiting for it
   for (var row of rows) {
     var extra = row.extra ? JSON.parse(row.extra) : null;
-    // ADAM's broken YouTube ids (10 letters, not 11) name no upload
-    if (row.source === "adam" && row.cid && !validUpload(row.type, row.cid)) { row.type = null; row.cid = null; }
+    // ADAM's YouTube ids that lost a hyphen: the room's upload, or none
+    if (row.source === "adam" && row.cid && !validUpload(row.type, row.cid)) {
+      if (!adamRepaired.has(row.cid)) adamRepaired.set(row.cid, Number(row.type) === 1 ? repairAdamId(row.cid, roomUploads) : null);
+      var fixedId = adamRepaired.get(row.cid);
+      if (fixedId) row.cid = fixedId; else { row.type = null; row.cid = null; }
+    }
     if (row.source === "adam" && extra && extra.adam && row.role === "tag" && !row.artist && row.type && row.cid) {
       adamUpload.set(String(extra.adam), row.type + "" + row.cid);
     }
@@ -245,6 +252,10 @@ function reconcile(db, opts) {
     } else if (ph.is(r.artist, r.title)) return;
     addObs(r, up);
   });
+  if (adamRepaired.size) {
+    var nFixed = Array.from(adamRepaired.values()).filter(Boolean).length;
+    log("  ADAM's YouTube ids that lost a hyphen: " + nFixed + " of " + adamRepaired.size + " matched to the room's upload, the rest joined by their tags");
+  }
   pendingAdamPlays.forEach(function(p) {
     var t = adamTags.get(String(JSON.parse(p[0].extra).adam));
     if (!t || ph.is(t[0], t[1])) return;
@@ -1201,6 +1212,7 @@ var ADAM_VOTE = 1e-6;
 // ADAM's, and the Discord play log (discord.js)
 var HISTORY_ONLY = new Set(["adam", "discord"]);
 var validUpload = require("./sources").validUpload;
+var repairAdamId = require("./sources").repairAdamId;
 // The logs with every play and its DJ, each for its own years: ADAM's (May
 // 2016 to Nov 2022), the Discord play log (to Oct 2026), the bot's play log
 var COMPLETE_LOGS = new Set(["adam", "discord", "fb:playLog"]);
