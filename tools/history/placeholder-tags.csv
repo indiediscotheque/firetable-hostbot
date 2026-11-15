@@ -4,3 +4,6 @@ artist,title
 # (placeholders.js). Matching ignores case and punctuation.
 Unavailable,Unavailable
 Advert,Advert;
+# ADAM's form: the artist alone, no title
+Unavailable,
+Advert,

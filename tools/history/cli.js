@@ -202,6 +202,8 @@ async function main() {
       }
       log("== uploads");
       var checked = await verify.verifyUploads(db, env, { maxQuota: args.maxQuota }, log);
+      // gone videos that carried "Unavailable" or "Advert": their archived pages
+      await verify.archivePages(db, { dir: dir }, log);
       log("== reconcile");
       var rec = { dir: dir, window: Number(args.window) || 10, adamTz: args.adamTz || "auto", accentMin: args.accentMin, log: log };
       reconcile.reconcile(db, rec);

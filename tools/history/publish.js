@@ -177,13 +177,39 @@ async function publish(db, env, opts, log) {
   var preview = [];
   var tagBackup = {}; // upload -> its tags before and after, to undo with undo-tags
   var ph = require("./placeholders").load(opts.dir);
+  // placeholder uploads named now that have no room tags (an earlier publish
+  // took them out, or only ADAM has them): they come back under their name,
+  // with whatever else their old entry had
+  var phNamed = new Map(db.prepare("SELECT upload, evidence FROM placeholders WHERE action = 'renamed'").all().map(function(r) { return [r.upload, r.evidence]; }));
+  var backupRuns = opts.write ? Object.keys((await c.get("historyArchive/tagBackupRuns", { shallow: "true" })) || {}).sort().reverse() : [];
+  var oldEntryOf = async function(up) {
+    for (var run of backupRuns) {
+      var b = await c.get("historyArchive/tagBackups/" + run + "/" + up);
+      if (b && b.removed && b.entry) return b.entry;
+    }
+    return null;
+  };
   for (var u of db.prepare(`SELECT u.*, t.artist ta, t.title tt, t.confidence FROM uploads u JOIN tracks t ON t.id = u.track_id`).iterate()) {
     var tid = trackIdMap.get(u.track_id);
     if (!tid) continue;
     var up = "globalTracks/" + u.type + u.cid + "/";
     updates[up + "song"] = tid;
     counts.links++;
-    if (u.artist == null) continue; // never played: no room tags to change
+    if (u.artist == null) {
+      var key = u.type + "" + u.cid;
+      if (!phNamed.has(key)) continue; // never played: no room tags to change
+      var named = shown.get(u.track_id);
+      if (!fits(named.a) || !fits(named.t)) { counts.tooLong = (counts.tooLong || 0) + 1; continue; }
+      var live = opts.write ? await c.get("globalTracks/" + key) : null;
+      if (live) continue; // someone tagged it since this history was read
+      var back = Object.assign({}, (opts.write && await oldEntryOf(key)) || {}, { artist: named.a, title: named.t, type: u.type, song: tid });
+      delete updates[up + "song"]; // in the entry
+      updates["globalTracks/" + key] = back;
+      tagBackup[key] = { added: true, a: "", t: "", na: named.a, nt: named.t };
+      counts.placeholdersBack = (counts.placeholdersBack || 0) + 1;
+      preview.push({ upload: key, from: null, to: named.a + " - " + named.t, why: "placeholder, named from " + phNamed.get(key) + ": back in the room's tags" });
+      continue;
+    }
     var sh = shown.get(u.track_id);
     var tidied = sh.a !== u.ta || sh.t !== u.tt;
     var current = u.artist + " - " + u.title;
@@ -335,6 +361,15 @@ async function undoTags(env, opts, log) {
     var kept = 0;
     Object.keys(backup).forEach(function(up) {
       var b = backup[up];
+      if (b.added) {
+        // a placeholder upload a publish put back under its name: out again, unless retagged since
+        var was = now[up];
+        if (!was || (was.artist || "") !== (b.na || "") || (was.title || "") !== (b.nt || "")) { kept++; return; }
+        updates["globalTracks/" + up] = null;
+        delete now[up];
+        restored++;
+        return;
+      }
       if (b.removed) {
         // an upload a publish removed (a placeholder tag): back whole, unless it's back already
         if (now[up]) { kept++; return; }

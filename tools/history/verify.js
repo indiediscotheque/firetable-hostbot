@@ -201,7 +201,7 @@ async function checkArtists(db, env, opts, log) {
 // The platforms' answers as observations (rebuilt each time from lookups).
 function toObservations(db) {
   return store.tx(db, function() {
-    db.exec("DELETE FROM obs WHERE source IN ('yt', 'yt:topic', 'sc', 'sc:meta')");
+    db.exec("DELETE FROM obs WHERE source IN ('yt', 'yt:topic', 'sc', 'sc:meta', 'yt:archive')");
     var w = store.obsWriter(db);
     db.prepare("SELECT kind, query, result FROM lookups WHERE kind IN ('yt', 'sc') AND result IS NOT NULL").all().forEach(function(row) {
       var r = JSON.parse(row.result);
@@ -214,6 +214,7 @@ function toObservations(db) {
           w.add({ source: "yt:topic", ref: row.query, artist: r.channel.replace(/\s-\sTopic$/, ""), title: r.title, type: type, cid: row.query, role: "tag", weight: 2, extra: extra });
         } else {
           var p = String(r.title || "").indexOf(" - ") > 0;
+          extra.text = r.title || "";
           w.add({ source: "yt", ref: row.query, artist: p ? r.title : r.channel, title: p ? null : r.title, type: type, cid: row.query, role: "tag", weight: 0.3, extra: extra });
         }
       } else {
@@ -222,12 +223,117 @@ function toObservations(db) {
           w.add({ source: "sc:meta", ref: row.query, artist: r.artist, title: r.release || r.title, type: type, cid: row.query, role: "tag", weight: 2, extra: extra });
         } else {
           var q = String(r.title || "").indexOf(" - ") > 0;
+          extra.text = r.title || "";
+          extra.by = r.user || null;
           w.add({ source: "sc", ref: row.query, artist: q ? r.title : r.user, title: q ? null : r.title, type: type, cid: row.query, role: "tag", weight: 0.3, extra: extra });
         }
       }
     });
+    // pages of gone videos, as the Wayback Machine kept them (archivePages)
+    db.prepare("SELECT query, result FROM lookups WHERE kind = 'wb' AND result IS NOT NULL").all().forEach(function(row) {
+      var r = JSON.parse(row.result);
+      if (!r.title) return;
+      var type = Number(row.query[0]);
+      var cid = row.query.slice(1);
+      var topic = /\s-\sTopic$/.test(r.channel || "");
+      var extra = { archived: r.at || null, text: r.title };
+      if (topic) extra.topic = true;
+      var dash = r.title.indexOf(" - ") > 0;
+      w.add({ source: "yt:archive", ref: row.query, artist: topic ? r.channel.replace(/\s-\sTopic$/, "") : dash ? r.title : r.channel || "", title: topic || !dash ? r.title : null,
+        type: type, cid: cid, role: "tag", weight: topic ? 2 : 0.3, extra: extra });
+    });
     return w.count();
   });
+}
+
+// ------------------------------------------------- pages of gone videos
+
+function decodeEntities(s) {
+  return String(s || "").replace(/\\u([0-9a-fA-F]{4})/g, function(m, h) { return String.fromCharCode(parseInt(h, 16)); })
+    .replace(/&#x([0-9a-f]+);/gi, function(m, h) { return String.fromCodePoint(parseInt(h, 16)); })
+    .replace(/&#(\d+);/g, function(m, d) { return String.fromCodePoint(Number(d)); })
+    .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/**
+ * A YouTube watch page's video title and channel, from any of its layouts
+ * since 2010. Null when it's the "video unavailable" page.
+ * @param {string} html
+ * @returns {{title: string, channel: string|null}|null}
+ */
+function parseYoutubePage(html) {
+  html = String(html || "");
+  var pick = function(res) {
+    for (var i = 0; i < res.length; i++) { var m = res[i].exec(html); if (m && m[1].trim()) return decodeEntities(m[1]).trim(); }
+    return null;
+  };
+  var title = pick([/<meta\s+name="title"\s+content="([^"]*)"/i, /<meta\s+property="og:title"\s+content="([^"]*)"/i, /"videoDetails":\{[^}]*?"title":"((?:[^"\\]|\\.)*)"/, /<title>\s*([\s\S]*?)\s*<\/title>/i]);
+  if (title) title = title.replace(/\s+-\s+YouTube\s*$/i, "").replace(/\s+/g, " ").trim();
+  if (!title || /^(YouTube|undefined)$/i.test(title) || /video (is )?unavailable|private video|this video (has been|is no longer)/i.test(title)) return null;
+  var channel = pick([/"ownerChannelName":"((?:[^"\\]|\\.)*)"/, /<span\s+itemprop="author"[^>]*>\s*<link\s+itemprop="url"[^>]*>\s*<link\s+itemprop="name"\s+content="([^"]*)"/i,
+    /<link\s+itemprop="name"\s+content="([^"]*)"/i, /"author":"((?:[^"\\]|\\.)*)"/, /class="[^"]*yt-user-name[^"]*"[^>]*>([^<]+)</i]);
+  return { title: title, channel: channel };
+}
+
+/**
+ * Placeholder-tagged YouTube uploads that are gone now: their page as the
+ * Wayback Machine kept it, earliest first, names the video and its channel.
+ * Answers are kept (kind 'wb'); a page it never kept is asked again after
+ * --recheck-days. A dropped connection stops it for this run.
+ * @returns {Promise<{checked: number, found: number}>}
+ */
+async function archivePages(db, opts, log) {
+  var placeholders = require("./placeholders");
+  var phUploads = placeholders.plan(db, placeholders.load(opts.dir));
+  var counts = { checked: 0, found: 0 };
+  if (!phUploads.size) return counts;
+  var recheck = (Number(opts.recheckDays) || 180) * DAY;
+  var dead = new Set(db.prepare("SELECT query FROM lookups WHERE kind = 'yt' AND result LIKE '%\"dead\":true%'").all().map(function(r) { return "1" + r.query; }));
+  var asked = new Map(db.prepare("SELECT query, result, fetched_at FROM lookups WHERE kind = 'wb'").all().map(function(r) { return [r.query, r]; }));
+  var todo = Array.from(phUploads.keys()).filter(function(up) {
+    if (up[0] !== "1" || !dead.has(up)) return false;
+    var a = asked.get(up);
+    return !a || (!JSON.parse(a.result || "{}").title && Date.now() - a.fetched_at > recheck);
+  }).slice(0, Number(opts.max) || 200);
+  if (!todo.length) return counts;
+  log("Wayback Machine: looking for the pages of " + todo.length + " gone videos that carried a placeholder tag...");
+  var save = db.prepare("INSERT OR REPLACE INTO lookups (kind, query, result, fetched_at) VALUES ('wb', ?, ?, ?)");
+  var get = async function(url, json) {
+    var last = null;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (attempt) await fb.sleep(3000 * attempt);
+      try {
+        var res = await fetch(url, { headers: { "User-Agent": "firetable-history/1.0" }, signal: AbortSignal.timeout(60000) });
+        if (res.status === 404) return { ok: true, body: null };
+        if (res.status === 429 || res.status >= 500) { last = "HTTP " + res.status; continue; }
+        if (!res.ok) return { ok: true, body: null };
+        return { ok: true, body: json ? await res.json().catch(function() { return null; }) : await res.text() };
+      } catch (e) { last = (e && e.cause && e.cause.code) || (e && e.message) || String(e); }
+    }
+    return { ok: false, error: last };
+  };
+  for (var i = 0; i < todo.length; i++) {
+    var up = todo[i];
+    var cid = up.slice(1);
+    var list = await get("https://web.archive.org/cdx/search/cdx?url=" + encodeURIComponent("youtube.com/watch?v=" + cid) + "&output=json&filter=statuscode:200&fl=timestamp,original&limit=12", true);
+    if (!list.ok) { log("  Wayback Machine stopped: " + list.error + "; the next run carries on"); break; }
+    var snaps = Array.isArray(list.body) ? list.body.slice(1) : [];
+    var found = null;
+    for (var k = 0; k < snaps.length && k < 4 && !found; k++) {
+      var page = await get("https://web.archive.org/web/" + snaps[k][0] + "id_/" + snaps[k][1], false);
+      if (!page.ok) break;
+      var got = parseYoutubePage(page.body);
+      if (got) found = Object.assign({ at: Number(snaps[k][0].slice(0, 8)) || null }, got);
+      await fb.sleep(1000);
+    }
+    save.run(up, JSON.stringify(found || { none: true, snapshots: snaps.length }), Date.now());
+    counts.checked++;
+    if (found) counts.found++;
+    await fb.sleep(1000);
+  }
+  log("  " + counts.checked + " looked up, " + counts.found + " found");
+  if (counts.checked) toObservations(db);
+  return counts;
 }
 
 function isoSeconds(d) {
@@ -264,4 +370,4 @@ function deadUploads(db) {
 }
 function url(type, cid) { return type == 1 ? "https://youtu.be/" + cid : "https://api.soundcloud.com/tracks/" + cid; }
 
-module.exports = { verifyUploads: verifyUploads, checkArtists: checkArtists, toObservations: toObservations, deadUploads: deadUploads };
+module.exports = { verifyUploads: verifyUploads, checkArtists: checkArtists, archivePages: archivePages, parseYoutubePage: parseYoutubePage, toObservations: toObservations, deadUploads: deadUploads };

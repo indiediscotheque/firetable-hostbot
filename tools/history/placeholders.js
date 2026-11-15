@@ -16,9 +16,13 @@
 //   YouTube Music / SoundCloud   the song data of a Topic channel upload, or
 //                           SoundCloud's own artist and title
 //   Last.fm                 at least 2 scrobbles sent the moment it played
-// A plain YouTube or SoundCloud video title, or one scrobble, is only a
-// suggestion (it's often a promo reel or the next song): the upload is left
-// out unless placeholder-fixes.csv confirms it.
+//                           (ADAM's plays included, through TRAX RAW's links)
+//   the upload's own page   its YouTube or SoundCloud title ("Artist - Title";
+//                           on SoundCloud a bare title is the uploader's), or
+//                           for a video that's gone, its page as the Wayback
+//                           Machine kept it
+// A YouTube title with no artist in it, or a single scrobble, is only a
+// suggestion: the upload is left out unless placeholder-fixes.csv confirms it.
 //
 // placeholder-tags.csv lists the placeholders, placeholder-fixes.csv the
 // answers (both in tools/history/, or history-data/, which wins).
@@ -102,14 +106,16 @@ function load(dir) {
   };
 }
 
-function kindOf(source) {
+function kindOf(source, extra) {
   if (source === "yt:topic" || source === "sc:meta") return "platform";
+  if (source === "yt:archive") return extra && extra.topic ? "platform" : "title";
   if (source === "yt" || source === "sc") return "title";
   if (source.slice(0, 7) === "lastfm:") return "lastfm";
   return "room";
 }
 var NAMES = { "fb:tagLog": "the name before the retag", "fb:playlists": "DJs' playlists", "fb:queues": "DJs' queues", "fb:songHistory": "Recent",
-  "fb:playLog": "the play log", "fb:newMusic": "Fresh", "fb:globalTracks": "the room's tags", adam: "ADAM", "yt:topic": "YouTube Music", "sc:meta": "SoundCloud" };
+  "fb:playLog": "the play log", "fb:newMusic": "Fresh", "fb:globalTracks": "the room's tags", adam: "ADAM", "yt:topic": "YouTube Music", "sc:meta": "SoundCloud",
+  "yt:archive": "its YouTube page in the Wayback Machine" };
 function describe(sources) {
   var out = [];
   sources.forEach(function(n, s) {
@@ -120,47 +126,100 @@ function describe(sources) {
 }
 
 /**
+ * A song's name from an upload's own title: "Artist - Title", or on
+ * SoundCloud, where people upload their own tracks, a bare title is the
+ * uploader's ("Sunglasses" by TWIN XL). Upload junk goes ("(Official Video)",
+ * "FREE DOWNLOAD", "* Buy on Bandcamp *"), and a vinyl side or track number
+ * before the dash ("B1 - So Hard To Reach") isn't an artist.
+ * @param {string} text - the video or track title
+ * @param {string} [uploader] - only where the uploader is usually the artist (SoundCloud)
+ * @returns {{artist: string, title: string}|null}
+ */
+function nameFromUpload(text, uploader) {
+  text = String(text || "").replace(/\*[^*]*\*/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  var m = /\s[-–—]\s/.exec(text);
+  var artist = m ? text.slice(0, m.index).trim() : "";
+  var title = m ? text.slice(m.index + m[0].length).trim() : text;
+  if (/^(?:[A-H]\d{1,2}|\d{1,2})\.?$/i.test(artist)) artist = "";
+  if (!artist) {
+    if (!uploader) return null;
+    artist = String(uploader).trim();
+  }
+  var td = tags.tidy(artist, title, "junk");
+  if (!td.artist || !td.title) return null;
+  return { artist: td.artist, title: td.title };
+}
+
+/**
  * What to do with each upload that carries a placeholder.
  * @param {DatabaseSync} db - the history (obs)
  * @param {ReturnType<typeof load>} ph
+ * @param {{toUtc?: function(number, number): number}} [opts] - ADAM's local
+ *   times as UTC (the clock the last reconcile found), so its plays can be
+ *   matched with the scrobbles sent then
  * @returns {Map<string, {tag, action: "renamed"|"removed", artist, title, evidence, suggestion, logs, plays, first, last, djs: Set}>}
  */
-function plan(db, ph) {
+function plan(db, ph, opts) {
+  opts = opts || {};
   var out = new Map();
   if (!ph.list.length) return out;
+  // ADAM logged plays by its own track id; TRAX RAW says which upload each was
+  var adamUp = new Map();
+  for (var l of db.prepare("SELECT type, cid, extra FROM obs WHERE source = 'adam' AND cid IS NOT NULL AND cid != '' AND extra IS NOT NULL").iterate()) {
+    var le = JSON.parse(l.extra);
+    if (le && le.adam && l.type) adamUp.set(String(le.adam), l.type + "" + l.cid);
+  }
+  var upOf = function(r) {
+    if (r.cid) return r.type + "" + r.cid;
+    if (r.source !== "adam" || !r.extra) return null;
+    var e = JSON.parse(r.extra);
+    return e && e.adam ? adamUp.get(String(e.adam)) || null : null;
+  };
   var times = []; // [at, up] of each placeholder play, for the scrobbles
-  for (var r of db.prepare("SELECT artist, title, type, cid, role, at, naive_tz, dj FROM obs WHERE cid IS NOT NULL AND cid != ''").iterate()) {
+  for (var r of db.prepare("SELECT source, artist, title, type, cid, role, at, naive_tz, dj, extra FROM obs WHERE (cid IS NOT NULL AND cid != '') OR source = 'adam'").iterate()) {
     if (!ph.is(r.artist, r.title)) continue;
-    var up = r.type + "" + r.cid;
+    var up = upOf(r);
+    if (!up) continue;
     var p = out.get(up);
     if (!p) out.set(up, p = { tag: r.artist + " - " + r.title, action: "removed", artist: null, title: null, evidence: "", suggestion: "", logs: 0, plays: 0, first: null, last: null, djs: new Set(), votes: new Map() });
     p.logs++;
     if (r.role === "play") {
       p.plays++;
       if (r.at) {
-        if (p.first == null || r.at < p.first) p.first = r.at;
-        if (p.last == null || r.at > p.last) p.last = r.at;
-        if (!r.naive_tz) times.push([r.at, up]);
+        var utc = r.naive_tz ? (opts.toUtc ? opts.toUtc(r.at, r.naive_tz) : null) : r.at;
+        var shown = utc == null ? r.at : utc;
+        if (p.first == null || shown < p.first) p.first = shown;
+        if (p.last == null || shown > p.last) p.last = shown;
+        if (utc != null) times.push([utc, up]);
       }
       if (r.dj) p.djs.add(r.dj);
     }
   }
   if (!out.size) return out;
 
-  var vote = function(up, artist, title, source, w) {
+  var vote = function(up, artist, title, source, w, extra) {
     if (ph.is(artist, title) || (!artist && !title)) return;
     var p = out.get(up);
+    var kind = kindOf(source, extra);
+    var weak = false;
+    if (kind === "title") {
+      // the upload's own title, read as a song's name (SoundCloud's uploader
+      // stands in for a missing artist; YouTube's channel never does)
+      var named = nameFromUpload(extra && extra.text != null ? extra.text : (title ? artist + " - " + title : artist), source === "sc" ? extra && extra.by : null);
+      if (named) { artist = named.artist; title = named.title; } else weak = true;
+    }
     var k = tags.clean(artist) + "\u0001" + tags.clean(title);
     var v = p.votes.get(k);
-    // a vague one (a video title with no " - ") can only ever be a suggestion
-    if (!v) p.votes.set(k, v = { artist: tags.clean(artist), title: tags.clean(title), weak: tags.parse(artist, title).weak, room: 0, platform: 0, lastfm: 0, title_only: 0, sources: new Map() });
-    var kind = kindOf(source);
-    v[kind === "title" ? "title_only" : kind] += kind === "lastfm" ? 1 : w || 1;
+    // a vague one (a video title with no artist in it) can only ever be a suggestion
+    if (!v) p.votes.set(k, v = { artist: tags.clean(artist), title: tags.clean(title), weak: weak || tags.parse(artist, title).weak, room: 0, platform: 0, lastfm: 0, title_only: 0, sources: new Map() });
+    if (kind === "title") v.title_only = 1; // one upload, one page: counts once
+    else v[kind] += kind === "lastfm" ? 1 : w || 1;
     v.sources.set(source, (v.sources.get(source) || 0) + 1);
   };
-  for (var o of db.prepare("SELECT source, artist, title, type, cid, weight FROM obs WHERE cid IS NOT NULL AND cid != ''").iterate()) {
-    var u = o.type + "" + o.cid;
-    if (out.has(u)) vote(u, o.artist, o.title, o.source, o.weight);
+  for (var o of db.prepare("SELECT source, artist, title, type, cid, weight, extra FROM obs WHERE (cid IS NOT NULL AND cid != '') OR source = 'adam'").iterate()) {
+    var u = upOf(o);
+    if (u && out.has(u)) vote(u, o.artist, o.title, o.source, o.weight, o.extra ? JSON.parse(o.extra) : null);
   }
   // scrobbles sent the moment a placeholder upload played: its name then
   if (times.length) {
@@ -179,7 +238,9 @@ function plan(db, ph) {
     var fix = ph.fixes.get(up);
     var best = null;     // the best name to give it
     var hint = null;     // the best anything, vague ones too, as a suggestion
-    var score = function(v) { return v.room * 10 + v.platform * 5 + v.lastfm * 3 + v.title_only * 0.5 + tags.quality(v.artist, v.title || "") * 0.01; };
+    // the room's logs, then YouTube Music / SoundCloud's song data, then the
+    // upload's own page, which outweighs one scrobble but not two
+    var score = function(v) { return v.room * 10 + v.platform * 5 + v.title_only * 4 + v.lastfm * 3 + tags.quality(v.artist, v.title || "") * 0.01; };
     p.votes.forEach(function(v) {
       if (!v.weak && (!best || score(v) > score(best))) best = v;
       if (!hint || score(v) > score(hint)) hint = v;
@@ -191,7 +252,7 @@ function plan(db, ph) {
       p.title = fix.remove ? null : fix.title;
       p.evidence = "placeholder-fixes.csv";
       p.suggestion = hint && fix.remove ? label(hint) : "";
-    } else if (best && (best.room > 0 || best.platform > 0 || best.lastfm >= MIN_SCROBBLES)) {
+    } else if (best && (best.room > 0 || best.platform > 0 || best.title_only > 0 || best.lastfm >= MIN_SCROBBLES)) {
       p.action = "renamed";
       p.artist = best.artist;
       p.title = best.title;
@@ -207,4 +268,4 @@ function plan(db, ph) {
   return out;
 }
 
-module.exports = { load: load, plan: plan, uploadOf: uploadOf, keyOf: keyOf };
+module.exports = { load: load, plan: plan, uploadOf: uploadOf, keyOf: keyOf, nameFromUpload: nameFromUpload };

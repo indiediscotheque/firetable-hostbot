@@ -1098,6 +1098,148 @@ test("placeholders, published: named uploads get their real tags, the rest leave
   }
 });
 
+test("placeholders named through their links: ADAM's plays and the scrobbles sent then, the upload's own page, and a gone video's archived page", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  try {
+    const q = (...v) => v.map((x) => JSON.stringify(String(x))).join(",");
+    // ADAM's form, "unavailable" and no title, on a SoundCloud upload that's gone; the scrobbles sent as ADAM played it name it
+    writeFileSync(join(dir, "trax.csv"), [q("id", "artist_id", "artist name", "name", "first_play_dj", "first DJ name", "first_play_date", "last_play_dj", "last DJ name", "last_play_date"),
+      q(7, 1, "unavailable", "", 1, "chris", "2018-03-01 20:00:00", 1, "chris", "2018-03-08 20:00:00")].join("\n") + "\n");
+    writeFileSync(join(dir, "trax_raw.csv"), [q("id", "track_id", "link", "source_id"), q(7, 7, "283002195", 0)].join("\n") + "\n");
+    writeFileSync(join(dir, "playz.csv"), [q("id", "track_id", "dj_id", "played_at", "artist", "track", "DJ"),
+      q(1, 7, 1, "2018-03-01 20:00:00", "unavailable", "", "chris"), q(2, 7, 1, "2018-03-08 20:00:00", "unavailable", "", "chris")].join("\n") + "\n");
+    const uts = (d) => Date.parse(d.replace(" ", "T") + "Z") / 1000;
+    writeFileSync(join(dir, "scrobbles.csv"), "artist,track,uts\n" + ["Rabo & Snob,So Hard To Reach," + (uts("2018-03-01 20:00:00") + 40), "Rabo & Snob,So Hard To Reach," + (uts("2018-03-08 20:00:00") + 25)].join("\n"));
+    // the room's placeholders: one still on YouTube, one on SoundCloud, one with only its channel name, one gone
+    const U = { artist: "Unavailable", title: "Unavailable", type: 1 };
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({ globalTracks: {
+      "1live0000001": { ...U }, "2555000002": { ...U, type: 2 }, "1chan0000003": { ...U }, "1gone0000004": { ...U }
+    } }));
+    run("import-adam", join(dir, "trax.csv"), join(dir, "trax_raw.csv"), join(dir, "playz.csv"));
+    run("import-lastfm", join(dir, "scrobbles.csv"), "--user", "room");
+    run("import-firebase", join(dir, "fb.json"));
+    const store = require("../tools/history/store.js");
+    const verify = require("../tools/history/verify.js");
+    const db = store.open(dir);
+    const look = db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES (?, ?, ?, 1)");
+    look.run("yt", "live0000001", JSON.stringify({ title: "Hercules & Love Affair - Blind! (Official Video)", channel: "damianfs1" }));
+    look.run("sc", "555000002", JSON.stringify({ title: "Dream Reader", user: "FRANKIIE", genre: null }));
+    look.run("yt", "chan0000003", JSON.stringify({ title: "best song ever", channel: "smashin1992" }));
+    look.run("yt", "gone0000004", JSON.stringify({ dead: true }));
+    look.run("sc", "283002195", JSON.stringify({ dead: true }));
+    look.run("wb", "1gone0000004", JSON.stringify({ title: "Hit The Heartbrakes", channel: "Black Kids - Topic", at: 20130624 }));
+    verify.toObservations(db);
+    db.close();
+    run("reconcile", "--adam-tz", "0");
+    run("report");
+    const audit = readFileSync(join(dir, "placeholder_uploads.csv"), "utf8");
+    const row = (id) => audit.split("\n").find((l) => l.includes(id)) || "";
+    assert.match(row("283002195"), /renamed,Rabo & Snob - So Hard To Reach,Last\.fm at play time ×2/, "ADAM's 'unavailable' is a placeholder; its plays, through TRAX RAW's link, line up with the scrobbles");
+    assert.match(row("live0000001"), /renamed,Hercules & Love Affair - Blind!,YouTube's title/, "named from its own YouTube title, upload junk gone");
+    assert.match(row("555000002"), /renamed,FRANKIIE - Dream Reader,SoundCloud's title/, "a bare SoundCloud title is the uploader's");
+    assert.match(row("chan0000003"), /removed,,only YouTube's title \(not enough to go on\),smashin1992 - best song ever/, "a YouTube channel never names the artist");
+    assert.match(row("gone0000004"), /renamed,Black Kids - Hit The Heartbrakes,its YouTube page in the Wayback Machine/, "a gone video, from its archived page");
+    assert.match(run("lookup", "Rabo & Snob - So Hard To Reach"), /2 plays/, "ADAM's two plays moved to the real song");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("archived YouTube pages: the title and channel from any layout, nothing from an 'unavailable' page; looked up only for gone placeholder videos", async () => {
+  const verify = require("../tools/history/verify.js");
+  assert.deepEqual(verify.parseYoutubePage('<title>Alexander Holland - City Full of Lights (Gigamesh Remix) - YouTube</title><meta name="title" content="Alexander Holland - City Full of Lights (Gigamesh Remix)"><span itemprop="author" itemscope itemtype="http://schema.org/Person"><link itemprop="url" href="x"><link itemprop="name" content="GigameshMusic"></span>'),
+    { title: "Alexander Holland - City Full of Lights (Gigamesh Remix)", channel: "GigameshMusic" });
+  assert.deepEqual(verify.parseYoutubePage('<meta property="og:title" content="Tom &amp; Jerry"> "ownerChannelName":"Black Kids \\u0026 Co - Topic"'), { title: "Tom & Jerry", channel: "Black Kids & Co - Topic" });
+  assert.equal(verify.parseYoutubePage("<title>YouTube</title>"), null);
+  assert.equal(verify.parseYoutubePage('<meta property="og:title" content="Video unavailable">'), null);
+
+  const dir = mkdtempSync(join(tmpdir(), "wb-"));
+  const store = require("../tools/history/store.js");
+  const fb = require("../tools/history/firebase.js");
+  const realFetch = globalThis.fetch, realSleep = fb.sleep;
+  fb.sleep = async () => {};
+  const db = store.open(dir);
+  try {
+    const add = db.prepare("INSERT INTO obs (source, ref, artist, title, type, cid, role, weight) VALUES ('fb:globalTracks', ?, ?, ?, 1, ?, 'tag', 4)");
+    add.run("1gone0000004", "Unavailable", "Unavailable", "gone0000004");
+    add.run("1live0000001", "Unavailable", "Unavailable", "live0000001");
+    add.run("1fine0000009", "Foals", "My Number", "fine0000009");
+    const look = db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('yt', ?, ?, 1)");
+    look.run("gone0000004", JSON.stringify({ dead: true }));
+    look.run("live0000001", JSON.stringify({ title: "x - y", channel: "c" }));
+    look.run("fine0000009", JSON.stringify({ dead: true }));
+    const asked = [];
+    globalThis.fetch = async (url) => {
+      asked.push(String(url));
+      if (/cdx/.test(url)) return new Response(JSON.stringify([["timestamp", "original"], ["20130624111658", "http://www.youtube.com/watch?v=gone0000004"], ["20250815103708", "https://www.youtube.com/watch?v=gone0000004"]]), { status: 200 });
+      return new Response('<title>Hit The Heartbrakes - YouTube</title> "ownerChannelName":"Black Kids - Topic"', { status: 200 });
+    };
+    const got = await verify.archivePages(db, { dir }, () => {});
+    assert.deepEqual(got, { checked: 1, found: 1 }, "only the gone video that carried a placeholder");
+    assert.ok(asked.every((u) => u.includes("gone0000004")), "never a live video, or a gone one with a real name");
+    assert.match(asked[1], /\/web\/20130624111658id_\/http:\/\/www\.youtube\.com\/watch\?v=gone0000004$/, "the earliest snapshot, as it was served");
+    assert.deepEqual(JSON.parse(db.prepare("SELECT result FROM lookups WHERE kind = 'wb'").get().result), { at: 20130624, title: "Hit The Heartbrakes", channel: "Black Kids - Topic" });
+    assert.ok(db.prepare("SELECT 1 FROM obs WHERE source = 'yt:archive' AND cid = 'gone0000004' AND artist = 'Black Kids'").get(), "an observation for the history");
+    assert.deepEqual(await verify.archivePages(db, { dir }, () => {}), { checked: 0, found: 0 }, "asked once");
+  } finally {
+    globalThis.fetch = realFetch;
+    fb.sleep = realSleep;
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("placeholders, published: an upload an earlier publish took out comes back under its real name, its old entry kept, and undo takes it out again", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "history-"));
+  const run = (...args) => execFileSync(process.execPath, ["--no-warnings", "tools/history/cli.js", "--dir", dir, ...args], { cwd: ROOT, encoding: "utf8" });
+  const fb = require("../tools/history/firebase.js");
+  const realClient = fb.client;
+  try {
+    const T = 1600000000000;
+    // the room's logs still have it as a placeholder; the room's tags don't have it any more
+    writeFileSync(join(dir, "fb.json"), JSON.stringify({ songHistory: { h1: { artist: "Unavailable", title: "Unavailable", type: 1, cid: "back0000001", when: T, dj: "eve" } } }));
+    run("import-firebase", join(dir, "fb.json"));
+    const store = require("../tools/history/store.js");
+    const verify = require("../tools/history/verify.js");
+    let db = store.open(dir);
+    db.prepare("INSERT INTO lookups (kind, query, result, fetched_at) VALUES ('yt', 'back0000001', ?, 1)").run(JSON.stringify({ title: "Popular Computer - Lointain (Robotaki Remix)", channel: "Popular Computer" }));
+    verify.toObservations(db);
+    db.close();
+    run("reconcile");
+    const old = { artist: "Unavailable", title: "Unavailable", type: 1, first_play_date: T, first_play_dj: "eve" };
+    const root = { globalTracks: {}, historyArchive: { tagBackupRuns: { 1700000000000: { at: 1 } }, tagBackups: { 1700000000000: { "1back0000001": { removed: true, entry: old, a: "Unavailable", t: "Unavailable", na: null, nt: null } } } } };
+    const at = (p) => p.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), root);
+    const put = (p, v) => {
+      const ks = p.split("/").filter(Boolean);
+      let o = root;
+      ks.slice(0, -1).forEach((k) => { o = o[k] = o[k] && typeof o[k] === "object" ? o[k] : {}; });
+      if (v === null) delete o[ks[ks.length - 1]];
+      else o[ks[ks.length - 1]] = JSON.parse(JSON.stringify(v, (k, x) => (x && x[".sv"] ? Date.now() : x)));
+    };
+    fb.client = () => ({
+      get: async (p) => JSON.parse(JSON.stringify(at(p) ?? null)),
+      getPaged: async (p, size, onPage) => onPage(JSON.parse(JSON.stringify(at(p) || {}))),
+      update: async (u) => { Object.entries(u).forEach(([p, v]) => put(p, v)); },
+      uid: async () => "bot"
+    });
+    const { publish, undoTags } = require("../tools/history/publish.js");
+    db = store.open(dir);
+    const counts = await publish(db, {}, { dir, write: true }, () => {});
+    db.close();
+    const back = root.globalTracks["1back0000001"];
+    assert.deepEqual([back.artist, back.title, back.type, back.first_play_dj], ["Popular Computer", "Lointain (Robotaki Remix)", 1, "eve"], "back under its name, with its old entry's dates and DJs");
+    assert.ok(back.song, "linked to its song");
+    assert.equal(counts.placeholdersBack, 1);
+    const latest = Object.keys(root.historyArchive.tagBackupRuns).sort().pop();
+    await undoTags({}, { write: true, run: latest }, () => {});
+    assert.equal(root.globalTracks["1back0000001"], undefined, "undoing this publish takes it out again");
+  } finally {
+    fb.client = realClient;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("how new members found the room: the Discover page they first landed on, by month, totals only", () => {
   const { foundViaReport, writeFoundVia } = require("../tools/history/library.js");
   const at = (y, m, d) => new Date(y, m - 1, d, 12).getTime();
