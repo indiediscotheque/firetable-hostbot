@@ -913,11 +913,13 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     const ids = db.prepare("SELECT id, artist FROM tracks WHERE plays > 0 ORDER BY plays DESC").all();
     ids.forEach((t, i) => db.prepare("INSERT OR REPLACE INTO track_genres VALUES (?, ?, '')").run(t.id, JSON.stringify(i % 2 ? ["Nu-Disco", "Disco"] : ["Indie Dance", "Nu-Disco"])));
     const djs = db.prepare("SELECT name FROM djs ORDER BY plays DESC").all().map((d) => d.name);
-    const upload = db.prepare("SELECT cid FROM uploads WHERE type = 1 AND cid IS NOT NULL LIMIT 1").get();
+    const upload = db.prepare("SELECT cid, track_id FROM uploads WHERE type = 1 AND cid IS NOT NULL LIMIT 1").get();
+    // a second upload of the same song, also on the year's playlist
+    db.prepare("INSERT OR REPLACE INTO uploads (type, cid, track_id, artist, title) VALUES (1, 'sameSong002', ?, 'A', 'B')").run(upload.track_id);
     const users = { u1: { username: djs[0] }, u2: { username: djs[1], publicName: false } };
     const built = library.buildLibrary(db, {
       users, bpm: {}, cards: { c1: { owner: "u1" } },
-      years: { 2017: [{ cid: upload.cid, artist: "A", title: "B" }, { cid: "notplayed01", artist: "New", title: "Find" }] },
+      years: { 2017: [{ cid: upload.cid, artist: "A", title: "B" }, { cid: "sameSong002", artist: "A", title: "B" }, { cid: "notplayed01", artist: "New", title: "Find" }] },
       now: Date.UTC(2026, 10, 11)
     });
     const u = built.updates;
@@ -943,7 +945,9 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.equal(asBot["discover/lib/genres"]["nu-disco"].plays, u["discover/lib/genres"]["nu-disco"].plays, "its plays still count");
     const year = u["discover/lib/year/2017"];
     assert.equal(year.more[0].cid, "notplayed01", "a year's songs not played here yet are its finds");
-    assert.equal(u["discover/lib/years"][2017].songs, 2);
+    assert.equal(u["discover/lib/years"][2017].songs, 2, "one song under two uploads is one song");
+    assert.equal(u["discover/lib/years"][2017].played, 1);
+    assert.equal(year.top.length, 1, "and is listed once in Most played here");
     assert.ok(Object.keys(u).some((k) => /^discover\/lib\/onThisDay\/\d\d-\d\d$/.test(k)), "On this day, by date");
     assert.ok(Object.keys(u["discover/lib/artistIndex"]).length > 0, "artist pages");
     assert.equal(library.slugOf("Röyksopp & Robyn"), "royksopp-and-robyn");
