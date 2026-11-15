@@ -133,7 +133,7 @@ Answers are kept for good, in the room's database too (`historyDecisions`), and 
 Three files cover what the history can't know on its own. Keep them in `tools/history/` and commit them, so the GitHub Action uses them too; one in `history-data/` is read as well:
 - `artist-aliases.csv` (`alias,canonical` per line), e.g. `Shiina Ringo,椎名林檎`
 - `dj-aliases.csv`, for a DJ who played under more than one name (`CJ-,CJ`), or one person's several accounts.
-- `house-djs.csv`, the room's own bots (`jarvis` now, `eve` before it), one name per line. Their plays count for the songs, but they aren't DJs: no DJ page, and never in DJ rankings, "who plays it", similar DJs or the summary's first plays (`djs.csv` marks them `room_bot`). The bot leaves itself out of the live charts, theme nights and fires the same way.
+- `house-djs.csv`, the room's own bots (`jarvis` now; `eve` and `gerty` before it), one name per line. Their plays count for the songs, but they aren't DJs: no DJ page, and never in DJ rankings, "who plays it", similar DJs or the summary's first plays (`djs.csv` marks them `room_bot`). The bot leaves itself out of the live charts, theme nights and fires the same way.
 
 **Who is who.** A DJ is an account: its username, every name it ever claimed (the room's `nameClaim` keeps old names after a rename) and its id, so a renamed DJ's plays stay together and a name that mimics someone else's (`citizensips`) goes to the account that took it. `dj-aliases.csv` only needs names from before claims existed, and accounts that are one person. Each DJ is shown as the name they played under most (case never matters); to show another, pin it with `=`: `Noumenon,=Andrew`. `djs.csv` lists every name each DJ played under.
 
