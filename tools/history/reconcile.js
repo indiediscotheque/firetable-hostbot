@@ -99,7 +99,7 @@ function toUtc(ms, kind, zones) {
 var ZONES = ["UTC", "America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Berlin"];
 for (var off = -12; off <= 14; off++) if (off) ZONES.push(off);
 
-var SOURCE_DJ_RANK = ["fb:playLog", "fb:songHistory", "fb:newMusic", "adam", "fb:globalTracks"];
+var SOURCE_DJ_RANK = ["fb:playLog", "discord", "fb:songHistory", "fb:newMusic", "adam", "fb:globalTracks"];
 function djRank(src) {
   var i = SOURCE_DJ_RANK.indexOf(src);
   return i === -1 ? 99 : i;
@@ -262,7 +262,7 @@ function reconcile(db, opts) {
     // how a song or artist is written is the room's call: ADAM's logs count
     // for plays, dates, DJs and uploads, and name a track or artist only
     // where the room has nothing of its own (see ADAM_VOTE)
-    var vote = r.source === "adam" ? ADAM_VOTE : 1;
+    var vote = HISTORY_ONLY.has(r.source) ? ADAM_VOTE : 1;
     sp.logs++;
     sp.seen += vote;
     sp.weight += r.weight * vote;
@@ -657,19 +657,33 @@ function reconcile(db, opts) {
 
   var events = new Map(); // root -> [[at, src, role, dj, up]]
   var adamPlays = null;   // when ADAM's every-play log (PLAYZ) starts and ends, if imported
+  // The Discord play log is used only where no other log has every play and
+  // its DJ: after ADAM's last play and before the bot's play log began
+  var playLogFrom = null;
+  obsList.forEach(function(o) {
+    if (!o[2] || o[1] !== "play") return;
+    var src = sourceNames[o[4]];
+    if (src === "adam") {
+      var t = toUtc(o[2], o[3], zones);
+      if (!adamPlays) adamPlays = { from: t, to: t, n: 0 };
+      adamPlays.from = Math.min(adamPlays.from, t);
+      adamPlays.to = Math.max(adamPlays.to, t);
+      adamPlays.n++;
+    } else if (src === "fb:playLog" && (playLogFrom == null || o[2] < playLogFrom)) playLogFrom = o[2];
+  });
+  var discordUsed = 0, discordElsewhere = 0;
   obsList.forEach(function(o) {
     if (!o[2] || o[1] === "tag") return;
     var at = toUtc(o[2], o[3], zones);
-    var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     var src = sourceNames[o[4]];
-    if (src === "adam" && o[1] === "play") {
-      if (!adamPlays) adamPlays = { from: at, to: at, n: 0 };
-      adamPlays.from = Math.min(adamPlays.from, at);
-      adamPlays.to = Math.max(adamPlays.to, at);
-      adamPlays.n++;
+    if (src === "discord") {
+      if ((adamPlays && at <= adamPlays.to + windowMs) || (playLogFrom != null && at >= playLogFrom - windowMs)) { discordElsewhere++; return; }
+      discordUsed++;
     }
+    var root = o[6] && uploadRoot.has(o[6]) ? uploadRoot.get(o[6]) : uf.find(o[0]);
     push(events, root, [at, src, o[1], djOf(o[5], src), o[6]]);
   });
+  if (discordUsed || discordElsewhere) log("  Discord play log: " + discordUsed + " plays used, " + discordElsewhere + " left to ADAM's log and the bot's play log, which have them");
   // With ADAM's every play, its era's first and last plays (TRAX, and the
   // copies moved into globalTracks) are only ever those same plays again: one
   // that lines up with no play is a clock mismatch, never a play of its own
@@ -1162,6 +1176,9 @@ var YTM_SURE = 3; // uploads from an artist's Topic channel that make YouTube Mu
 // room's own tags, so the room's cleaned-up tags always win, and ADAM's only
 // decide between ADAM's own spellings (a track or artist the room never tagged)
 var ADAM_VOTE = 1e-6;
+// The logs that only tell the room's history, never how a song is written:
+// ADAM's, and the Discord play log (discord.js)
+var HISTORY_ONLY = new Set(["adam", "discord"]);
 var TRUSTED_SOURCES = new Set(["fb:tagLog", "sc:meta", "yt:topic"]);
 function trusted(sp) {
   for (var s of sp.sources) if (TRUSTED_SOURCES.has(s)) return true;

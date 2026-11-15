@@ -22,6 +22,9 @@ var HELP = `play history: join ADAM, Last.fm and the room's database into one hi
   npm run history -- <command> [options]
 
 getting the data in
+  import-discord <export.json|link|discord-plays.csv> [--archive] [--all]   the Discord play log
+        (#last-played, DiscordChatExporter's JSON; a Google Drive link shared as "anyone with the link"
+        works): every play with its DJ, used where no other log has them (ADAM's end to the play log's start)
   import-adam <file.csv|link> [more]  ADAM's export: CSVs, one per tab (TRAX, ARTISTS, djs, TRAX RAW, PLAYZ),
         or a Google Sheets link shared as "anyone with the link" (the whole sheet imports every tab)
         [--kind tracks|plays|links|raws|artists|djs]   if it can't tell from the columns
@@ -122,6 +125,29 @@ async function main() {
           log("  kept a copy in the room's database (historyArchive), so the history can be rebuilt anywhere");
         }
         if (input.file !== input.from) require("fs").unlinkSync(input.file);
+      }
+      break;
+    }
+    case "import-discord": {
+      // the Discord play log (#last-played), as DiscordChatExporter's JSON, a
+      // link to it, or the plays CSV a run made from it
+      if (!args._[0]) throw new Error("which file? import-discord <export.json, a link to it, or discord-plays.csv>");
+      var discord = require("./discord");
+      var got = await discord.fetchExport(args._[0], dir);
+      var playsCsv = got.file;
+      if (!/\.csv$/i.test(got.file)) {
+        playsCsv = path.join(dir, "discord-plays.csv");
+        log("reading the Discord export...");
+        var made = await discord.toCsv(got.file, playsCsv, { since: args.all ? null : discord.KEEP_FROM, log: log });
+        log("  " + made.messages + " messages, " + made.plays + " plays by " + made.djs + " DJs (" + new Date(made.from).toISOString().slice(0, 10) + " to " + new Date(made.to).toISOString().slice(0, 10) + "); " + made.kept + " kept" + (args.all ? "" : ", from November 2022 on"));
+        if (got.downloaded) require("fs").unlinkSync(got.file);
+      }
+      var imported = await discord.importCsv(db, playsCsv, log);
+      log("discord: " + imported + " plays in the history");
+      if (args.archive) {
+        var kept = await archive.saveFile(require("./firebase").client(env), "discord-plays.csv", playsCsv, "discord");
+        store.setState(db, kept.stateKey, true);
+        log("  kept a copy in the room's database (historyArchive), so the history can be rebuilt anywhere");
       }
       break;
     }

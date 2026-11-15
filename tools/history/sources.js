@@ -509,7 +509,7 @@ async function fetchFirebase(db, env, opts, log) {
   }
   try {
     var archive = require("./archive");
-    var restored = await archive.restoreFiles(db, c, opts.dir || require("os").tmpdir(), function(file, kind) { return importAdam(db, file, kind, log); }, log);
+    var restored = await archive.restoreFiles(db, c, opts.dir || require("os").tmpdir(), function(file, kind) { return kind === "discord" ? require("./discord").importCsv(db, file, log) : importAdam(db, file, kind, log); }, log);
     var saved = await c.get("historyDecisions");
     var kept = store.tx(db, function() { return archive.loadDecisions(db, saved); });
     if (restored || kept) log("  " + restored + " archived files and " + kept + " saved review answers restored");
