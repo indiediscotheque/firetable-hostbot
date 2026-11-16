@@ -299,6 +299,14 @@ await expect("DENIED", "a visitor writes the chat peek", visitor.ref("discover/c
 await expect("ALLOWED", "bot keeps release dates", db("bot").ref("discoverCache/release/abc").set({ d: "2026-11-01", src: "yt" }));
 await expect("DENIED", "a member reads the bot's Discover cache", eve.ref("discoverCache").once("value"));
 await expect("DENIED", "a visitor reads the play log", visitor.ref("playLog").once("value"));
+// the playing song's 🔥 count, for the site's live stage (it can't read the chat)
+await expect("ALLOWED", "bot publishes the song's fires", db("bot").ref("songFires").set({ started: 1700000000000, count: 3 }));
+await expect("ALLOWED", "a visitor reads the song's fires", visitor.ref("songFires").once("value"));
+await expect("DENIED", "a member sets the song's fires", eve.ref("songFires").set({ started: 1700000000000, count: 99 }));
+await expect("DENIED", "a visitor sets the song's fires", visitor.ref("songFires/count").set(99));
+await expect("DENIED", "bot fires with an extra field", db("bot").ref("songFires").set({ started: 1, count: 1, junk: "x" }));
+await expect("DENIED", "bot fires that aren't a number", db("bot").ref("songFires").set({ started: 1, count: "lots" }));
+await expect("ALLOWED", "bot clears the song's fires", db("bot").ref("songFires").set(null));
 await expect("ALLOWED", "a visitor reads the history's songs by plays", visitor.ref("globalSongs").orderByChild("plays").limitToLast(5).once("value"));
 await expect("ALLOWED", "turn off your name on public pages", eve.ref("users/eve/publicName").set(false));
 await expect("ALLOWED", "turn it back on", eve.ref("users/eve/publicName").set(true));
