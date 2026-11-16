@@ -63,6 +63,7 @@ test("nameOf: artist from the row or the Topic channel", () => {
   assert.equal(ytmsync.nameOf("Young Franco, EARTHGANG & Jafunk", "Lose Control"), "Young Franco, EARTHGANG & Jafunk - Lose Control");
   assert.equal(ytmsync.nameOf("Chromeo - Topic", "100%"), "Chromeo - 100%");
   assert.equal(ytmsync.nameOf("Various Artists - Topic", "Song"), "Song");
+  assert.equal(ytmsync.nameOf("Release - Topic", "Song"), "Song", "YouTube's stand-in for new releases");
 });
 
 const entry = (id, name, dur, extra) => Object.assign({ id, type: 1, cid: id, ident: ytmsync.identity(name), dur, added: 0, order: 0, available: true, deliberate: false }, extra);

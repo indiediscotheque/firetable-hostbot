@@ -809,11 +809,12 @@ var lookupWorked = function(source) {
 
 // ─── YouTube video lookups ──────────────────────────────────────────────────
 // One call to the YouTube Data API (videos.list, 1 unit of quota) for what the
-// bot checks: length, title, channel, artwork, and whether it can play here
+// bot checks: length, title, channel (and the description, which names the
+// artist of a new release YouTube files under "Release - Topic"), artwork, and whether it can play here
 // (privacy, embedding, region blocks, age limits, premieres; lib/checks.js).
 // cb(error, result): result is the API's answer ({items: [...]}); error when
 // it couldn't answer (quota, API key, network), with YouTube's own message.
-var YT_FIELDS = "items(snippet(title,channelTitle,publishedAt,thumbnails,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))";
+var YT_FIELDS = "items(snippet(title,channelTitle,description,publishedAt,thumbnails,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))";
 var youtubeVideo = function(id, cb) {
   var url = new URL("https://www.googleapis.com/youtube/v3/videos");
   url.searchParams.set("part", "snippet,contentDetails,status");
@@ -1243,13 +1244,18 @@ var startSong = function(noPrevPlay) {
                 // a live stream says 0: give it the 10 minutes too
                 totalseconds = Number(matches[1] || 0) * 3600 + Number(matches[2] || 0) * 60 + Number(matches[3] || 0) || totalseconds;
               }
-              var channel = String(snippet.channelTitle || "Unknown");
+              var rawChannel = String(snippet.channelTitle || "Unknown");
+              // a new release YouTube hasn't sorted into the artist's own
+              // "Artist - Topic" channel yet sits in "Release - Topic" (or
+              // "Various Artists - Topic"): its description names the artist
+              var channel = swaps.topicChannel(rawChannel, snippet.description, snippet.title);
+              var channelName = swaps.isStandIn(channel) ? "Unknown" : channel.replace(" - Topic", "");
               if (!stitle) {
                 stitle = sartist;
-                // "Various Artists - Topic": this youtube channel name is a lie...
-                sartist = channel == "Various Artists - Topic" ? "Unknown" : channel.replace(" - Topic", "");
-              } else if (sartist == "Unknown") {
-                sartist = channel.replace(" - Topic", "");
+                sartist = channelName;
+              } else if (sartist == "Unknown" || (channel !== rawChannel && swaps.isStandIn(sartist))) {
+                // saved as "Release - Song" (named from the stand-in channel)
+                sartist = channelName;
               }
               var thumbs = snippet.thumbnails || {};
               beginSong(seq, listRef, nextSongkey, data[nextSongkey], {
@@ -1999,7 +2005,7 @@ var youtubeProblems = function(ids) {
       var sn = item.snippet || {};
       out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
         audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }),
-        channel: String(sn.channelTitle || ""), title: String(sn.title || "") };
+        channel: swaps.topicChannel(sn.channelTitle, sn.description, sn.title), title: String(sn.title || "") };
     });
     return out;
   });
@@ -2035,7 +2041,8 @@ var youtubeSearch = function(query, type) {
       var sn = it.snippet || {};
       var id = it.id || {};
       if (type === "playlist") return { id: id.playlistId, title: htmlText(sn.title) };
-      return { cid: id.videoId, title: htmlText(sn.title), channel: htmlText(sn.channelTitle), description: htmlText(sn.description) };
+      var description = htmlText(sn.description);
+      return { cid: id.videoId, title: htmlText(sn.title), channel: swaps.topicChannel(htmlText(sn.channelTitle), description, htmlText(sn.title)), description: description };
     }).filter(function(v) { return v.cid || v.id; });
   });
 };
@@ -2191,7 +2198,7 @@ var youtubeVideos = function(ids) {
   url.searchParams.set("part", "snippet,contentDetails,status");
   url.searchParams.set("id", ids.join(","));
   url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
+  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
   url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
   return http(url, { timeout: 30000 }).then(function(res) {
     if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
@@ -2202,7 +2209,7 @@ var youtubeVideos = function(ids) {
     res.json.items.forEach(function(item) {
       var sn = item.snippet || {};
       out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
-        title: String(sn.title || ""), channel: String(sn.channelTitle || "") };
+        title: String(sn.title || ""), channel: swaps.topicChannel(sn.channelTitle, sn.description, sn.title) };
     });
     return out;
   });
@@ -3470,7 +3477,14 @@ var gts = {
         if (played) {
           // played before: use its saved tags, then update the last play
           // (just those fields: a mod's tag fix at the same moment stays)
-          upload = globalpeek.update({ last_play_date: now, last_play_dj: dj }).then(function() { return thing; });
+          var lastPlay = { last_play_date: now, last_play_dj: dj };
+          // first played as "Release" (YouTube's stand-in channel for a new
+          // release): the artist its description names, now it's known
+          if (swaps.isStandIn(thing.artist) && s.artist && s.artist !== "Unknown" && !swaps.isStandIn(s.artist)) {
+            lastPlay.artist = s.artist;
+            thing = Object.assign({}, thing, { artist: s.artist });
+          }
+          upload = globalpeek.update(lastPlay).then(function() { return thing; });
         } else {
           // first play of this upload (or one the history linked but never played)
           thing = Object.assign({}, thing || {}, {

@@ -403,6 +403,29 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async release_topic_artist() {
+    // queued as "Release - Fresh Song" (named from YouTube's stand-in
+    // "Release - Topic" channel); release2 was first played that way before
+    await put("/", base({
+      queues: { dj1: { k1: yt("release1", "Release - Fresh Song") }, dj2: { s1: yt("release2", "Fresh Song") } },
+      globalTracks: { "1release2": { artist: "Release", title: "Fresh Song", type: 1, first_play_date: 1, last_play_date: 1 } }
+    }));
+    const p = startBot("release");
+    await waitFor(p, "Listening now.");
+    await sleep(2500);
+    let st = await get("/");
+    check(st.songToPlay.cid === "release1" && st.songToPlay.artist === "New Band" && st.songToPlay.title === "Fresh Song",
+      "the artist comes from the description, not the stand-in channel (" + st.songToPlay.artist + ")");
+    check(st.globalTracks["1release1"].artist === "New Band", "and is what its first play saves");
+    check(Object.values(st.queues.dj1).some((t) => t.name === "New Band - Fresh Song"), "and the DJ's queue gets the name");
+    await say("boss", "!skip");
+    await sleep(2500);
+    st = await get("/");
+    check(st.songToPlay.cid === "release2" && st.songToPlay.artist === "New Band" && st.globalTracks["1release2"].artist === "New Band",
+      "an upload first played as \"Release\" gets its artist on its next play");
+    await healthy(p);
+    return p;
+  },
   async remove_respects_rank() {
     await put("/", base({
       users: Object.assign(base().users, { mod1: { username: "mod1", status: true, mod: true } }),
