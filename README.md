@@ -342,6 +342,9 @@ Song start times (`songToPlay/started`, and the "when" of each play) use the dat
 ## tempo lookups
 When a song starts, the bot looks up its BPM on Deezer's public API (no key needed): it searches for the artist and title, and tries up to four matching versions of the song, since Deezer has no tempo for many tracks. Results, including "not found", are cached per track in `bpm/`, and the playing song's tempo is published as `songBpm`. A tempo set with `!bpm` is never overwritten by a lookup. `bpm/` is indexed by `bpm`, so the site's tempo pages (a song's BPM tag opens `#discover/bpm/128`) ask for just the songs near one tempo. "Not found" results from an older version of the lookup are tried again.
 
+## fires for the live stage
+The playing song's 🔥 count (one per person; 🌧 takes theirs back; a reaction sent for the song before doesn't count) is published as `songFires` `{started, count}`, readable by anyone, and cleared when the next song starts. The site's live stage for other sites (firetable-user `embed/stage/`, shown on QueUp) can't read the chat, which is for members only, so it burns its fire from this. It needs the latest `firebase-rules.json` published.
+
 ## database rules
 `firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.
 

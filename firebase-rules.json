@@ -117,6 +117,14 @@
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
+    "songFires": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".validate": "newData.child('started').isNumber() && newData.child('count').isNumber() && newData.child('count').val() >= 0",
+      "started": { ".validate": true },
+      "count": { ".validate": true },
+      "$other": { ".validate": false }
+    },
     "bpm": {
       ".read": true,
       ".indexOn": ["bpm"],

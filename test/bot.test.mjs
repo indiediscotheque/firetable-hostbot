@@ -331,6 +331,35 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async song_fires() {
+    // 🔥 on the playing song, published for the site's live stage: one per
+    // person, 🌧 takes theirs back, a fire for the song before doesn't count,
+    // and the next song starts with none
+    await put("/", base({ queues: { dj1: { k1: yt("ytfire1", "Fire Artist - Hot Song") }, dj2: { s1: yt("ytfire2", "Other Artist - Next Song") } } }));
+    const p = startBot("fires");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    let st = await get("/");
+    const started = st.songToPlay.started;
+    check(!st.songFires, "no fires before anyone sends one");
+    await say("dj1", "🔥");
+    await say("dj2", ":fire:");
+    await say("dj2", "🔥");
+    await post("/chatData", { id: "boss", name: "boss", txt: "🔥", time: { ".sv": "timestamp" }, forSong: started - 1 }).then((id) => post("/chatFeed", { chatID: id }));
+    await sleep(1500);
+    st = await get("/");
+    check(st.songFires && st.songFires.count === 2 && st.songFires.started === started, "two people's fires are published for the playing song (" + JSON.stringify(st.songFires) + ")");
+    await say("dj2", "🌧");
+    await sleep(1200);
+    st = await get("/");
+    check(st.songFires && st.songFires.count === 1, "🌧 takes one back (" + JSON.stringify(st.songFires) + ")");
+    await say("dj1", "!skip");
+    await sleep(2500);
+    st = await get("/");
+    check(st.songToPlay.cid === "ytfire2" && !st.songFires, "the next song starts with none (" + JSON.stringify(st.songFires) + ")");
+    await healthy(p);
+    return p;
+  },
   async play_history() {
     // the history was published: "Foals - My Number" is track t1, first played
     // in 2016, 41 plays (60 counting its remix); a DJ brings a new upload of it

@@ -618,10 +618,15 @@ var updateLimit = function() {
 };
 
 
+// 🔥/🌧 on the playing song. The count of 🔥 (one per person, 🌧 takes theirs
+// back) is published as songFires {started, count}, readable by anyone, for
+// the site's live stage for other sites (firetable-user embed/stage/), which
+// can't read the members-only chat; it ignores a count for another song.
 var firelevel = {
   hot: function(id, name) {
     firelevel.fires[id] = true;
     firelevel.storms[id] = false;
+    firelevel.publish();
     var fires = firelevel.size(firelevel.fires);
     var storms = firelevel.size(firelevel.storms);
     var level = fires - storms;
@@ -638,6 +643,7 @@ var firelevel = {
   storm: function(id, name) {
     firelevel.fires[id] = false;
     firelevel.storms[id] = true;
+    firelevel.publish();
     var fires = firelevel.size(firelevel.fires);
     var storms = firelevel.size(firelevel.storms);
     var level = fires - storms;
@@ -658,6 +664,11 @@ var firelevel = {
   clear: function() {
     firelevel.fires = {};
     firelevel.storms = {};
+    writeRoomState({ songFires: null });
+  },
+  publish: function() {
+    if (!song || !song.started || song.cid == 0) return;
+    writeRoomState({ songFires: { started: song.started, count: firelevel.size(firelevel.fires) } });
   },
   fires: {},
   storms: {},
