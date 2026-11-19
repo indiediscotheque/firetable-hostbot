@@ -227,12 +227,23 @@ function normalizeAvatarStyle(val) {
   return /^(robohash|dicebear):/.test(val) ? val : "robohash:" + val;
 }
 
+// Everyone's avatar style when a supermod has picked one (the site's Mod tools,
+// roomSettings/avatarStyle); null means the room's default below. With older
+// rules the read is refused and the default stands.
+var roomAvatarChoice = null;
+firebase.database().ref("roomSettings/avatarStyle").on("value", function(snapshot) {
+  roomAvatarChoice = normalizeAvatarStyle(snapshot.val());
+}, function() {
+  roomAvatarChoice = null;
+});
+
 // Robohash set stamped on new trading cards: the room's avatar theme, the way
-// the site picks it (config.js avatarset, else the seasonal theme).
+// the site picks it (a supermod's choice, else config.js avatarset, else the
+// seasonal theme).
 function cardAvatarSet() {
   if (process.env.AVATARSET) return process.env.AVATARSET;
   var now = new Date();
-  var style = normalizeAvatarStyle(siteSeasons.avatarset);
+  var style = roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset);
   if (!style && Array.isArray(siteSeasons.avatarSeasons)) {
     for (var i = 0; i < siteSeasons.avatarSeasons.length; i++) {
       var season = siteSeasons.avatarSeasons[i];

@@ -194,6 +194,8 @@ The bot keeps the music going. When no one is DJing it takes the decks and plays
 ## seasons
 The site decides the seasonal trading-card avatars and the months the string lights stay on: `js/seasons.js` in firetable-user holds the defaults and its `config.js` (`avatarset`, `avatarSeasons`, `lightsMonths`) overrides them. With `SITE_URL` set, the bot reads both files from the live site at startup and every 10 minutes, so changing them on the site is all it takes; nothing changes on the bot. The bot parses the settings out of those files and never runs them, so the site can't run code on the bot; values that aren't plain data (an expression or a function call) are skipped. The log shows `site seasons: …` at startup and whenever they change. If the site can't be reached, or a file has a syntax error, the bot keeps the last values it read (or the site's defaults: monsters in October, lights in December).
 
+A supermod can also set **everyone's avatar style** for the whole room in the site's Mod tools (`roomSettings/avatarStyle`, one of the 16 sets, or cleared for the room's default). New trading cards follow that choice first, then `config.js`, then the season (`AVATARSET` still overrides all of them). Cards draw Robohash sets only, so a DiceBear choice keeps the robots on cards. It needs the rules with `roomSettings` published; until then the bot reads nothing there and the cards follow the site as before.
+
 ## soundcloud
 **How SoundCloud works in the room today (no paid service):**
 - Playback on the site uses SoundCloud's embeddable player, which needs no key.
