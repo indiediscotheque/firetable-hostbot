@@ -520,6 +520,13 @@
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
+    "roomSettings": {
+      ".read": true,
+      "avatarStyle": {
+        ".write": "root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/hostbot').val() == true",
+        ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[1-4]|dicebear:[a-z0-9-]{1,32})$/)"
+      }
+    },
     "banned": {
       ".read": "root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",

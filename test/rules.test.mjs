@@ -312,6 +312,14 @@ await expect("ALLOWED", "turn off your name on public pages", eve.ref("users/eve
 await expect("ALLOWED", "turn it back on", eve.ref("users/eve/publicName").set(true));
 await expect("DENIED", "publicName that isn't true or false", eve.ref("users/eve/publicName").set("no"));
 await expect("DENIED", "turn off someone else's name", eve.ref("users/bob/publicName").set(false));
+await expect("ALLOWED", "a supermod sets everyone's avatar style", db("boss").ref("roomSettings/avatarStyle").set("robohash:set4"));
+await expect("ALLOWED", "a supermod sets a DiceBear style", db("boss").ref("roomSettings/avatarStyle").set("dicebear:pixel-art"));
+await expect("ALLOWED", "a supermod goes back to the room's default", db("boss").ref("roomSettings/avatarStyle").set(null));
+await expect("ALLOWED", "a visitor reads the room's settings", visitor.ref("roomSettings").once("value"));
+await expect("DENIED", "a mod sets everyone's avatar style", db("mod1").ref("roomSettings/avatarStyle").set("robohash:set2"));
+await expect("DENIED", "a member sets everyone's avatar style", eve.ref("roomSettings/avatarStyle").set("robohash:set2"));
+await expect("DENIED", "an avatar style that isn't one of the sets", db("boss").ref("roomSettings/avatarStyle").set("https://example.com/x.png"));
+await expect("DENIED", "a supermod writes another room setting", db("boss").ref("roomSettings/other").set(true));
 await expect("ALLOWED", "save the page you found the room through", eve.ref("users/eve/foundVia").set("genre/nu-disco"));
 await expect("DENIED", "change it later", eve.ref("users/eve/foundVia").set("charts/2026-W45"));
 await expect("DENIED", "set someone else's", eve.ref("users/bob/foundVia").set("x"));
