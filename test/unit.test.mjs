@@ -916,3 +916,36 @@ test("swap runner: what's over the search limits gets a catch-up pass the same d
   assert.equal(await sw.online("u2"), true, "a second arrival shares the pass already planned");
   assert.equal(timers.length, 1);
 });
+
+// --------------------------------------------------------- the stage summary
+
+test("the stage summary: who's in the room and at the table, the song's looks, nothing else about members", async () => {
+  const { stageOf, createStage } = require("../lib/stage.js");
+  const users = {
+    bot: { username: "jarvis", status: true, hostbot: true },
+    dj1: { username: "ana", status: true, avatarStyle: "dicebear:pixel-art", foundVia: "a friend", featured: { 0: "c1" } },
+    dj2: { username: "ben", status: true },
+    gone: { username: "cy", status: false }
+  };
+  const v = stageOf({ users, botid: "bot", table: [{ id: "dj1", name: "old" }, { id: "dj2" }, null], colors: { color: "#123", txt: "#fff", junk: 1 },
+    theme: "Italo", bpm: { started: 5, bpm: 120, src: "deezer" }, tag: { cid: 9, adamData: { artist: "A" }, other: 1 }, fires: { started: 5, count: 2 } });
+  assert.deepEqual(v, { online: 2, deck: [{ id: "dj1", n: "ana", av: "dicebear:pixel-art" }, { id: "dj2", n: "ben" }], colors: { color: "#123", txt: "#fff" },
+    theme: "Italo", bpm: { started: 5, bpm: 120 }, tag: { cid: "9", adamData: { artist: "A" } }, fires: { started: 5, count: 2 } });
+  assert.deepEqual(stageOf({ users: {} }), { online: 0, deck: [], colors: null, theme: null, bpm: null, tag: null, fires: null });
+
+  const { fakeDb } = await import("./fake-db.mjs");
+  const db = fakeDb({ table: [{ id: "dj1" }], theme: "Italo" });
+  const pub = createStage({ db, users: () => users, botid: () => "bot", delay: 1000 });
+  pub.start();
+  assert.equal(await pub.flush(), true);
+  assert.equal(db.get("stage/theme"), "Italo");
+  assert.equal(db.get("stage/deck/0/n"), "ana");
+  const n = db.writes.filter((p) => p === "stage").length;
+  users.dj2.idle = { isIdle: true }; // a change the stage doesn't show
+  pub.changed();
+  assert.equal(await pub.flush(), false, "nothing it shows changed: nothing sent");
+  users.dj2.status = false;
+  assert.equal(await pub.flush(), true);
+  assert.equal(db.get("stage/online"), 1);
+  assert.equal(db.writes.filter((p) => p === "stage").length, n + 1);
+});

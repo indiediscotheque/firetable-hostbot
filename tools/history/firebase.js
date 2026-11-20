@@ -71,9 +71,10 @@ function client(env) {
   return {
     get: function(path, params) { return call("GET", path, params); },
     keys: async function(path) { return Object.keys((await call("GET", path, { shallow: "true" })) || {}); },
-    // a big list in pages of `size` children, by key
-    getPaged: async function(path, size, onPage) {
-      var start = null;
+    // a big list in pages of `size` children, by key (only those after the
+    // key `after`, when given)
+    getPaged: async function(path, size, onPage, after) {
+      var start = after || null;
       for (;;) {
         var params = { orderBy: '"$key"', limitToFirst: String(size + (start ? 1 : 0)) };
         if (start) params.startAt = JSON.stringify(start);

@@ -471,6 +471,37 @@ function importFirebaseFile(db, file, log) {
   return counts;
 }
 
+// What the weekly run reads costs money (the database bills every byte it
+// sends), so it reads what's new: the play log from where the last run stopped
+// (it only ever grows), and the playlists of DJs who've been in the room since
+// the last run (only they, and the bot, change them). Everything is read again
+// every LISTS_FULL_DAYS, with --full, or when the history is new.
+var LISTS_FULL_DAYS = 28;
+var LISTS_MARGIN_MS = 2 * 86400000; // read a DJ seen up to 2 days before the last run, too
+
+/**
+ * Which DJs' lists to read this run.
+ * @param {Object} users - users/ (uid -> profile)
+ * @param {{at: number, full: number, read: Object}|null} last - the last run's state
+ * @param {number} now
+ * @param {boolean} [full] - read everyone
+ * @returns {{uids: string[], full: boolean}}
+ */
+function listsToRead(users, last, now, full) {
+  var all = Object.keys(users || {});
+  if (full || !last || !last.full || now - last.full > LISTS_FULL_DAYS * 86400000) return { uids: all, full: true };
+  var since = (last.at || 0) - LISTS_MARGIN_MS;
+  return {
+    full: false,
+    uids: all.filter(function(uid) {
+      var u = users[uid] || {};
+      if (!last.read || !last.read[uid]) return true; // new since the last run
+      if (u.hostbot || u.status === true) return true; // the bot (it keeps its lists) and whoever's here now
+      return typeof u.offlineAt === "number" && u.offlineAt >= since;
+    })
+  };
+}
+
 // The same, read live as the bot. Playlists and queues are read DJ by DJ.
 // The room's tags are what they are now: an upload taken out of globalTracks
 // (by a publish, or by hand) leaves its old tags behind in the history unless
@@ -517,14 +548,26 @@ async function fetchFirebase(db, env, opts, log) {
     if (!want(p)) continue;
     try {
       var node = {};
+      var lastKey = null;
       if (named[p]) node = named[p];
-      else if (p === "globalTracks" || p === "playLog" || p === "globalTrackRaws") {
+      else if (p === "playLog") {
+        // only what's new since the last run: the log only grows
+        var after = !opts.full && db.prepare("SELECT 1 FROM obs WHERE source = 'fb:playLog' LIMIT 1").get() ? store.getState(db, "fb:playLog:last") : null;
+        lastKey = after;
+        await c.getPaged(p, 20000, function(page) {
+          Object.keys(page).forEach(function(k) { if (!lastKey || k > lastKey) lastKey = k; });
+          Object.assign(node, page);
+          log("  " + p + ": " + Object.keys(node).length + "...");
+        }, after || undefined);
+        if (after) log("  playLog: " + Object.keys(node).length + " plays since the last run (the rest are in the history already)");
+      } else if (p === "globalTracks" || p === "globalTrackRaws") {
         await c.getPaged(p, 20000, function(page) { Object.assign(node, page); log("  " + p + ": " + Object.keys(node).length + "..."); });
       } else {
         node = await c.get(p);
       }
       log("  " + p + ": " + describe(node));
       counts[p] = writeNode(db, p, node, log, ctx);
+      if (p === "playLog" && lastKey) store.setState(db, "fb:playLog:last", lastKey);
       log("  " + p + ": " + counts[p] + " observations");
       if (p === "globalTracks") {
         var gone = pruneGone(db, "fb:globalTracks", node);
@@ -550,15 +593,21 @@ async function fetchFirebase(db, env, opts, log) {
   } catch (e) {
     log("  tagReview: skipped (" + e.message + ")");
   }
+  var runAt = Date.now();
   for (var lp of ["playlists", "queues"]) {
     if (!want(lp)) continue;
-    var uids = Object.keys(users || {});
+    var listKey = "fb:lists:" + lp;
+    var lastRun = store.getState(db, listKey);
+    var picked = listsToRead(users, lastRun, runAt, opts.full);
+    var uids = picked.uids;
+    var readNow = picked.full || !lastRun ? {} : Object.assign({}, lastRun.read || {});
+    if (!picked.full) log("  " + lp + ": " + uids.length + " of " + Object.keys(users || {}).length + " DJs in the room since the last run (everyone again within " + LISTS_FULL_DAYS + " days)");
     var total = 0;
     var denied = 0;
     for (var i = 0; i < uids.length; i += 8) {
       var batch = uids.slice(i, i + 8);
       var got = await Promise.all(batch.map(function(uid) {
-        return c.get(lp + "/" + uid).catch(function(e) { if (e.denied) denied++; return null; });
+        return c.get(lp + "/" + uid).then(function(v) { readNow[uid] = 1; return v; }, function(e) { if (e.denied) denied++; return null; });
       }));
       var node2 = {};
       batch.forEach(function(uid, j) { if (got[j]) node2[uid] = got[j]; });
@@ -566,6 +615,7 @@ async function fetchFirebase(db, env, opts, log) {
       if (i % 400 === 0) log("  " + lp + ": " + Math.min(i + 8, uids.length) + "/" + uids.length + " DJs");
     }
     counts[lp] = total;
+    store.setState(db, listKey, { at: runAt, full: picked.full ? runAt : lastRun.full, read: readNow });
     log("  " + lp + ": " + total + " observations" + (denied ? " (" + denied + " DJs not readable)" : ""));
   }
   return counts;
@@ -751,7 +801,7 @@ async function enrichArtists(db, apiKey, limit, log) {
   return todo.length;
 }
 
-module.exports = { pruneGone: pruneGone, validUpload: validUpload, repairAdamId: repairAdamId,
+module.exports = { pruneGone: pruneGone, validUpload: validUpload, repairAdamId: repairAdamId, listsToRead: listsToRead,
   importAdam: importAdam,
   importFirebaseFile: importFirebaseFile,
   fetchFirebase: fetchFirebase,

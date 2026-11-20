@@ -352,6 +352,14 @@ const scenarios = {
     await sleep(1500);
     st = await get("/");
     check(st.songFires && st.songFires.count === 2 && st.songFires.started === started, "two people's fires are published for the playing song (" + JSON.stringify(st.songFires) + ")");
+    // the live stage's one small public node: who's in the room and at the
+    // table, and the song's looks and fires (embed/stage reads only this and
+    // songToPlay, never users/)
+    const sg = st.stage || {};
+    check(sg.fires && sg.fires.count === 2 && sg.fires.started === started, "the stage summary carries the fires (" + JSON.stringify(sg.fires) + ")");
+    check(typeof sg.online === "number" && sg.online >= 1, "the stage summary counts who's in the room (" + sg.online + ")");
+    check(Array.isArray(sg.deck) && sg.deck.some((d) => d.id === "dj1" && d.n), "the stage summary names who's at the table (" + JSON.stringify(sg.deck) + ")");
+    check(!JSON.stringify(sg).includes("foundVia") && !("users" in sg), "and nothing else about members");
     await say("dj2", "🌧");
     await sleep(1200);
     st = await get("/");

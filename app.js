@@ -30,6 +30,7 @@ var swaps = require('./lib/swaps');
 var ytmsync = require('./lib/ytmsync');
 var apple = require('./lib/apple');
 var discover = require('./lib/discover');
+var stage = require('./lib/stage');
 var ytplaylists = require('./lib/ytplaylists');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
@@ -1788,6 +1789,14 @@ firebase.database().ref("autodj").once("value").then(function(snap) {
 // for the "are you there?" check and !lastblipped).
 var usersRef = firebase.database().ref("users");
 var usersLoaded = false;
+// the live stage's public summary (lib/stage.js): who's in the room and at
+// the table, for the embed on QueUp, which would otherwise follow all of users/
+var stagePub = stage.createStage({
+  db: firebase.database(),
+  users: function() { return users; },
+  botid: function() { return botid; },
+  log: console.log
+});
 var keepBotOnline = function() {
   if (botid && users[botid] && !users[botid].status) {
     firebase.database().ref("users/" + botid + "/status").set(true);
@@ -1798,6 +1807,7 @@ usersRef.on("child_added", function(snap) {
   users[snap.key] = u;
   if (u && u.status) lastBlipped[snap.key] = Date.now();
   if (usersLoaded) autoDJ.check();
+  stagePub.changed();
 });
 usersRef.on("child_changed", function(snap) {
   var before = users[snap.key];
@@ -1810,10 +1820,12 @@ usersRef.on("child_changed", function(snap) {
   }
   if (snap.key === botid) keepBotOnline();
   autoDJ.check(); // the bot needs its own profile before it can sit down
+  stagePub.changed();
 });
 usersRef.on("child_removed", function(snap) {
   if (users[snap.key] && users[snap.key].status) lastBlipped[snap.key] = Date.now();
   delete users[snap.key];
+  stagePub.changed();
 });
 // the same data the listeners above download, so this costs nothing extra
 usersRef.once("value").then(function() {
@@ -2396,6 +2408,8 @@ var discoverer = function() {
       chatData: function(chatID) {
         return firebase.database().ref("chatData/" + chatID).once("value").then(function(snap) { return snap.val(); });
       },
+      // the recent play log in memory: the chart after each song reads nothing
+      playLog: discover.playLogWindow(firebase.database(), { now: serverNow, log: console.log }),
       log: console.log
     });
   }
@@ -3406,6 +3420,7 @@ var markChatReady = function() {
   chatWaiting = [];
   waiting.forEach(function(item) { handleChat(item.chatID, item.feedKey); });
   console.log("Listening now.");
+  stagePub.start();
   claimLowercaseNames();
   pruneMentions();
   push.init();

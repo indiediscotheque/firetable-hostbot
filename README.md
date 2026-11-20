@@ -313,6 +313,8 @@ The site's Discover side shows the library to everyone, signed in or not. Most o
 - **Fires earned** (`discover/fires`): each DJ's `!hot` fires since November 2026, how many of their plays got any, and their 10 most-fired songs, plus `index`, every DJ by fires. Rebuilt once a day. DJs who turned off "Show my name on public pages" aren't listed.
 - **Chat peek** (`discover/chat`): the last 20 messages for visitors, who can't read the chat itself, without bot commands or hidden messages, and how many messages there were in the last hour.
 
+**What it costs.** The database bills every byte it sends, so Discover is built to send little. The bot keeps the last 70 days of the play log in memory (one listener, downloaded once at start, then just each new play), so the chart after each song reads nothing; the year's chart, theme nights and fires read the longer span once a day, in one read they share. A chart or theme night is written only when it changed, and a finished chart is remembered instead of read again. The site follows Discover's live data only while Discover is open.
+
 Members choose whether their name shows on these public pages: `users/<uid>/publicName = false` (a setting on the site) shows them as nobody in charts, new releases and the chat peek. The site also saves which Discover page each new member first came from (`users/<uid>/foundVia`, set once), so you can tell which pages bring people in.
 
 Needs the latest `firebase-rules.json` published (`discover`, `discoverCache`, the user settings, including `users/<uid>/featured`, the up to 6 cards a member picks for their DJ page, and indexes on `globalSongs/plays` and `globalTracks/song`); until then the log says once what it couldn't save and the bot carries on. The all-time chart needs the [play history](#play-history) published. `DISCOVER=false` turns it all off.
@@ -347,6 +349,9 @@ When a song starts, the bot looks up its BPM on Deezer's public API (no key need
 
 ## fires for the live stage
 The playing song's 🔥 count (one per person; 🌧 takes theirs back; a reaction sent for the song before doesn't count) is published as `songFires` `{started, count}`, readable by anyone, and cleared when the next song starts. The site's live stage for other sites (firetable-user `embed/stage/`, shown on QueUp) can't read the chat, which is for members only, so it burns its fire from this. It needs the latest `firebase-rules.json` published.
+
+## the live stage's summary
+The live stage for other sites (firetable-user `embed/stage/`, on QueUp's screen) reads one small public node the bot keeps, `stage` (`lib/stage.js`): how many people are in the room (`online`), who's at the table in order with their name and avatar style (`deck`), and the playing song's `colors`, `theme`, tempo (`bpm`), the room's facts on it (`tag`) and `fires`. It's written only when something it shows changes (an idle toggle or a new chat message isn't), and holds nothing else about members. Before it, every browser showing the stage followed all of `users/` (every member there has ever been, and every change to any of them) and read four nodes every minute; the database bills every byte it sends, so that was the room's biggest cost. Needs the latest `firebase-rules.json` published (`stage`); until then the log says so once, and the stage keeps reading the room the old way.
 
 ## database rules
 `firebase-rules.json` is applied separately: Firebase console → Realtime Database → Rules, paste the file, Publish (or `npx firebase deploy --only database` with the Firebase CLI; `firebase.json` points at the file). Updating or restarting the bot doesn't change the rules, so deploy them whenever this file changes.

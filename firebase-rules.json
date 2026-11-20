@@ -125,6 +125,42 @@
       "count": { ".validate": true },
       "$other": { ".validate": false }
     },
+    "stage": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "online": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+      "deck": {
+        "$seat": {
+          ".validate": "newData.hasChildren(['id', 'n'])",
+          "id": { ".validate": "newData.isString() && newData.val().length <= 128" },
+          "n": { ".validate": "newData.isString() && newData.val().length <= 40" },
+          "av": { ".validate": "newData.isString() && newData.val().length <= 80" },
+          "$other": { ".validate": false }
+        }
+      },
+      "colors": {
+        "color": { ".validate": "newData.isString() && newData.val().length <= 40" },
+        "txt": { ".validate": "newData.isString() && newData.val().length <= 40" },
+        "$other": { ".validate": false }
+      },
+      "theme": { ".validate": "newData.isString() && newData.val().length <= 80" },
+      "bpm": {
+        "started": { ".validate": "newData.isNumber()" },
+        "bpm": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      },
+      "tag": {
+        "cid": { ".validate": "newData.isString()" },
+        "adamData": { ".validate": true },
+        "$other": { ".validate": false }
+      },
+      "fires": {
+        "started": { ".validate": "newData.isNumber()" },
+        "count": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "$other": { ".validate": false }
+      },
+      "$other": { ".validate": false }
+    },
     "bpm": {
       ".read": true,
       ".indexOn": ["bpm"],
