@@ -34,6 +34,7 @@ var stage = require('./lib/stage');
 var grabCounts = require('./lib/grabs');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
+var retag = require('./lib/retag');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -3421,6 +3422,7 @@ var markChatReady = function() {
   waiting.forEach(function(item) { handleChat(item.chatID, item.feedKey); });
   console.log("Listening now.");
   stagePub.start();
+  spreadTags.start();
   grabSummaries.start();
   claimLowercaseNames();
   pruneMentions();
@@ -3666,8 +3668,11 @@ var gts = {
     globalpeek.once("value")
       .then(function(snapshot) {
         var thing = snapshot.val();
-        // every fix is kept: the history toolkit trusts these most
-        firebase.database().ref("tagLog").push({
+        // every fix is kept: the history toolkit trusts these most, and
+        // spreadTags passes it on to the other copies and the artist's songs
+        var logRef = firebase.database().ref("tagLog").push();
+        spreadTags.own[logRef.key] = true;
+        logRef.set({
           k: upKey, a: fixedartist, t: fixedtitle, by: by || null, at: Date.now(),
           fa: (thing && thing.artist) || s.artist || null, ft: (thing && thing.title) || s.title || null
         }).catch(function(err) { console.log("tag log error:", err && err.message); });
@@ -3799,6 +3804,90 @@ var gts = {
       .catch(function(err) {
         console.log("playlist tag update error:", err && err.message);
       });
+  }
+};
+
+// A mod's tag fix (tagLog: the site's tag editor, or !fixtags) goes on every
+// copy of those tags and, when an artist was respelled ("POOLSIDE" ->
+// "Poolside"), on all their songs (lib/retag.js). The library is read once
+// and kept a few minutes, so a mod tidying up a run of songs reads it once.
+var spreadTags = {
+  own: {}, // tagLog keys !fixtags wrote: it has linked those itself
+  cache: null,
+  cacheAt: 0,
+  CACHE_MS: 5 * 60 * 1000,
+  queue: Promise.resolve(),
+  started: false,
+  start: function() {
+    if (spreadTags.started) return;
+    spreadTags.started = true;
+    firebase.database().ref("tagLog").orderByChild("at").startAt(serverNow()).on("child_added", function(snap) {
+      var e = snap.val();
+      var key = snap.key;
+      // one at a time, in order: each works on the library as the last left it
+      spreadTags.queue = spreadTags.queue.then(function() { return spreadTags.run(key, e); }).catch(function(err) {
+        console.log("tag spread error:", err && err.message);
+      });
+    }, function(err) {
+      console.log("couldn't follow tagLog (deploy firebase-rules.json):", err && err.message);
+    });
+  },
+  library: function() {
+    if (spreadTags.cache && Date.now() - spreadTags.cacheAt < spreadTags.CACHE_MS) return Promise.resolve(spreadTags.cache);
+    var db = firebase.database();
+    var read = function(path) { return db.ref(path).once("value").then(function(snap) { return snap.val() || {}; }); };
+    return Promise.all([read("globalTracks"), read("globalSongs"), read("globalWorks")]).then(function(v) {
+      spreadTags.cache = { tracks: v[0], songs: v[1], works: v[2] };
+      spreadTags.cacheAt = Date.now();
+      return spreadTags.cache;
+    });
+  },
+  run: function(key, e) {
+    if (!e || typeof e.k !== "string") return;
+    var db = firebase.database();
+    var mine = spreadTags.own[key];
+    delete spreadTags.own[key];
+    var fromSite = !mine && e.by && e.by !== botid;
+    return Promise.all([spreadTags.library(), db.ref("songHistory").once("value")]).then(function(v) {
+      var lib = v[0];
+      var up = lib.tracks[e.k] || (lib.tracks[e.k] = {});
+      // the fixed upload as it is now (the cache may be from before the fix)
+      up.artist = e.a;
+      up.title = e.t;
+      var result = retag.plan(e, { tracks: lib.tracks, songs: lib.songs, works: lib.works, history: v[1].val() || {} }, { isPlaceholder: placeholderTags.is });
+      // the site's fix renames the upload's track in the play history, as !fixtags does
+      var linked = fromSite && up.song ? Promise.resolve(gts.learnSpelling(up.song, e.a, e.t, e.k)) : Promise.resolve();
+      if (!result) return linked;
+      var paths = Object.keys(result.updates);
+      var batches = [];
+      for (var i = 0; i < paths.length; i += 500) {
+        var part = {};
+        paths.slice(i, i + 500).forEach(function(p) { part[p] = result.updates[p]; });
+        batches.push(part);
+      }
+      return linked.then(function() {
+        return batches.reduce(function(chain, part) {
+          return chain.then(function() { return db.ref().update(part); });
+        }, Promise.resolve());
+      }).then(function() {
+        // keep the cached library as it now is
+        paths.forEach(function(p) {
+          var bits = p.split("/");
+          var node = { globalTracks: lib.tracks, globalSongs: lib.songs, globalWorks: lib.works }[bits[0]];
+          if (node && node[bits[1]]) node[bits[1]][bits[2]] = result.updates[p];
+        });
+        console.log("tags: " + e.fa + " - " + e.ft + " -> " + e.a + " - " + e.t + ": " + paths.length + " writes (" + result.copies.length + " copies, " + result.artistCount + " by the artist)");
+        // the song on the decks was one of them: the room sees its new tags
+        var playing = song && song.cid ? song.type + "" + song.cid : null;
+        if (playing && playing !== e.k && result.renamed[playing]) {
+          var r = result.renamed[playing];
+          gts.reportNp(song, currentListRef(), Object.assign({}, lib.tracks[playing], r), gts.lastTrack(song));
+        }
+        var txt = retag.summary(result, e);
+        if (txt && fromSite) notify(e.by, txt, { kind: "track" });
+        else if (txt) talk(txt);
+      });
+    });
   }
 };
 

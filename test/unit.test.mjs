@@ -1040,3 +1040,74 @@ test("grab counts: each DJ's grabs summed for the site, written only when they c
   const reads = db.reads.filter((p) => p.startsWith("grabs")).length;
   assert.equal(reads, 3, "three listeners on grabs/, no reads");
 });
+
+// ─── Spreading a mod's tag fix (lib/retag.js) ───────────────────────────────
+const retag = require("../lib/retag.js");
+const library = () => ({
+  tracks: {
+    "1fix": { artist: "POOLSIDE", title: "Harvest Moon" },
+    "1copy": { artist: "POOLSIDE", title: "Harvest Moon (Official Video)" },
+    "1low": { artist: "poolside", title: "harvest moon" },
+    "1other": { artist: "POOLSIDE", title: "Do It Again" },
+    "1duo": { artist: "POOLSIDE & Friend", title: "Thing" },
+    "1guest": { artist: "Someone", title: "Song feat. POOLSIDE (POOLSIDE Remix)" },
+    "1near": { artist: "Poolsider", title: "Harvest Moon" },
+    "1linked": { song: "t1" },
+    "1kites": { artist: "Foals", title: "Kites" },
+    "1daft": { artist: "Daft Punk", title: "One More Time" }
+  },
+  songs: { t1: { artist: "POOLSIDE", title: "Do It Again" }, t2: { artist: "Foals", title: "Kites" } },
+  works: { s1: { artist: "POOLSIDE", title: "Do It Again" } },
+  history: { h1: { artist: "POOLSIDE", title: "Harvest Moon", cid: "fix" } }
+});
+
+test("retag: a respelled artist goes on every copy and all their songs", () => {
+  const e = { k: "1fix", a: "Poolside", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon" };
+  const r = retag.plan(e, library());
+  assert.deepEqual(r.updates, {
+    "globalTracks/1copy/artist": "Poolside", "globalTracks/1copy/title": "Harvest Moon",
+    "globalTracks/1low/artist": "Poolside", "globalTracks/1low/title": "Harvest Moon",
+    "globalTracks/1other/artist": "Poolside",
+    "globalTracks/1duo/artist": "Poolside & Friend",
+    "globalTracks/1guest/title": "Song feat. Poolside (Poolside Remix)",
+    "songHistory/h1/artist": "Poolside",
+    "globalSongs/t1/artist": "Poolside",
+    "globalWorks/s1/artist": "Poolside"
+  });
+  assert.deepEqual(r.copies.sort(), ["1copy", "1low"]);
+  assert.equal(r.artistCount, 3);
+  assert.equal(retag.summary(r, e), "Tags: also fixed 2 other copies of \"POOLSIDE - Harvest Moon\", and wrote POOLSIDE as Poolside on 3 more songs.");
+});
+
+test("retag: a spelling fix goes on every copy of the old tags, and only them", () => {
+  const lib = { tracks: { a: { artist: "Poolsdie", title: "harvest moon" }, b: { artist: "Poolsdie", title: "Other Song" }, c: { artist: "Daft Punk", title: "One More Tme" } } };
+  const r = retag.plan({ k: "x", a: "Poolside", t: "Harvest Moon", fa: "Poolsdie", ft: "Harvest Moon" }, lib);
+  assert.deepEqual(r.updates, { "globalTracks/a/artist": "Poolside", "globalTracks/a/title": "Harvest Moon" });
+  assert.equal(r.artistFrom, null, "a misspelling isn't the same name: the artist's other songs wait for their own fix");
+  const typo = retag.plan({ k: "x", a: "Daft Punk", t: "One More Time", fa: "Daft Punk", ft: "One More Tme" }, lib);
+  assert.deepEqual(typo.copies, ["c"]);
+});
+
+test("retag: a fix that names another version or another song leaves the other copies alone", () => {
+  assert.equal(retag.plan({ k: "1kites", a: "Foals", t: "Kites (Limousines Remix)", fa: "Foals", ft: "Kites" }, library()), null);
+  assert.equal(retag.plan({ k: "1daft", a: "Daft Punk", t: "Digital Love", fa: "Daft Punk", ft: "One More Time" }, library()), null);
+  assert.equal(retag.plan({ k: "1daft", a: "Justice", t: "One More Time", fa: "Daft Punk", ft: "One More Time" }, library()), null);
+});
+
+test("retag: vague, unchanged or old-style entries spread nothing", () => {
+  const lib = { tracks: { a: { artist: "Unknown", title: "Intro" }, b: { artist: "Unknown Artist", title: "Thing" } } };
+  assert.equal(retag.plan({ k: "x", a: "Unknown", t: "Intro (Live)", fa: "Unknown", ft: "Intro" }, lib), null);
+  assert.equal(retag.plan({ k: "x", a: "UNKNOWN ARTIST", t: "Song", fa: "Unknown Artist", ft: "Song" }, lib), null);
+  assert.equal(retag.plan({ k: "1fix", a: "POOLSIDE", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon" }, library()), null);
+  assert.equal(retag.plan({ k: "1fix", a: "Poolside", t: "Harvest Moon" }, library()), null, "no old tags (an older site): nothing to go on");
+  assert.equal(retag.plan({ k: "x", a: "Song", t: "B", fa: "Placeholder", ft: "B" }, { tracks: { y: { artist: "Placeholder", title: "B" } } }, { isPlaceholder: (a) => a === "Placeholder" }), null);
+});
+
+test("retag: respelling names keeps the rest of the artist list and title", () => {
+  const key = "poolside";
+  assert.equal(retag.respellArtist("POOLSIDE, Friend & poolside", key, "Poolside"), "Poolside, Friend & Poolside");
+  assert.equal(retag.respellArtist("Poolsider", key, "Poolside"), "Poolsider");
+  assert.equal(retag.respellTitle("Song (POOLSIDE's Remix)", key, "Poolside"), "Song (Poolside's Remix)");
+  assert.equal(retag.respellTitle("Song ft. Friend & POOLSIDE [Live]", key, "Poolside"), "Song ft. Friend & Poolside [Live]");
+  assert.equal(retag.respellTitle("Poolside Dreams", key, "Poolside"), "Poolside Dreams");
+});

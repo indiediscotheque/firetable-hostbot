@@ -435,6 +435,46 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async tag_fix_spreads() {
+    // a mod fixes "POOLSIDE - Harvest Moon" on the site: its other copies (one
+    // of them on the decks) and the artist's other songs follow
+    await put("/", base(Object.assign(nowPlaying("dj1", "ytcopy"), {
+      queues: { dj1: { k1: yt("ytcopy", "POOLSIDE - Harvest Moon (Official Video)") }, dj2: { s1: yt("yt2") } },
+      globalTracks: {
+        "1ytfix": { artist: "Poolside", title: "Harvest Moon", type: 1 },
+        "1ytcopy": { artist: "POOLSIDE", title: "Harvest Moon (Official Video)", type: 1 },
+        "1ytother": { artist: "POOLSIDE", title: "Do It Again", type: 1, song: "t9" },
+        "1ytguest": { artist: "Someone", title: "Song (POOLSIDE Remix)", type: 1 },
+        "1ytkeep": { artist: "Poolsider", title: "Harvest Moon", type: 1 }
+      },
+      globalSongs: { t9: { artist: "POOLSIDE", title: "Do It Again" } },
+      songHistory: { h1: { artist: "POOLSIDE", title: "Harvest Moon", cid: "ytfix", type: 1 } }
+    })));
+    const p = startBot("tag_spread");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    await post("/tagLog", { k: "1ytfix", a: "Poolside", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon", by: "boss", at: { ".sv": "timestamp" } });
+    await sleep(2500);
+    let st = await get("/");
+    const gt = st.globalTracks;
+    check(gt["1ytcopy"].artist === "Poolside" && gt["1ytcopy"].title === "Harvest Moon", "the site's fix goes on the other copies of those tags (" + JSON.stringify(gt["1ytcopy"]) + ")");
+    check(gt["1ytother"].artist === "Poolside" && gt["1ytguest"].title === "Song (Poolside Remix)" && st.globalSongs.t9.artist === "Poolside" && st.songHistory.h1.artist === "Poolside",
+      "the respelled artist goes on all their songs: uploads, remixes, the play history and Recent");
+    check(gt["1ytkeep"].artist === "Poolsider", "another artist with a similar name is left alone");
+    check(st.tagUpdate && st.tagUpdate.cid === "ytcopy" && st.tagUpdate.adamData.artist === "Poolside" && st.tagUpdate.adamData.track_name === "Harvest Moon",
+      "the copy on the decks shows its new tags (" + JSON.stringify(st.tagUpdate) + ")");
+    const notes = Object.values((st.notices || {}).boss || {}).map((n) => n.txt);
+    check(notes.some((t) => /fixed 1 other copy of "POOLSIDE - Harvest Moon", and wrote POOLSIDE as Poolside on 2 more songs/.test(t)), "the mod hears what else was fixed (" + JSON.stringify(notes) + ")");
+    // !fixtags spreads too, from the library as the last fix left it
+    await say("boss", "!fixtags POOLSIDE - Harvest Moon");
+    await sleep(2500);
+    st = await get("/");
+    check(["1ytfix", "1ytother"].every((k) => st.globalTracks[k].artist === "POOLSIDE") && st.globalTracks["1ytguest"].title === "Song (POOLSIDE Remix)",
+      "!fixtags respells the artist everywhere too");
+    check(said(st).some((t) => /Tags: also .*wrote Poolside as POOLSIDE/.test(t)), "and says so in chat");
+    await healthy(p);
+    return p;
+  },
   async accents_restored_live() {
     // the history writes this track "Björk - Jóga"; a DJ's copy lost its
     // accents to the old Last.fm bug
