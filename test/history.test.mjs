@@ -1443,3 +1443,62 @@ test("how new members found the room: the Discover page they first landed on, by
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the weekly read is incremental: the play log since the last run, the lists of DJs seen since then", async () => {
+  const fb = require("../tools/history/firebase.js");
+  const store = require("../tools/history/store.js");
+  const sources = require("../tools/history/sources.js");
+  const realClient = fb.client;
+  const dir = mkdtempSync(join(tmpdir(), "hist-incr-"));
+  const now = Date.now();
+  const day = 86400000;
+  const root = {
+    users: {
+      bot: { username: "bot", hostbot: true }, here: { username: "here", status: true },
+      lately: { username: "lately", offlineAt: now - day }, away: { username: "away", offlineAt: now - 60 * day }, old: { username: "old" }
+    },
+    playLog: { "-a1": { k: "1aaa", a: "A", t: "One", dj: "here", w: now - 3 * day }, "-a2": { k: "1bbb", a: "B", t: "Two", dj: "here", w: now - 2 * day } },
+    queues: {}, playlists: {}
+  };
+  ["bot", "here", "lately", "away", "old"].forEach((u) => { root.queues[u] = { q1: { type: 1, cid: "c" + u, name: "Artist " + u + " - Song " + u } }; });
+  const at = (p) => p.split("/").filter(Boolean).reduce((o, k) => (o == null ? undefined : o[k]), root);
+  const asked = [];
+  fb.client = () => ({
+    get: async (p) => { asked.push(p); return JSON.parse(JSON.stringify(at(p) ?? null)); },
+    getPaged: async (p, size, onPage, after) => {
+      asked.push(p + (after ? ">" + after : ""));
+      const all = at(p) || {};
+      await onPage(Object.fromEntries(Object.keys(all).sort().filter((k) => !after || k > after).map((k) => [k, all[k]])));
+    },
+    update: async () => {}, uid: async () => "bot"
+  });
+  const db = store.open(dir);
+  try {
+    const opts = { dir, only: "playLog,queues" };
+    await sources.fetchFirebase(db, {}, opts, () => {});
+    assert.ok(asked.includes("playLog"), "the first run reads the whole log");
+    assert.equal(asked.filter((p) => p.startsWith("queues/")).length, 5, "and everyone's lists");
+    // a week later: one new play, and a list changed by someone who was away
+    asked.length = 0;
+    root.playLog["-a3"] = { k: "1ccc", a: "C", t: "Three", dj: "here", w: now - 1000 };
+    root.queues.away.q2 = { type: 1, cid: "new", name: "Artist New - Song New" };
+    root.users.newbie = { username: "newbie" };
+    root.queues.newbie = { q1: { type: 1, cid: "nb", name: "Artist NB - Song NB" } };
+    await sources.fetchFirebase(db, {}, opts, () => {});
+    assert.deepEqual(asked.filter((p) => p.startsWith("playLog")), ["playLog>-a2"], "only the plays after the last one read");
+    assert.deepEqual(asked.filter((p) => p.startsWith("queues/")).sort(), ["queues/bot", "queues/here", "queues/lately", "queues/newbie"],
+      "the bot, whoever's here, whoever's been here since, and new members; not those away since before");
+    const plays = db.prepare("SELECT count(*) n FROM obs WHERE source = 'fb:playLog'").get().n;
+    assert.equal(plays, 3, "the new play joins the ones already in the history");
+    // --full (and every 28 days) reads it all again
+    asked.length = 0;
+    await sources.fetchFirebase(db, {}, Object.assign({ full: true }, opts), () => {});
+    assert.ok(asked.includes("playLog") && asked.includes("queues/away"));
+    assert.ok(db.prepare("SELECT 1 FROM obs WHERE source = 'fb:queues' AND cid = 'new'").get(), "the away DJ's change is caught on the full read");
+    assert.equal(sources.listsToRead({ a: {} }, { at: now, full: now - 29 * day, read: { a: 1 } }, now).full, true, "everyone again after 28 days");
+  } finally {
+    db.close();
+    fb.client = realClient;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

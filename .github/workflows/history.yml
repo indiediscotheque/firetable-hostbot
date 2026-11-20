@@ -57,6 +57,10 @@ on:
         description: "UNDO the last publish: switch the history off and put back the upload tags it changed (nothing else runs)"
         type: boolean
         default: false
+      full_read:
+        description: "Read the whole room database (normally only what's new: the play log since the last run, and the lists of DJs in the room since then; everything every 28 days)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -134,7 +138,10 @@ jobs:
 
       - name: Refresh (room database, Last.fm, uploads, matching)
         if: ${{ !inputs.undo }}
-        run: npm run history -- refresh
+        env:
+          FULL_READ: ${{ inputs.full_read }}
+        run: |
+          if [ "$FULL_READ" = "true" ]; then npm run history -- refresh --full; else npm run history -- refresh; fi
 
       - name: Publish
         if: ${{ !inputs.undo }}

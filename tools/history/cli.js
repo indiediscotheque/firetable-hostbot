@@ -29,8 +29,10 @@ getting the data in
         or a Google Sheets link shared as "anyone with the link" (the whole sheet imports every tab)
         [--kind tracks|plays|links|raws|artists|djs]   if it can't tell from the columns
         [--archive]   keep a copy in the room's database, so any rebuild (e.g. the GitHub Action) has it
-  fetch-firebase [--only globalTracks,songHistory,...]   read the room's database as the bot, ADAM's
-        moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs)
+  fetch-firebase [--only globalTracks,songHistory,...] [--full]   read the room's database as the bot, ADAM's
+        moved history included (globalTracks, globalTrackRaws, globalArtists, globalDjs). It reads only
+        what's new: the play log since the last run, and the lists of DJs in the room since then (all
+        of them every 28 days); --full reads everything
   undo-tags [--run <id>] [--write]    put back the upload tags the latest publish (or that run) changed;
         uploads retagged since are left alone. With publish --off, the room is back as it was
   genres [--artists 5000] [--tracks 3000] [--discogs 1200]   each played track's genres: Last.fm tags of
@@ -160,7 +162,7 @@ async function main() {
       await sources.probeFirebase(env, args._.length ? args._ : ["globalTracks", "globalTrackRaws", "globalArtists", "globalDjs", "songHistory", "playLog", "tagLog"], log);
       break;
     case "fetch-firebase":
-      log(JSON.stringify(await sources.fetchFirebase(db, env, { only: args.only, dir: dir }, log)));
+      log(JSON.stringify(await sources.fetchFirebase(db, env, { only: args.only, dir: dir, full: !!args.full }, log)));
       break;
     case "fetch-lastfm": {
       var users = String(args.user || env.LASTFM_USERNAME || "").split(",").filter(Boolean);
@@ -221,7 +223,7 @@ async function main() {
       break;
     case "refresh": {
       log("== room database");
-      await sources.fetchFirebase(db, env, { dir: dir }, log);
+      await sources.fetchFirebase(db, env, { dir: dir, full: !!args.full }, log);
       if (env.LASTFM_APIKEY && env.LASTFM_USERNAME) {
         log("== Last.fm");
         await sources.fetchLastfm(db, env.LASTFM_APIKEY, env.LASTFM_USERNAME, log);

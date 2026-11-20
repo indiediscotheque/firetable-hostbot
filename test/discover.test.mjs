@@ -295,3 +295,77 @@ test("fires earned are published under discover/fires", async () => {
   assert.equal(fires.djs.u1.fires, 2, "the log before November 2026 has no fires: not read");
   assert.equal(fires.index[0].djid, "u1");
 });
+
+// ------------------------------------------------- what it costs to run
+
+test("the play log window: downloaded once, then each new play; older spans are left to a read", async () => {
+  const now = local(2026, 11, 10);
+  const { db } = setup({ playLog: { a: play("A", now - 80 * 86400000), b: play("B", now - 3 * 86400000), c: play("C", now - 86400000) } });
+  const win = discover.playLogWindow(db, { now: () => now, days: 70 });
+  assert.equal(await win.ready, true);
+  assert.equal(win.size(), 2, "80 days back is outside the window");
+  assert.deepEqual((await win.between(now - 7 * 86400000, now + 1)).map((e) => e.s), ["B", "C"]);
+  assert.equal(await win.between(now - 90 * 86400000, now), null, "older than the window: read it instead");
+  const readsBefore = db.reads.length;
+  await db.ref("playLog").push(play("D", now - 1000));
+  await db.ref("playLog").push(play("E", now - 2000));
+  assert.deepEqual((await win.between(now - 86400000 - 1, now + 1)).map((e) => e.s), ["C", "E", "D"], "oldest first");
+  assert.equal(db.reads.length, readsBefore, "new plays arrive without a read");
+});
+
+test("the chart after each song reads no play log, and an unchanged chart isn't sent again", async () => {
+  let now = local(2026, 11, 5);
+  const playLog = { p0: play("A", local(2026, 10, 28)), p1: play("A", local(2026, 11, 3)), p2: play("B", local(2026, 11, 4)) };
+  const db0 = setup({ playLog }, { now: () => now });
+  const win = discover.playLogWindow(db0.db, { now: () => now });
+  const db = db0.db;
+  const { d } = setup({}, { db, now: () => now, playLog: win });
+  await win.ready; // its first download (one listener; the SDK answers this from it)
+  const base = db.reads.filter((p) => p === "playLog").length;
+  await d.refreshPeriod("week");
+  const reads = () => db.reads.filter((p) => p === "playLog").length - base;
+  const chartWrites = () => db.writes.filter((p) => p.startsWith("discover/charts/week/")).length;
+  assert.equal(reads(), 0, "the window answers for this week and last");
+  const written = chartWrites();
+  assert.equal(written, 2, "last week finished, this week's made");
+  const before = db.reads.length;
+  now += 60000;
+  await d.refreshPeriod("week");
+  assert.equal(chartWrites(), written, "nothing new: nothing sent");
+  assert.equal(db.reads.length, before, "last week's chart and list are remembered, not read again");
+  await db.ref("playLog").push(play("B", now));
+  now += 60000;
+  await d.refreshPeriod("week");
+  assert.equal(chartWrites(), written + 1, "a new play: the week's chart again");
+  assert.deepEqual(db.get("discover/charts/week/2026-W45").rows.map((r) => r.key + ":" + r.plays), ["B:2", "A:1"]);
+  assert.equal(reads(), 0);
+});
+
+test("the day's long spans (the year, theme nights, fires) share one read of the play log", async () => {
+  const now = local(2026, 11, 10, 23);
+  const playLog = {};
+  for (let i = 0; i < 6; i++) playLog["p" + i] = play("S" + i, now - (i * 50 + 1) * 86400000, { f: 1, th: "Old Night" });
+  const db0 = setup({ playLog, discover: { charts: { year: { 2025: { final: true, rows: [] } } } } }, { now: () => now });
+  const win = discover.playLogWindow(db0.db, { now: () => now });
+  const db = db0.db;
+  const { d } = setup({}, { db, now: () => now, playLog: win });
+  await win.ready;
+  const base = db.reads.filter((p) => p === "playLog").length;
+  const reads = () => db.reads.filter((p) => p === "playLog").length - base;
+  await Promise.all([d.refreshPeriod("year"), d.refreshThemes(24 * 400), d.refreshFires()]);
+  assert.equal(reads(), 1, "one read for all three");
+  assert.equal(db.get("discover/charts/year/2026").plays, 6);
+  await d.refreshFires();
+  assert.equal(reads(), 1, "and it serves the day's other jobs");
+});
+
+test("only the theme nights that changed are written", async () => {
+  const H = 3600000, now = local(2026, 11, 10, 23);
+  const playLog = {};
+  ["A", "B", "C"].forEach((s, i) => { playLog["p" + i] = play(s, now - (3 - i * 0.1) * H, { th: "Italo Night" }); });
+  const { db, d } = setup({ playLog }, { now: () => now });
+  await d.refreshThemes(36);
+  const n = db.writes.length;
+  await d.refreshThemes(36);
+  assert.equal(db.writes.length, n);
+});

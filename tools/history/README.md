@@ -16,7 +16,7 @@ npm run history -- help
 4. Read the run's summary page and its reports (downloadable in a private repository). When it looks right, run it again with **publish** ticked.
 5. From then on the Monday runs refresh everything and show a preview. To have them publish too, add the repository variable `HISTORY_AUTO_PUBLISH` = `true` (Settings → Secrets and variables → Actions → Variables).
 
-Each run starts from the last run's data, so a refresh takes minutes. The first one downloads every Last.fm scrobble, about an hour for a million. Nothing depends on that saved data: mods' answers and imports are kept in the room's database, so if GitHub clears it, the next run rebuilds everything (or tick **rebuild**). YouTube checks stop at 3,000 quota units a run, so the bot always has enough left for the day.
+Each run starts from the last run's data, so a refresh takes minutes. It also reads only what's new from the room's database, which bills every byte it sends: the play log from where the last run stopped, and the playlists and queues of DJs who've been in the room since the last run (and the bot's). Everyone's lists are read again every 28 days, on a rebuild, with `--full`, or with the Action's **full_read** ticked. The first one downloads every Last.fm scrobble, about an hour for a million. Nothing depends on that saved data: mods' answers and imports are kept in the room's database, so if GitHub clears it, the next run rebuilds everything (or tick **rebuild**). YouTube checks stop at 3,000 quota units a run, so the bot always has enough left for the day.
 
 **Safety checks.** A publish is refused, and the run fails, when:
 - the history has 10% fewer tracks or 5% fewer plays than the last one published (usually a source that didn't download)

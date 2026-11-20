@@ -307,6 +307,16 @@ await expect("DENIED", "a visitor sets the song's fires", visitor.ref("songFires
 await expect("DENIED", "bot fires with an extra field", db("bot").ref("songFires").set({ started: 1, count: 1, junk: "x" }));
 await expect("DENIED", "bot fires that aren't a number", db("bot").ref("songFires").set({ started: 1, count: "lots" }));
 await expect("ALLOWED", "bot clears the song's fires", db("bot").ref("songFires").set(null));
+const stageNow = { online: 3, deck: [{ id: "dj1", n: "dj1", av: "robohash:set2" }, { id: "dj2", n: "dj2" }], colors: { color: "#123456", txt: "#fff" },
+  theme: "Italo Night", bpm: { started: 1700000000000, bpm: 120 }, tag: { cid: "abc", adamData: { track_name: "Song", artist: "Artist", playcount: 4 } },
+  fires: { started: 1700000000000, count: 2 } };
+await expect("ALLOWED", "bot publishes the stage summary", db("bot").ref("stage").set(stageNow));
+await expect("ALLOWED", "a visitor reads the stage summary", visitor.ref("stage").once("value"));
+await expect("DENIED", "a member writes the stage summary", eve.ref("stage/online").set(99));
+await expect("DENIED", "a visitor writes the stage summary", visitor.ref("stage/theme").set("hacked"));
+await expect("DENIED", "bot stage summary with an extra field", db("bot").ref("stage/junk").set("x"));
+await expect("DENIED", "bot stage seat with an extra field", db("bot").ref("stage/deck/0/email").set("a@b.c"));
+await expect("DENIED", "bot stage seat with no name", db("bot").ref("stage/deck/0").set({ id: "dj1" }));
 await expect("ALLOWED", "a visitor reads the history's songs by plays", visitor.ref("globalSongs").orderByChild("plays").limitToLast(5).once("value"));
 await expect("ALLOWED", "turn off your name on public pages", eve.ref("users/eve/publicName").set(false));
 await expect("ALLOWED", "turn it back on", eve.ref("users/eve/publicName").set(true));
