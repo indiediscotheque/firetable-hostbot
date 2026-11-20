@@ -300,5 +300,7 @@ async function main() {
 
 main().catch(function(e) {
   console.error("error: " + (e && e.message || e));
+  // where it happened, so a failed run in CI says which line to look at
+  if (e && e.stack) console.error(e.stack.split("\n").slice(1, 6).join("\n"));
   process.exitCode = 1;
 });

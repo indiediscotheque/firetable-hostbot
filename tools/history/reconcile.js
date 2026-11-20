@@ -789,8 +789,10 @@ function reconcile(db, opts) {
     if (withMine && withMine !== name) { name = withMine; by = (by ? by + " and " : "") + "a mod's spelling"; }
     var accentsChanged = nonAsciiCount(name) !== nonAsciiCount(cur.name) || tags.fold(name) !== tags.fold(cur.name);
     var outcome = null;
-    if (by && accentsChanged && nonAsciiCount(name) > nonAsciiCount(cur.name)) outcome = "accents from YouTube Music";
-    else if (by && accentsChanged) outcome = "accents taken off: YouTube Music writes it " + ref.name;
+    // a mod's spelling can change the name with no YouTube Music reference at all (ref is null)
+    var fromYtm = !!ref && /YouTube Music/.test(by || "");
+    if (by && accentsChanged && nonAsciiCount(name) > nonAsciiCount(cur.name)) outcome = fromYtm ? "accents from YouTube Music" : "accents from a mod's spelling";
+    else if (by && accentsChanged) outcome = fromYtm ? "accents taken off: YouTube Music writes it " + ref.name : "written as a mod spells it: " + name;
     else if (pick && ref && ref.n >= YTM_SURE) outcome = "left as it is: YouTube Music writes it " + ref.name;
     else if (pick) {
       // not settled: YouTube Music not seen, or on too few uploads; one search
