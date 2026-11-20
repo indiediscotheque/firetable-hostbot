@@ -981,8 +981,8 @@ test("the stage summary: who's in the room and at the table, the song's looks, n
   const v = stageOf({ users, botid: "bot", table: [{ id: "dj1", name: "old" }, { id: "dj2" }, null], colors: { color: "#123", txt: "#fff", junk: 1 },
     theme: "Italo", bpm: { started: 5, bpm: 120, src: "deezer" }, tag: { cid: 9, adamData: { artist: "A" }, other: 1 }, fires: { started: 5, count: 2 } });
   assert.deepEqual(v, { online: 2, deck: [{ id: "dj1", n: "ana", av: "dicebear:pixel-art" }, { id: "dj2", n: "ben" }], colors: { color: "#123", txt: "#fff" },
-    theme: "Italo", bpm: { started: 5, bpm: 120 }, tag: { cid: "9", adamData: { artist: "A" } }, fires: { started: 5, count: 2 } });
-  assert.deepEqual(stageOf({ users: {} }), { online: 0, deck: [], colors: null, theme: null, bpm: null, tag: null, fires: null });
+    theme: "Italo", bpm: { started: 5, bpm: 120 }, tag: { cid: "9", adamData: { artist: "A" } }, fires: { started: 5, count: 2 }, style: null });
+  assert.deepEqual(stageOf({ users: {} }), { online: 0, deck: [], colors: null, theme: null, bpm: null, tag: null, fires: null, style: null });
 
   const { fakeDb } = await import("./fake-db.mjs");
   const db = fakeDb({ table: [{ id: "dj1" }], theme: "Italo" });
@@ -999,6 +999,53 @@ test("the stage summary: who's in the room and at the table, the song's looks, n
   assert.equal(await pub.flush(), true);
   assert.equal(db.get("stage/online"), 1);
   assert.equal(db.writes.filter((p) => p === "stage").length, n + 1);
+});
+
+test("the stage summary: the room's avatar style and each DJ's own Bouletmaton", async () => {
+  const { stageOf, legacyOf, createStage } = require("../lib/stage.js");
+  const bm = "2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0";
+  const users = { dj1: { username: "ana", status: true, boulet: bm }, dj2: { username: "ben", status: true, boulet: "<img src=x>" } };
+  const v = stageOf({ users, table: [{ id: "dj1" }, { id: "dj2" }], style: "bouletmaton" });
+  assert.deepEqual(v.deck, [{ id: "dj1", n: "ana", bm }, { id: "dj2", n: "ben" }], "only a real Bouletmaton is published");
+  assert.equal(v.style, "bouletmaton");
+  assert.equal(stageOf({ users, style: "dicebear:bottts" }).style, null, "a style the room no longer offers isn't published");
+  assert.equal(stageOf({ users, style: "set2" }).style, "robohash:set2");
+  const old = legacyOf(v);
+  assert.equal("style" in old, false);
+  assert.deepEqual(old.deck, [{ id: "dj1", n: "ana" }, { id: "dj2", n: "ben" }]);
+  assert.equal(v.deck[0].bm, bm, "the full summary is untouched");
+
+  // Older rules refuse the new fields: the rest is still published
+  const { fakeDb } = await import("./fake-db.mjs");
+  const db = fakeDb({ table: [{ id: "dj1" }], roomSettings: { avatarStyle: "bouletmaton" } });
+  const realRef = db.ref.bind(db);
+  db.ref = (path) => {
+    const r = realRef(path);
+    if (path !== "stage") return r;
+    return Object.assign({}, r, { set: (val) => (val.style || val.deck.some((d) => d.bm)) ? Promise.reject(new Error("PERMISSION_DENIED")) : r.set(val) });
+  };
+  const logs = [];
+  const pub = createStage({ db, users: () => users, delay: 1000, log: (m) => logs.push(m) });
+  pub.start();
+  assert.equal(await pub.flush(), true);
+  assert.equal(db.get("stage/deck/0/n"), "ana");
+  assert.equal(db.get("stage/deck/0/bm"), null);
+  assert.ok(logs.some((m) => /without the room's avatar style/.test(m)));
+});
+
+test("avatar styles: only the room's six, robots by default", () => {
+  const a = require("../lib/avatars.js");
+  assert.deepEqual(a.STYLES, ["robohash:set1", "robohash:set2", "robohash:set4", "dicebear:notionists", "dicebear:pixel-art", "bouletmaton"]);
+  assert.equal(a.DEFAULT_STYLE, "robohash:set1");
+  assert.equal(a.normalizeAvatarStyle("set2"), "robohash:set2");
+  assert.equal(a.normalizeAvatarStyle("set3"), null, "robot heads are gone");
+  assert.equal(a.normalizeAvatarStyle("dicebear:bottts"), null);
+  assert.equal(a.normalizeAvatarStyle(" bouletmaton "), "bouletmaton");
+  assert.equal(a.normalizeAvatarStyle(""), null);
+  assert.equal(a.normalizeAvatarStyle(null), null);
+  assert.equal(a.isBoulet("4.12.62.54.18.17.93.32.96.42.17.24.12.71.20.24.32.19"), true);
+  assert.equal(a.isBoulet("0.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1"), false);
+  assert.equal(a.isBoulet(42), false);
 });
 
 // -------------------------------------------------------------- lean tracks

@@ -97,6 +97,15 @@ await expect("DENIED", "someone else's offlineAt", db("bob").ref("users/eve/offl
 await expect("DENIED", "closed that isn't now", eve.ref("users/eve/closed").set(1));
 await expect("DENIED", "offlineAt in the future", eve.ref("users/eve/offlineAt").set(Date.now() + 86400000));
 await expect("ALLOWED", "avatarStyle", eve.ref("users/eve/avatarStyle").set("robohash:set2"));
+await expect("DENIED", "avatarStyle the room no longer offers", eve.ref("users/eve/avatarStyle").set("dicebear:bottts"));
+await expect("ALLOWED", "save my Bouletmaton", eve.ref("users/eve/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
+await expect("ALLOWED", "change my Bouletmaton", eve.ref("users/eve/boulet").set("1.1.1.1.1.0.1.1.1.1.0.0.0.0.0.0.0.0"));
+await expect("DENIED", "save someone else's Bouletmaton", eve.ref("users/bob/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
+await expect("DENIED", "a Bouletmaton with a fifth skin tone", eve.ref("users/eve/boulet").set("5.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
+await expect("DENIED", "a Bouletmaton with hair colour 13", eve.ref("users/eve/boulet").set("2.13.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
+await expect("DENIED", "a Bouletmaton missing a part", eve.ref("users/eve/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12"));
+await expect("DENIED", "a Bouletmaton with a picture in it", eve.ref("users/eve/boulet").set("https://example.com/x.png"));
+await expect("DENIED", "a Bouletmaton that isn't text", eve.ref("users/eve/boulet").set(123));
 await expect("ALLOWED", "feature two of my cards on my DJ page, then none", eve.ref("users/eve/featured").set(["c2", "c1"]).then(() => eve.ref("users/eve/featured").remove()));
 await expect("DENIED", "feature someone else's card", eve.ref("users/eve/featured").set(["c3"]));
 await expect("DENIED", "feature a card that doesn't exist", eve.ref("users/eve/featured").set(["nope"]));
@@ -316,7 +325,7 @@ await expect("DENIED", "a member reads someone else's grab count", eve.ref("grab
 await expect("DENIED", "a member writes their own grab count", eve.ref("grabCount/eve/n").set(999));
 await expect("DENIED", "bot grab count with an extra field", db("bot").ref("grabCount/eve/who").set("bob"));
 await expect("ALLOWED", "the bot clears a grab count", db("bot").ref("grabCount/eve").set(null));
-const stageNow = { online: 3, deck: [{ id: "dj1", n: "dj1", av: "robohash:set2" }, { id: "dj2", n: "dj2" }], colors: { color: "#123456", txt: "#fff" },
+const stageNow = { online: 3, deck: [{ id: "dj1", n: "dj1", av: "robohash:set2" }, { id: "dj2", n: "dj2", bm: "2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0" }], colors: { color: "#123456", txt: "#fff" }, style: "bouletmaton",
   theme: "Italo Night", bpm: { started: 1700000000000, bpm: 120 }, tag: { cid: "abc", adamData: { track_name: "Song", artist: "Artist", playcount: 4 } },
   fires: { started: 1700000000000, count: 2 } };
 await expect("ALLOWED", "bot publishes the stage summary", db("bot").ref("stage").set(stageNow));
@@ -326,6 +335,8 @@ await expect("DENIED", "a visitor writes the stage summary", visitor.ref("stage/
 await expect("DENIED", "bot stage summary with an extra field", db("bot").ref("stage/junk").set("x"));
 await expect("DENIED", "bot stage seat with an extra field", db("bot").ref("stage/deck/0/email").set("a@b.c"));
 await expect("DENIED", "bot stage seat with no name", db("bot").ref("stage/deck/0").set({ id: "dj1" }));
+await expect("DENIED", "bot stage seat with a Bouletmaton that isn't one", db("bot").ref("stage/deck/0/bm").set("https://example.com/x.png"));
+await expect("DENIED", "bot stage with an avatar style the room doesn't offer", db("bot").ref("stage/style").set("dicebear:bottts"));
 await expect("ALLOWED", "a visitor reads the history's songs by plays", visitor.ref("globalSongs").orderByChild("plays").limitToLast(5).once("value"));
 await expect("ALLOWED", "turn off your name on public pages", eve.ref("users/eve/publicName").set(false));
 await expect("ALLOWED", "turn it back on", eve.ref("users/eve/publicName").set(true));
@@ -333,6 +344,12 @@ await expect("DENIED", "publicName that isn't true or false", eve.ref("users/eve
 await expect("DENIED", "turn off someone else's name", eve.ref("users/bob/publicName").set(false));
 await expect("ALLOWED", "a supermod sets everyone's avatar style", db("boss").ref("roomSettings/avatarStyle").set("robohash:set4"));
 await expect("ALLOWED", "a supermod sets a DiceBear style", db("boss").ref("roomSettings/avatarStyle").set("dicebear:pixel-art"));
+await expect("ALLOWED", "a supermod sets DiceBear Notionists", db("boss").ref("roomSettings/avatarStyle").set("dicebear:notionists"));
+await expect("ALLOWED", "a supermod sets Robohash monsters", db("boss").ref("roomSettings/avatarStyle").set("robohash:set2"));
+await expect("ALLOWED", "a supermod sets Robohash robots", db("boss").ref("roomSettings/avatarStyle").set("robohash:set1"));
+await expect("ALLOWED", "a supermod sets Bouletmaton", db("boss").ref("roomSettings/avatarStyle").set("bouletmaton"));
+await expect("DENIED", "a style the room no longer offers (robot heads)", db("boss").ref("roomSettings/avatarStyle").set("robohash:set3"));
+await expect("DENIED", "a style the room no longer offers (DiceBear Bottts)", db("boss").ref("roomSettings/avatarStyle").set("dicebear:bottts"));
 await expect("ALLOWED", "a supermod goes back to the room's default", db("boss").ref("roomSettings/avatarStyle").set(null));
 await expect("ALLOWED", "a visitor reads the room's settings", visitor.ref("roomSettings").once("value"));
 await expect("DENIED", "a mod sets everyone's avatar style", db("mod1").ref("roomSettings/avatarStyle").set("robohash:set2"));

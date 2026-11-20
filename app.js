@@ -31,6 +31,7 @@ var ytmsync = require('./lib/ytmsync');
 var apple = require('./lib/apple');
 var discover = require('./lib/discover');
 var stage = require('./lib/stage');
+var avatars = require('./lib/avatars');
 var grabCounts = require('./lib/grabs');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
@@ -224,12 +225,9 @@ function inMonths(months, date) {
   return Array.isArray(months) && months.map(Number).indexOf(date.getMonth() + 1) !== -1;
 }
 
-// Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2".
-function normalizeAvatarStyle(val) {
-  val = String(val || "").trim();
-  if (!val) return null;
-  return /^(robohash|dicebear):/.test(val) ? val : "robohash:" + val;
-}
+// Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2", and a
+// style the room no longer offers → null (lib/avatars.js).
+var normalizeAvatarStyle = avatars.normalizeAvatarStyle;
 
 // Everyone's avatar style when a supermod has picked one (the site's Mod tools,
 // roomSettings/avatarStyle); null means the room's default below. With older
@@ -257,7 +255,7 @@ function cardAvatarSet() {
       }
     }
   }
-  // Cards draw Robohash sets only; a DiceBear room theme keeps the robots.
+  // Cards draw Robohash sets only; a DiceBear or Bouletmaton room keeps the robots.
   return style && style.indexOf("robohash:") === 0 ? (style.slice(9) || "set1") : "set1";
 }
 
