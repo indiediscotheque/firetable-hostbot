@@ -1074,18 +1074,43 @@ var trimmedList = function(path, max) {
     if (i !== -1) keys.splice(i, 1);
   });
   return {
+    /** Save `entry`; resolves its key (null if it couldn't be saved). */
     add: function(entry) {
-      ref.push(entry).catch(function(err) {
+      var pushed = ref.push(entry);
+      var saved = pushed.then(function() { return pushed.key; }, function(err) {
         console.log("couldn't save to " + path + ":", err.message);
+        return null;
       });
       // oldest first (push keys sort by time)
       keys.slice(0, Math.max(0, keys.length - max)).forEach(function(key) {
         ref.child(key).remove();
       });
+      return saved;
     }
   };
 };
 var recentPlays = trimmedList("songHistory", 500);
+
+/**
+ * A play's genre on its Recent plays row (`g`, the song's first genre in
+ * globalSongs), once the history job has linked the track. The site's sound
+ * map rings the genres played tonight with it. Nothing is written when the
+ * song isn't linked yet or has no genre.
+ */
+var playGenre = function(path, entry) {
+  var db = firebase.database();
+  return db.ref("globalTracks/" + entry.type + entry.cid + "/song").once("value").then(function(s) {
+    var id = s.val();
+    if (!id) return null;
+    return db.ref("globalSongs/" + id + "/genres/0").once("value").then(function(g) {
+      var genre = g.val();
+      if (typeof genre === "string" && genre) return db.ref(path + "/g").set(genre.slice(0, 80));
+      return null;
+    });
+  }).catch(function(err) {
+    console.log("couldn't add the genre to " + path + ":", err && err.message);
+  });
+};
 var freshPlays = trimmedList("newMusic", 100);
 
 // The list a DJ plays from: their chosen playlist, or their default queue.
@@ -1177,7 +1202,7 @@ var startSong = function(noPrevPlay) {
       if (song.adamid) newEntry.adamid = song.adamid;
       if (song.playcount) newEntry.playcount = song.playcount;
       newEntry = JSON.parse(JSON.stringify(newEntry)); // Firebase refuses undefined fields
-      recentPlays.add(newEntry);
+      recentPlays.add(newEntry).then(function(key) { if (key) playGenre("songHistory/" + key, newEntry); });
       logPlay(song, songRanOut, songFires);
       var isNew = newMusicCheck(newEntry);
       if (isNew) {

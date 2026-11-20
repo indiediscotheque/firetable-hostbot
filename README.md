@@ -170,6 +170,7 @@ Once published (deploy `firebase-rules.json` first), for every song the bot:
 - links each upload to its track by its tags (`globalTracks/<upload>/song` → `globalSongs`), so a new copy of an old song shows its real first play
 - counts the play on the track and on the song, all versions together (`globalWorks`), and shows the room that count instead of Last.fm's per-spelling one
 - logs the play in `playLog` (who, what, when, how long, skipped) and every tag fix in `tagLog`; only the bot can read these
+- adds the song's first genre to its Recent plays row (`songHistory/<id>/g`), once the track is linked: the site's sound map rings the genres played tonight
 
 Before a publish, or after `publish --off`, the bot works as it did: per-upload first plays and Last.fm counts. Last.fm scrobbling is unchanged either way.
 
