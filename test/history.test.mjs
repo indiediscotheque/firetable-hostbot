@@ -947,6 +947,7 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.equal(year.more[0].cid, "notplayed01", "a year's songs not played here yet are its finds");
     assert.equal(u["discover/lib/years"][2017].songs, 2, "one song under two uploads is one song");
     assert.equal(u["discover/lib/years"][2017].played, 1);
+    assert.deepEqual(u["discover/lib/years"][2017].covers, [year.top[0].type + "_" + year.top[0].cid], "a year's covers: its most played");
     assert.equal(year.top.length, 1, "and is listed once in Most played here");
     // the audit: no list on any library page holds a song twice (same upload, or same artist and title)
     const repeats = [];

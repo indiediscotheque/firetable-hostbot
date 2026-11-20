@@ -12,7 +12,7 @@
 //                                  DJs, when they play, recent sets, cards
 //   discover/lib/artistIndex       artist slug -> [name, plays] (the 5,000 most played)
 //   discover/lib/artist/<slug>     their songs here, who plays them, first play
-//   discover/lib/years             each year playlist: songs, room plays, top genre
+//   discover/lib/years             each year playlist: songs, room plays, top genre, covers
 //   discover/lib/year/<year>       most played from that year, and finds not played yet
 //   discover/lib/rising            plays up most, the last 4 weeks against the 4 before
 //   discover/lib/onThisDay/<MM-DD> songs first played here on this day in past years
@@ -455,7 +455,9 @@ function buildLibrary(db, opts) {
       }
     });
     var top = Array.from(genreCount.entries()).sort(function(a, b) { return b[1] - a[1]; })[0];
-    yearIndex[year] = { songs: played.length + unplayed.length, plays: plays, played: played.length, genre: top ? top[0] : null };
+    // the four most played, as covers for the Years list ("type_cid", as genres' covers)
+    var covers = rows(played.slice().sort(byPlays), 4).map(function(r) { return r.type + "_" + r.cid; });
+    yearIndex[year] = { songs: played.length + unplayed.length, plays: plays, played: played.length, genre: top ? top[0] : null, covers: covers };
     // finds not played here yet: spread across the list, the same each week
     var step = Math.max(1, Math.floor(unplayed.length / ROWS.yearMore));
     var more = [];
