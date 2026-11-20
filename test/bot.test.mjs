@@ -127,7 +127,9 @@ const scenarios = {
     return p;
   },
   async replay_and_skips() {
-    await put("/", base(Object.assign(nowPlaying("dj1", "yt1"), { queues: { dj1: { k1: yt("yt3") }, dj2: { s1: yt("yt2") } } })));
+    // the playing song is linked in the library, with a genre: its Recent row gets it (g)
+    await put("/", base(Object.assign(nowPlaying("dj1", "yt1"), { queues: { dj1: { k1: yt("yt3") }, dj2: { s1: yt("yt2") } },
+      globalTracks: { "1yt1": { song: "sg1" } }, globalSongs: { sg1: { genres: ["Nu-Disco"] } } })));
     await say("boss", "!skip"); // sent before the restart
     const before = await get("/songToPlay");
     const p = startBot("skips", { YT_DELAY: "800" });
@@ -138,6 +140,7 @@ const scenarios = {
     await sleep(3000);
     const st = await get("/");
     check(Object.keys(st.songHistory || {}).length === 1 && st.songToPlay.djid === "dj2", "three quick skips skip one song");
+    check(Object.values(st.songHistory || {})[0]?.g === "Nu-Disco", "a play's Recent row gets its song's genre (" + JSON.stringify(Object.values(st.songHistory || {})[0]?.g) + ")");
     check(said(st).filter((t) => /Hang on, boss, the next song is already loading/.test(t)).length === 1, "skips while it loads get one \"hang on\"");
     await healthy(p);
     return p;
