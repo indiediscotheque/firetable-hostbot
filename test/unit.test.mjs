@@ -838,6 +838,57 @@ test("swap runner: tracks that play but don't fit their playlist's format get a 
   assert.ok(!verified.includes("nsstudio001"), "an upload's kind is asked once");
 });
 
+test("swap runner: trackKinds is followed (downloaded once, then what's added), not read again every run", async () => {
+  const yt = (cid, name) => ({ type: 1, cid, name });
+  const data = {
+    playlists: { u1: { ytm: { name: "YTM", list: { v: yt("kpvideo0001", "Radiohead - Karma Police"), a: yt("studio00001", "Radiohead - Karma Police") } } } },
+    playlistPrefs: { u1: { format: { ytm: "ytm" } } },
+    trackKinds: { kpvideo0001: "v3" } // known already
+  };
+  const base = fakeDb(data);
+  const kindReads = [];
+  const listeners = [];
+  // trackKinds with listeners, like the real database: child_added for what's there, then for what's added
+  const db = { ref: (path) => {
+    const r = base.db.ref(path);
+    if (path !== "trackKinds") return r;
+    return Object.assign({}, r, {
+      once: async () => { kindReads.push("once"); return r.once(); },
+      on: (ev, cb) => {
+        if (ev === "child_added") {
+          kindReads.push("listen");
+          Object.keys(data.trackKinds || {}).forEach((k) => cb({ key: k, val: () => data.trackKinds[k] }));
+          listeners.push(cb);
+        }
+        return cb;
+      },
+      update: async (v) => { await r.update(v); Object.keys(v).forEach((k) => listeners.forEach((cb) => cb({ key: k, val: () => v[k] }))); }
+    });
+  } };
+  const verified = [];
+  const sw = swaps.createSwapper({
+    db, shallowKeys: async (p) => Object.keys(base.at(p) || {}), users: () => ({ u1: { username: "u1" } }), botid: () => "bot", delayMs: 0, twinDelayMs: 0,
+    search: async () => realSearch([songRow]),
+    verify: async (ids) => {
+      verified.push(...ids);
+      return vfy({ studio00001: { problem: 0, audio: true, dur: 262, channel: "Radiohead - Topic", title: "Karma Police" } })(ids);
+    },
+    notify: () => {}
+  });
+  await sw.run({ full: true });
+  assert.deepEqual(verified, ["studio00001"], "only the upload trackKinds doesn't know is asked of YouTube");
+  assert.equal(data.trackKinds.studio00001, "a", "and remembered");
+  assert.equal(data.playlists.u1.ytm.list.v.swap.cid, "studio00001", "the video in a YouTube Music list still gets its audio track");
+  // someone else (another copy of the bot) learns a kind: it arrives through the listener
+  data.trackKinds.other000001 = "a";
+  listeners.forEach((cb) => cb({ key: "other000001", val: () => "a" }));
+  verified.length = 0;
+  await sw.run({ full: true });
+  await sw.run({ full: true });
+  assert.deepEqual(verified, [], "later runs ask YouTube nothing");
+  assert.deepEqual(kindReads, ["listen", "once"], "one listener, one first read (answered from it); never read again");
+});
+
 test("swap runner: a video list's promoter and fan uploads get the official music video, where there is one", async () => {
   const yt = (cid, name) => ({ type: 1, cid, name });
   const data = {
@@ -948,4 +999,44 @@ test("the stage summary: who's in the room and at the table, the song's looks, n
   assert.equal(await pub.flush(), true);
   assert.equal(db.get("stage/online"), 1);
   assert.equal(db.writes.filter((p) => p === "stage").length, n + 1);
+});
+
+// -------------------------------------------------------------- lean tracks
+
+test("lean tracks: a YouTube track's own thumbnail and watch page go; anything else stays", () => {
+  const { lean, derivedImg, derivedUrl } = require("../lib/tracks.js");
+  const yt = { type: 1, cid: "abcDEF12345", name: "A - B", img: "https://i.ytimg.com/vi/abcDEF12345/mqdefault.jpg", url: "https://www.youtube.com/watch?v=abcDEF12345", from: "discover" };
+  assert.deepEqual(lean(yt), { type: 1, cid: "abcDEF12345", name: "A - B", from: "discover" });
+  assert.equal(yt.img.length > 0, true, "the original is untouched");
+  assert.ok(derivedImg("https://i9.ytimg.com/vi_webp/abcDEF12345/maxresdefault.webp", "abcDEF12345"));
+  assert.ok(derivedUrl("https://youtu.be/abcDEF12345", "abcDEF12345"));
+  // kept: another video's art, a link with a start time, a custom image, a SoundCloud track's
+  assert.equal(lean({ type: 1, cid: "abcDEF12345", img: "https://i.ytimg.com/vi/zzzZZZ99999/mqdefault.jpg" }).img, "https://i.ytimg.com/vi/zzzZZZ99999/mqdefault.jpg");
+  assert.equal(lean({ type: 1, cid: "abcDEF12345", url: "https://www.youtube.com/watch?v=abcDEF12345&t=30" }).url, "https://www.youtube.com/watch?v=abcDEF12345&t=30");
+  assert.equal(lean({ type: 1, cid: "abcDEF12345", img: "https://example.com/cover.jpg" }).img, "https://example.com/cover.jpg");
+  const sc = { type: 2, cid: 123, img: "https://i1.sndcdn.com/artworks-x-large.jpg", url: "https://soundcloud.com/a/b" };
+  assert.deepEqual(lean(sc), sc);
+  assert.equal(lean(null), null);
+});
+
+// -------------------------------------------------------------- grab counts
+
+test("grab counts: each DJ's grabs summed for the site, written only when they change", async () => {
+  const { summaryOf, createGrabCounts } = require("../lib/grabs.js");
+  assert.deepEqual(summaryOf({ "1_aaa": { u1: 5, u2: 9 }, "1_bbb": { u3: 7 } }), { n: 3, t: 2, last: "1_aaa", lastAt: 9 });
+  assert.equal(summaryOf({}), null);
+  assert.equal(summaryOf(null), null);
+  const { fakeDb } = await import("./fake-db.mjs");
+  const db = fakeDb({ grabs: { dj1: { "1_aaa": { u1: 5 } }, dj2: { "2_123": { u1: 6, u2: 8 } } } });
+  const g = createGrabCounts({ db, delay: 1000 });
+  g.start();
+  assert.equal(await g.flush(), 2, "every DJ's summary, once at start");
+  assert.deepEqual(db.get("grabCount/dj1"), { n: 1, t: 1, last: "1_aaa", lastAt: 5 });
+  assert.deepEqual(db.get("grabCount/dj2"), { n: 2, t: 1, last: "2_123", lastAt: 8 });
+  await db.ref("grabs/dj1/1_bbb/u3").set(12);
+  assert.equal(await g.flush(), 1, "a new grab: that DJ's summary only");
+  assert.deepEqual(db.get("grabCount/dj1"), { n: 2, t: 2, last: "1_bbb", lastAt: 12 });
+  assert.equal(await g.flush(), 0, "nothing new: nothing written");
+  const reads = db.reads.filter((p) => p.startsWith("grabs")).length;
+  assert.equal(reads, 3, "three listeners on grabs/, no reads");
 });
