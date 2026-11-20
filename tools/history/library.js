@@ -191,11 +191,23 @@ function buildLibrary(db, opts) {
     if (!t || !up) return null;
     return Object.assign({ type: up.type, cid: up.cid, a: t.artist || "", t: t.title || "", plays: t.plays || 0, first: t.first_play_at || null }, whoOf(t.first_play_dj), extra || {});
   };
+  // Every list a page shows is built here, and holds each song once: never
+  // the same upload twice, nor the same artist and title twice (two track
+  // records of one song can share a name and an upload). The repeats skipped
+  // are counted for the run's log.
+  counts.repeats = 0;
   var rows = function(ids, max, extraOf) {
     var out = [];
+    var seen = new Set();
     for (var i = 0; i < ids.length && out.length < max; i++) {
       var r = row(ids[i], extraOf ? extraOf(ids[i]) : null);
-      if (r) out.push(r);
+      if (!r) continue;
+      var byUpload = r.type + "_" + r.cid;
+      var byName = String(r.a).toLowerCase().trim() + "|" + String(r.t).toLowerCase().trim();
+      if (seen.has(byUpload) || seen.has(byName)) { counts.repeats++; continue; }
+      seen.add(byUpload);
+      seen.add(byName);
+      out.push(r);
     }
     return out;
   };
@@ -600,7 +612,8 @@ async function publishLibrary(db, env, opts, log) {
   if (found.months.length && found.months[0].viaDiscover) {
     log("library: " + found.months[0].month + ": " + found.months[0].joined + " joined, " + found.months[0].viaDiscover + " through Discover (found_via.csv)");
   }
-  log("library: " + built.counts.genres + " genres, " + built.counts.djs + " DJs, " + built.counts.artists + " artists, " + built.counts.years + " years");
+  log("library: " + built.counts.genres + " genres, " + built.counts.djs + " DJs, " + built.counts.artists + " artists, " + built.counts.years + " years" +
+    (built.counts.repeats ? "; " + built.counts.repeats + " repeated songs left out of lists" : ""));
   if (!opts.write) {
     if (opts.dir) fs.writeFileSync(path.join(opts.dir, "library-preview.json"), JSON.stringify({ counts: built.counts, sample: Object.keys(updates).slice(0, 50) }, null, 1));
     log("library: nothing sent (add --write)");

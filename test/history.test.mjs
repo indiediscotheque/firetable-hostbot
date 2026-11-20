@@ -948,6 +948,24 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.equal(u["discover/lib/years"][2017].songs, 2, "one song under two uploads is one song");
     assert.equal(u["discover/lib/years"][2017].played, 1);
     assert.equal(year.top.length, 1, "and is listed once in Most played here");
+    // the audit: no list on any library page holds a song twice (same upload, or same artist and title)
+    const repeats = [];
+    Object.keys(u).forEach((path) => {
+      const page = u[path];
+      if (!page || typeof page !== "object") return;
+      Object.keys(page).forEach((name) => {
+        const list = page[name];
+        if (!Array.isArray(list) || !list.length || typeof list[0] !== "object" || !("cid" in list[0])) return;
+        const seen = new Set();
+        list.forEach((r) => {
+          for (const key of [r.type + "_" + r.cid, String(r.a).toLowerCase() + "|" + String(r.t).toLowerCase()]) {
+            if (seen.has(key)) repeats.push(path + "/" + name + ": " + key);
+            seen.add(key);
+          }
+        });
+      });
+    });
+    assert.deepEqual(repeats, [], "no library list repeats a song");
     assert.ok(Object.keys(u).some((k) => /^discover\/lib\/onThisDay\/\d\d-\d\d$/.test(k)), "On this day, by date");
     assert.ok(Object.keys(u["discover/lib/artistIndex"]).length > 0, "artist pages");
     assert.equal(library.slugOf("Röyksopp & Robyn"), "royksopp-and-robyn");
