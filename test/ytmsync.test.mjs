@@ -735,3 +735,21 @@ test("lookup: the Song / Video toggle, artist pages, and Apple's album pointing 
   assert.equal(r.stats.from.album, 2);
   assert.match(swaps.summary(r.stats), /Song \/ Video toggle/);
 });
+
+test("the bot's list is held between syncs (one listener), unless YTMUSIC_KEEP_LIST=false", async () => {
+  for (const keepList of [true, false]) {
+    const { db } = setup();
+    const listens = [];
+    const realRef = db.ref;
+    db.ref = (p) => Object.assign(realRef(p), {
+      on: (ev, fn) => { listens.push(p + ":" + ev); return fn; },
+      off: () => { listens.push(p + ":off"); }
+    });
+    // findList twice, as two days' syncs would
+    const made = ytmsync.createSync({ db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}), keepList,
+      videos: async () => ({}), playlist: async () => ({ tracks: [] }), search: async () => ({ songs: [], any: 0 }), sources: [], delayMs: 0, now: () => T0 });
+    await made.findList();
+    await made.findList();
+    assert.deepEqual(listens, keepList ? ["playlists/" + BOT + "/ytm1/list:value"] : [], keepList ? "one listener, kept" : "none: read each day");
+  }
+});

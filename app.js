@@ -31,6 +31,8 @@ var ytmsync = require('./lib/ytmsync');
 var apple = require('./lib/apple');
 var discover = require('./lib/discover');
 var stage = require('./lib/stage');
+var grabCounts = require('./lib/grabs');
+var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
@@ -765,11 +767,13 @@ var retrySameDJ = function(delay) {
 // Move a track to the bottom of its list (as `entry`) in one write: the old
 // slot goes and the new one appears together, so a crash in between can't
 // lose the track, and the DJ's site redraws the list once.
+// (saved lean: a YouTube track's thumbnail and watch page follow from its id,
+// so they aren't kept; every member downloads their whole playlist)
 var moveToBottom = function(listRef, key, entry) {
   var updates = {};
   var newKey = listRef.push().key;
   updates[key] = null;
-  updates[newKey] = entry;
+  updates[newKey] = tracks.lean(entry);
   return listRef.update(updates).then(function() { return newKey; }, function(error) {
     console.log("couldn't move the track to the bottom of the list: " + error.message);
     throw error;
@@ -1791,6 +1795,9 @@ var usersRef = firebase.database().ref("users");
 var usersLoaded = false;
 // the live stage's public summary (lib/stage.js): who's in the room and at
 // the table, for the embed on QueUp, which would otherwise follow all of users/
+// each DJ's grab stats, summed (lib/grabs.js), so the site needn't download
+// every grab a DJ has had at every sign-in
+var grabSummaries = grabCounts.createGrabCounts({ db: firebase.database(), log: console.log });
 var stagePub = stage.createStage({
   db: firebase.database(),
   users: function() { return users; },
@@ -2337,6 +2344,8 @@ var ytmSync = function() {
       dupeSeconds: YTM_DUPE_SECONDS,
       maxSearches: parseInt(process.env.YTMUSIC_MAX_SEARCHES, 10) || 1000,
       maxDeep: parseInt(process.env.YTMUSIC_MAX_DEEP, 10) || 500,
+      // hold the list between daily syncs instead of downloading it again
+      keepList: process.env.YTMUSIC_KEEP_LIST !== "false",
       delayMs: 2500
     });
   }
@@ -2404,10 +2413,6 @@ var discoverer = function() {
       snippets: youtubeSnippets,
       colors: artworkColors,
       sources: ytmsync.parseSources(process.env.YTMUSIC_SOURCES),
-      feed: function() { return feedEntries; },
-      chatData: function(chatID) {
-        return firebase.database().ref("chatData/" + chatID).once("value").then(function(snap) { return snap.val(); });
-      },
       // the recent play log in memory: the chart after each song reads nothing
       playLog: discover.playLogWindow(firebase.database(), { now: serverNow, log: console.log }),
       log: console.log
@@ -2455,7 +2460,7 @@ var discoverTick = function() {
       .then(function() { return d.refreshAllTime(); });
   });
   discoverJob("new releases", function(d) { return d.refreshNew(); });
-  discoverJob("chat peek", function(d) { return d.refreshChat(); });
+  discoverJob("retired data", function(d) { return d.retire(); });
   discoverJob("theme nights", function(d) { return d.refreshThemes(24 * 400); });
   discoverJob("fires", function(d) { return d.refreshFires(); });
 };
@@ -2499,10 +2504,6 @@ var genrePlaylistsTick = function() {
   genrePlaylists();
 };
 setInterval(genrePlaylistsTick, 10 * 60 * 1000);
-
-var discoverChat = function() {
-  if (discoverOn && started) discoverer().chatChanged();
-};
 
 var swapRanOn = null;
 var swapTick = function() {
@@ -2894,7 +2895,6 @@ var handleChat = function(chatID, feedKey) {
         console.log("ignored a repeated chat message (" + chatID + ")");
         return;
       }
-      if (discoverOn && started && !/^!/.test(chatData.txt.trim()) && !chatData.botCmd) discoverer().noteChat(chatData.time);
       fileMentions(chatID, chatData, namebo);
       push.chat(chatID, chatData, namebo);
       if (typeof chatData.time === "number" && serverNow() - chatData.time > CHAT_MAX_AGE) {
@@ -3421,6 +3421,7 @@ var markChatReady = function() {
   waiting.forEach(function(item) { handleChat(item.chatID, item.feedKey); });
   console.log("Listening now.");
   stagePub.start();
+  grabSummaries.start();
   claimLowercaseNames();
   pruneMentions();
   push.init();
@@ -3439,7 +3440,6 @@ chatFeedRef.once("value").then(function(snap) {
     var n = feedEntries.length;
     if (n > 1 && feedEntries[n - 2].key > childSnapshot.key) feedEntries.sort(function(x, y) { return x.key < y.key ? -1 : 1; });
     if (before[childSnapshot.key]) return;
-    discoverChat();
     if (!feedData.chatID) return;
     if (chatReady) return handleChat(feedData.chatID, childSnapshot.key);
     chatWaiting.push({ chatID: feedData.chatID, feedKey: childSnapshot.key });
@@ -3452,7 +3452,6 @@ chatFeedRef.once("value").then(function(snap) {
         break;
       }
     }
-    discoverChat();
   });
   setTimeout(pruneChat, 5000); // and every 5 minutes, below
 }).catch(function(err) {

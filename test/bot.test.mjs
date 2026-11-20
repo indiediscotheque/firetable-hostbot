@@ -338,7 +338,9 @@ const scenarios = {
     // 🔥 on the playing song, published for the site's live stage: one per
     // person, 🌧 takes theirs back, a fire for the song before doesn't count,
     // and the next song starts with none
-    await put("/", base({ queues: { dj1: { k1: yt("ytfire1", "Fire Artist - Hot Song") }, dj2: { s1: yt("ytfire2", "Other Artist - Next Song") } } }));
+    await put("/", base({ queues: { dj1: { k1: Object.assign(yt("ytfire1", "Fire Artist - Hot Song"), { img: "https://i.ytimg.com/vi/ytfire1/mqdefault.jpg", url: "https://www.youtube.com/watch?v=ytfire1" }) },
+      dj2: { s1: yt("ytfire2", "Other Artist - Next Song") } },
+      grabs: { dj1: { "1_ytold": { dj2: 1700000000000 } } } }));
     const p = startBot("fires");
     await waitFor(p, "Listening now.");
     await sleep(1500);
@@ -360,6 +362,15 @@ const scenarios = {
     check(typeof sg.online === "number" && sg.online >= 1, "the stage summary counts who's in the room (" + sg.online + ")");
     check(Array.isArray(sg.deck) && sg.deck.some((d) => d.id === "dj1" && d.n), "the stage summary names who's at the table (" + JSON.stringify(sg.deck) + ")");
     check(!JSON.stringify(sg).includes("foundVia") && !("users" in sg), "and nothing else about members");
+    // a played YouTube track goes back without what follows from its id (every member downloads their list)
+    const played = Object.values(st.queues.dj1 || {}).find((t) => t.cid === "ytfire1") || {};
+    check(played.name && !played.img && !played.url, "the played track keeps its name, not its derivable thumbnail and link (" + JSON.stringify(played) + ")");
+    // each DJ's grab stats, summed by the bot for the site
+    check(st.grabCount && st.grabCount.dj1 && st.grabCount.dj1.n === 1 && st.grabCount.dj1.last === "1_ytold", "the bot sums each DJ's grabs (" + JSON.stringify(st.grabCount) + ")");
+    await put("/grabs/dj1/1_ytfire1/dj2", Date.now());
+    await sleep(2000);
+    const gc = (await get("/grabCount/dj1")) || {};
+    check(gc.n === 2 && gc.t === 2 && gc.last === "1_ytfire1", "a new grab updates the sum (" + JSON.stringify(gc) + ")");
     await say("dj2", "🌧");
     await sleep(1200);
     st = await get("/");
@@ -815,7 +826,8 @@ const scenarios = {
   async discover() {
     // the song on the decks when the bot starts has ended: its play is logged
     await put("/", base({ queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") } },
-      users: Object.assign(base({}).users, { quiet: { username: "quiet", status: true, publicName: false } }) }));
+      users: Object.assign(base({}).users, { quiet: { username: "quiet", status: true, publicName: false } }),
+      discover: { chat: { msgs: [{ txt: "left over from before" }] } } }));
     const p = startBot("discover", { YTMUSIC_SOURCES: "2026=PLfakeyear2001" });
     check(await waitFor(p, "Listening now."), "bot says Listening now.");
     await say("dj1", "this one is great");
@@ -826,10 +838,7 @@ const scenarios = {
     const week = Object.values((st.discover && st.discover.charts && st.discover.charts.week) || {}).find((c) => !c.final) || {};
     check((week.rows || []).some((r) => r.cid === "old" && r.plays === 1 && r.dj === "dj2"), "the week's chart counts the play that just ended");
     check(st.discover && st.discover.chartIds && st.discover.chartIds.week && Object.keys(st.discover.chartIds.week).length >= 2, "last week's chart is finished off too");
-    const msgs = (st.discover && st.discover.chat && st.discover.chat.msgs) || [];
-    check(msgs.some((m) => m.txt === "this one is great" && m.n === "dj1"), "the chat peek shows messages with names");
-    check(msgs.some((m) => m.txt === "hello from someone private" && !m.n && !m.uid), "someone who turned off their public name shows as nobody");
-    check(!msgs.some((m) => /^!/.test(m.txt)), "bot commands stay out of the chat peek");
+    check(!(st.discover && st.discover.chat), "the retired chat peek is cleared, and members' messages aren't published");
     check(st.discover && st.discover.new && Array.isArray(st.discover.new.tracks || []), "new releases are published");
     await healthy(p);
     return p;

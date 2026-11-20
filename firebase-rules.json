@@ -220,7 +220,19 @@
         }
       }
     },
+    "grabCount": {
+      "$djid": {
+        ".read": "auth.uid == $djid",
+        ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+        "n": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "t": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "last": { ".validate": "newData.isString() && newData.val().length <= 80" },
+        "lastAt": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      }
+    },
     "grabs": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$djid": {
         ".read": "auth.uid == $djid",
         "$track": {

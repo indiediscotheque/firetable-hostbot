@@ -92,25 +92,6 @@ test("new releases: the last 90 days, newest first, nothing from the future", ()
   assert.deepEqual(list.map((t) => t.cid + ":" + t.rel + ":" + t.relSrc), ["new1:2026-11-01:yt", "nodate:2026-10-01:added", "new2:2026-09-01:upload"]);
 });
 
-// ----------------------------------------------------------------- chat
-
-test("the chat peek leaves out commands and hidden entries, and hides opted-out names", () => {
-  const entries = [{ key: "f1", chatID: "c1" }, { key: "f2", chatID: "c2" }, { key: "f3", chatID: "c3", hidden: true }, { key: "f4", chatID: "c4" }, { key: "f5", chatID: "c5" }, { key: "f6", chatID: "gone" }];
-  const chats = {
-    c1: { id: "u1", name: "dj1", txt: "hi all", time: 1 },
-    c2: { id: "u2", name: "dj2", txt: "!addme", time: 2 },
-    c3: { id: "u1", name: "dj1", txt: "secret", time: 3 },
-    c4: { id: "u3", name: "quiet", txt: "hello", time: 4 },
-    c5: { id: "u1", name: "dj1", txt: "x".repeat(400), time: 5, botCmd: false }
-  };
-  const peek = discover.chatPeek(entries, chats, (uid) => uid === "u3", (uid) => (uid === "u1" ? "renamed" : null));
-  assert.deepEqual(peek.map((m) => m.id), ["c1", "c4", "c5"]);
-  assert.equal(peek[0].n, "renamed");
-  assert.equal(peek[1].n, null);
-  assert.equal(peek[1].uid, null);
-  assert.equal(peek[2].txt.length, 300);
-});
-
 // ------------------------------------------------------- the publisher
 
 function setup(data, extra = {}) {
@@ -124,7 +105,6 @@ function setup(data, extra = {}) {
     nameOf: (uid) => (users[uid] || {}).username || null,
     playlist: async () => ({ tracks: [] }), snippets: async () => ({}), colors: async () => ({ color: "#123456", txt: "#fff" }),
     sources: [{ year: 2026, id: "PL2026" }],
-    feed: () => [], chatData: async () => null,
     log: (m) => logs.push(m)
   }, extra));
   return { db, d, logs };
@@ -206,22 +186,11 @@ test("new releases: release dates looked up once, room plays and colours added",
   assert.deepEqual(asked, [], "dates are only looked up once");
 });
 
-test("the chat peek is written only when it changes, with the hour's count", async () => {
-  const chats = { c1: { id: "u1", name: "dj1", txt: "hi", time: 1 } };
-  let feed = [{ key: "f1", chatID: "c1" }];
-  const { db, d } = setup({}, { feed: () => feed, chatData: async (id) => chats[id] || null });
-  d.noteChat(local(2026, 11, 10) - 60000);
-  d.noteChat(local(2026, 11, 10) - 2 * 3600000); // over an hour ago
-  await d.refreshChat();
-  const first = db.get("discover/chat");
-  assert.equal(first.hour, 1);
-  assert.deepEqual(first.msgs.map((m) => m.txt), ["hi"]);
-  await d.refreshChat();
-  assert.equal(db.get("discover/chat").at, first.at);
-  chats.c2 = { id: "u2", name: "dj2", txt: "yo", time: 2 };
-  feed = feed.concat({ key: "f2", chatID: "c2" });
-  await d.refreshChat();
-  assert.deepEqual(db.get("discover/chat").msgs.map((m) => m.txt), ["hi", "yo"]);
+test("the retired chat peek is cleared", async () => {
+  const { db, d } = setup({ discover: { chat: { msgs: [{ txt: "a member's message" }] }, new: { tracks: [] } } });
+  await d.retire();
+  assert.equal(db.get("discover/chat"), null, "members' messages aren't left where anyone can read them");
+  assert.deepEqual(db.get("discover/new"), { tracks: [] }, "the rest of discover/ stays");
 });
 
 test("new releases: a year playlist that can't be read fails, so the bot tries again later", async () => {

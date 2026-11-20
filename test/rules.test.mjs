@@ -293,9 +293,9 @@ await expect("DENIED", "bot notice with an extra field", db("bot").ref("notices/
 const visitor = env.unauthenticatedContext().database();
 await expect("ALLOWED", "bot saves a chart", db("bot").ref("discover/charts/week/2026-W45").set({ at: 1, rows: [] }));
 await expect("ALLOWED", "a visitor reads the charts", visitor.ref("discover/charts/week/2026-W45").once("value"));
-await expect("ALLOWED", "a visitor reads the chat peek", visitor.ref("discover/chat").once("value"));
+await expect("ALLOWED", "a visitor reads the fires earned", visitor.ref("discover/fires").once("value"));
 await expect("DENIED", "a member writes a chart", eve.ref("discover/charts/week/2026-W45").set({ rows: [] }));
-await expect("DENIED", "a visitor writes the chat peek", visitor.ref("discover/chat").set({ msgs: [] }));
+await expect("DENIED", "a visitor writes the fires earned", visitor.ref("discover/fires").set({ djs: {} }));
 await expect("ALLOWED", "bot keeps release dates", db("bot").ref("discoverCache/release/abc").set({ d: "2026-11-01", src: "yt" }));
 await expect("DENIED", "a member reads the bot's Discover cache", eve.ref("discoverCache").once("value"));
 await expect("DENIED", "a visitor reads the play log", visitor.ref("playLog").once("value"));
@@ -307,6 +307,15 @@ await expect("DENIED", "a visitor sets the song's fires", visitor.ref("songFires
 await expect("DENIED", "bot fires with an extra field", db("bot").ref("songFires").set({ started: 1, count: 1, junk: "x" }));
 await expect("DENIED", "bot fires that aren't a number", db("bot").ref("songFires").set({ started: 1, count: "lots" }));
 await expect("ALLOWED", "bot clears the song's fires", db("bot").ref("songFires").set(null));
+// grab counts (lib/grabs.js): the bot reads grabs/ and sums each DJ's; only that DJ reads theirs
+await expect("ALLOWED", "the bot reads everyone's grabs", db("bot").ref("grabs").once("value"));
+await expect("DENIED", "a member reads everyone's grabs", eve.ref("grabs").once("value"));
+await expect("ALLOWED", "the bot writes a DJ's grab count", db("bot").ref("grabCount/eve").set({ n: 3, t: 2, last: "1_abc", lastAt: 1700000000000 }));
+await expect("ALLOWED", "a DJ reads their own grab count", eve.ref("grabCount/eve").once("value"));
+await expect("DENIED", "a member reads someone else's grab count", eve.ref("grabCount/bob").once("value"));
+await expect("DENIED", "a member writes their own grab count", eve.ref("grabCount/eve/n").set(999));
+await expect("DENIED", "bot grab count with an extra field", db("bot").ref("grabCount/eve/who").set("bob"));
+await expect("ALLOWED", "the bot clears a grab count", db("bot").ref("grabCount/eve").set(null));
 const stageNow = { online: 3, deck: [{ id: "dj1", n: "dj1", av: "robohash:set2" }, { id: "dj2", n: "dj2" }], colors: { color: "#123456", txt: "#fff" },
   theme: "Italo Night", bpm: { started: 1700000000000, bpm: 120 }, tag: { cid: "abc", adamData: { track_name: "Song", artist: "Artist", playcount: 4 } },
   fires: { started: 1700000000000, count: 2 } };
