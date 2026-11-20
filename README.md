@@ -151,6 +151,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!remove name` (mods): takes someone off the decks or the waitlist; a mod can't remove a supermod.
 - `!removeafter` / `!dontremoveme`: step down after your next song, or cancel it. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
 - `!fixtags artist - title` (mods): correct the playing song's tags (only the first " - " splits artist from title).
+- a mod's tag fix (`!fixtags` or the site's tag editor) goes on every other copy of the old tags, unless it named another version or another song; when it respells an artist (`POOLSIDE` → `Poolside`), every song naming them follows, featured artists and remixers too (`lib/retag.js`). The mod is told what else changed.
 - `!suggest <theme>`: start a theme vote (pings @everyone). One vote at a time, up to 80 characters, and one suggestion per person every 15 minutes (mods are exempt).
 - `!flagplay <play id> <reason>` (mods): flag a play from Recent in the DJ's queue and all of their playlists. Reasons: `broken`, `quality`, `offtheme`.
 - `!bpm`: say the playing song's tempo. The DJ or a mod can set it with `!bpm 128`.
