@@ -659,6 +659,14 @@
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
           ".validate": "newData.isString() && newData.val().matches(/^[1-4]\\.([1-9]|1[0-2])\\.([1-9]|1[0-2])(\\.[0-9]{1,2}){16}$/)"
         },
+        "ttAvatar": {
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          ".validate": "newData.isString() && newData.val().matches(/^[0-9a-f]{1,24}$/)"
+        },
+        "ttLaptop": {
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          ".validate": "newData.isString() && newData.val().length <= 300 && newData.val().matches(/^[a-z]{3,6}(;[a-z0-9]{1,10},[0-9]{1,3},[0-9]{1,3},-?[0-9]{1,3},[0-9]{2,3}){0,10}$/)"
+        },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
           ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[124]|dicebear:(notionists|pixel-art)|bouletmaton)$/)"

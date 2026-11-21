@@ -97,6 +97,16 @@ await expect("DENIED", "someone else's offlineAt", db("bob").ref("users/eve/offl
 await expect("DENIED", "closed that isn't now", eve.ref("users/eve/closed").set(1));
 await expect("DENIED", "offlineAt in the future", eve.ref("users/eve/offlineAt").set(Date.now() + 86400000));
 await expect("ALLOWED", "avatarStyle", eve.ref("users/eve/avatarStyle").set("robohash:set2"));
+await expect("ALLOWED", "my Turntable avatar", eve.ref("users/eve/ttAvatar").set("2001"));
+await expect("ALLOWED", "a Turntable special avatar", eve.ref("users/eve/ttAvatar").set("4dff8d24a3f75104de04797e"));
+await expect("DENIED", "someone else's Turntable avatar", eve.ref("users/bob/ttAvatar").set("8"));
+await expect("DENIED", "a Turntable avatar that's a link", eve.ref("users/eve/ttAvatar").set("https://example.com/a.png"));
+await expect("DENIED", "a Turntable avatar that's a number", eve.ref("users/eve/ttAvatar").set(8));
+await expect("ALLOWED", "my laptop's stickers", eve.ref("users/eve/ttLaptop").set("pink;heart,25,30,-10,100;e1faa9,70,60,12,120"));
+await expect("ALLOWED", "a bare lid", eve.ref("users/eve/ttLaptop").set("silver"));
+await expect("DENIED", "someone else's laptop", eve.ref("users/bob/ttLaptop").set("black"));
+await expect("DENIED", "eleven stickers", eve.ref("users/eve/ttLaptop").set("black" + ";id,1,1,0,100".repeat(11)));
+await expect("DENIED", "a sticker that's a link", eve.ref("users/eve/ttLaptop").set("black;https://x,1,1,0,100"));
 await expect("DENIED", "avatarStyle the room no longer offers", eve.ref("users/eve/avatarStyle").set("dicebear:bottts"));
 await expect("ALLOWED", "save my Bouletmaton", eve.ref("users/eve/boulet").set("2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20"));
 await expect("ALLOWED", "change my Bouletmaton", eve.ref("users/eve/boulet").set("1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1"));
