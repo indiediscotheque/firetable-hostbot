@@ -1048,6 +1048,20 @@ test("avatar styles: only the room's six, robots by default", () => {
   assert.equal(a.isBoulet(42), false);
 });
 
+test("a made-up Bouletmaton: the site's, number for number", () => {
+  const a = require("../lib/avatars.js");
+  // The same uids give these codes in firetable-user's js/bouletmaton.js random() (its unit test checks the same list)
+  const want = {
+    OiJ7rcoNaNdvk3KlFGUJx1Fqjer2: "1.12.47.41.9.12.17.2.65.16.0.0.0.69.0.13.0.0",
+    dj1: "1.2.25.14.10.0.37.32.14.32.0.0.0.0.4.0.15.0",
+    "": "3.6.26.4.4.0.24.15.54.27.0.0.0.2.13.0.5.3",
+    abc: "3.8.56.26.12.8.49.1.69.32.0.0.0.61.17.0.19.0",
+    zZ9: "3.11.46.26.6.3.57.29.63.11.11.0.3.69.7.0.0.0"
+  };
+  for (const [uid, code] of Object.entries(want)) assert.equal(a.randomBoulet(uid), code, uid);
+  for (let i = 0; i < 500; i++) assert.ok(a.isBoulet(a.randomBoulet("u" + i)));
+});
+
 // -------------------------------------------------------------- lean tracks
 
 test("lean tracks: a YouTube track's own thumbnail and watch page go; anything else stays", () => {
