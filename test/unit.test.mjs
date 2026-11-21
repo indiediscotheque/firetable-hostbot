@@ -1003,16 +1003,17 @@ test("the stage summary: who's in the room and at the table, the song's looks, n
 
 test("the stage summary: the room's avatar style and each DJ's own Bouletmaton", async () => {
   const { stageOf, legacyOf, createStage } = require("../lib/stage.js");
-  const bm = "2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0";
-  const users = { dj1: { username: "ana", status: true, boulet: bm }, dj2: { username: "ben", status: true, boulet: "<img src=x>" } };
-  const v = stageOf({ users, table: [{ id: "dj1" }, { id: "dj2" }], style: "bouletmaton" });
-  assert.deepEqual(v.deck, [{ id: "dj1", n: "ana", bm }, { id: "dj2", n: "ben" }], "only a real Bouletmaton is published");
+  const bm = "2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20";
+  const users = { dj1: { username: "ana", status: true, boulet: bm, bouletOn: true }, dj2: { username: "ben", status: true, boulet: "<img src=x>", bouletOn: true },
+    dj3: { username: "cy", status: true, boulet: bm, bouletOn: false } };
+  const v = stageOf({ users, table: [{ id: "dj1" }, { id: "dj2" }, { id: "dj3" }], style: "bouletmaton" });
+  assert.deepEqual(v.deck, [{ id: "dj1", n: "ana", bm }, { id: "dj2", n: "ben" }, { id: "dj3", n: "cy" }], "only a real Bouletmaton that's switched on is published");
   assert.equal(v.style, "bouletmaton");
   assert.equal(stageOf({ users, style: "dicebear:bottts" }).style, null, "a style the room no longer offers isn't published");
   assert.equal(stageOf({ users, style: "set2" }).style, "robohash:set2");
   const old = legacyOf(v);
   assert.equal("style" in old, false);
-  assert.deepEqual(old.deck, [{ id: "dj1", n: "ana" }, { id: "dj2", n: "ben" }]);
+  assert.deepEqual(old.deck, [{ id: "dj1", n: "ana" }, { id: "dj2", n: "ben" }, { id: "dj3", n: "cy" }]);
   assert.equal(v.deck[0].bm, bm, "the full summary is untouched");
 
   // Older rules refuse the new fields: the rest is still published
@@ -1043,23 +1044,25 @@ test("avatar styles: only the room's six, robots by default", () => {
   assert.equal(a.normalizeAvatarStyle(" bouletmaton "), "bouletmaton");
   assert.equal(a.normalizeAvatarStyle(""), null);
   assert.equal(a.normalizeAvatarStyle(null), null);
-  assert.equal(a.isBoulet("4.12.62.54.18.17.93.32.96.42.17.24.12.71.20.24.32.19"), true);
-  assert.equal(a.isBoulet("0.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1"), false);
+  assert.equal(a.isBoulet("4.12.12.62.27.54.17.93.96.25.42.18.21.32.72.18.25.33.27"), true);
+  assert.equal(a.isBoulet("0.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1"), false);
+  assert.equal(a.isBoulet("1.1.13.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1"), false, "beard colour 13");
   assert.equal(a.isBoulet(42), false);
 });
 
-test("a made-up Bouletmaton: the site's, number for number", () => {
+test("who looks like what: October's monsters for everyone, else a switched-on Bouletmaton, else the room's style", () => {
   const a = require("../lib/avatars.js");
-  // The same uids give these codes in firetable-user's js/bouletmaton.js random() (its unit test checks the same list)
-  const want = {
-    OiJ7rcoNaNdvk3KlFGUJx1Fqjer2: "1.12.47.41.9.12.17.2.65.16.0.0.0.69.0.13.0.0",
-    dj1: "1.2.25.14.10.0.37.32.14.32.0.0.0.0.4.0.15.0",
-    "": "3.6.26.4.4.0.24.15.54.27.0.0.0.2.13.0.5.3",
-    abc: "3.8.56.26.12.8.49.1.69.32.0.0.0.61.17.0.19.0",
-    zZ9: "3.11.46.26.6.3.57.29.63.11.11.0.3.69.7.0.0.0"
-  };
-  for (const [uid, code] of Object.entries(want)) assert.equal(a.randomBoulet(uid), code, uid);
-  for (let i = 0; i < 500; i++) assert.ok(a.isBoulet(a.randomBoulet("u" + i)));
+  const bm = "2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20";
+  const on = { boulet: bm, bouletOn: true }, off = { boulet: bm, bouletOn: false }, none = {};
+  assert.deepEqual(a.avatarFor(on, null, null), { style: "bouletmaton", bm });
+  assert.deepEqual(a.avatarFor(on, "dicebear:pixel-art", null), { style: "bouletmaton", bm }, "theirs stays on whatever the supermod picks");
+  assert.deepEqual(a.avatarFor(on, "bouletmaton", "robohash:set2"), { style: "robohash:set2" }, "October: monsters, Bouletmatons too");
+  assert.deepEqual(a.avatarFor(off, "bouletmaton", null), { style: "robohash:set1" }, "switched off: the room's");
+  assert.deepEqual(a.avatarFor(none, "bouletmaton", null), { style: "robohash:set1" }, "Bouletmaton room: robots for anyone without one");
+  assert.deepEqual(a.avatarFor(none, "robohash:set4", null), { style: "robohash:set4" });
+  assert.deepEqual(a.avatarFor(none, null, null), { style: "robohash:set1" }, "robot busts by default");
+  assert.equal(a.activeBoulet({ boulet: "2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0", bouletOn: true }), null, "the old 18-number codes aren't Bouletmatons any more");
+  assert.equal(a.randomBoulet, undefined, "no made-up Bouletmatons");
 });
 
 // -------------------------------------------------------------- lean tracks

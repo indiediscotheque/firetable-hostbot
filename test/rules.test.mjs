@@ -98,12 +98,19 @@ await expect("DENIED", "closed that isn't now", eve.ref("users/eve/closed").set(
 await expect("DENIED", "offlineAt in the future", eve.ref("users/eve/offlineAt").set(Date.now() + 86400000));
 await expect("ALLOWED", "avatarStyle", eve.ref("users/eve/avatarStyle").set("robohash:set2"));
 await expect("DENIED", "avatarStyle the room no longer offers", eve.ref("users/eve/avatarStyle").set("dicebear:bottts"));
-await expect("ALLOWED", "save my Bouletmaton", eve.ref("users/eve/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
-await expect("ALLOWED", "change my Bouletmaton", eve.ref("users/eve/boulet").set("1.1.1.1.1.0.1.1.1.1.0.0.0.0.0.0.0.0"));
-await expect("DENIED", "save someone else's Bouletmaton", eve.ref("users/bob/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
-await expect("DENIED", "a Bouletmaton with a fifth skin tone", eve.ref("users/eve/boulet").set("5.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
-await expect("DENIED", "a Bouletmaton with hair colour 13", eve.ref("users/eve/boulet").set("2.13.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
-await expect("DENIED", "a Bouletmaton missing a part", eve.ref("users/eve/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12"));
+await expect("ALLOWED", "save my Bouletmaton", eve.ref("users/eve/boulet").set("2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20"));
+await expect("ALLOWED", "change my Bouletmaton", eve.ref("users/eve/boulet").set("1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1"));
+await expect("DENIED", "save someone else's Bouletmaton", eve.ref("users/bob/boulet").set("2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20"));
+await expect("DENIED", "a Bouletmaton with a fifth skin tone", eve.ref("users/eve/boulet").set("5.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20"));
+await expect("DENIED", "a Bouletmaton with hair colour 13", eve.ref("users/eve/boulet").set("2.13.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20"));
+await expect("DENIED", "a Bouletmaton with beard colour 13", eve.ref("users/eve/boulet").set("2.5.13.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20"));
+await expect("DENIED", "a Bouletmaton missing a part", eve.ref("users/eve/boulet").set("2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33"));
+await expect("DENIED", "an old 18-number Bouletmaton", eve.ref("users/eve/boulet").set("2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0"));
+await expect("ALLOWED", "switch my Bouletmaton on", eve.ref("users/eve/bouletOn").set(true));
+await expect("ALLOWED", "and off", eve.ref("users/eve/bouletOn").set(false));
+await expect("ALLOWED", "save it and switch it on at once", eve.ref("users/eve").update({ boulet: "2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20", bouletOn: true }));
+await expect("DENIED", "switch someone else's on", eve.ref("users/bob/bouletOn").set(true));
+await expect("DENIED", "an on/off that isn't true or false", eve.ref("users/eve/bouletOn").set("yes"));
 await expect("DENIED", "a Bouletmaton with a picture in it", eve.ref("users/eve/boulet").set("https://example.com/x.png"));
 await expect("DENIED", "a Bouletmaton that isn't text", eve.ref("users/eve/boulet").set(123));
 await expect("ALLOWED", "feature two of my cards on my DJ page, then none", eve.ref("users/eve/featured").set(["c2", "c1"]).then(() => eve.ref("users/eve/featured").remove()));
@@ -325,7 +332,7 @@ await expect("DENIED", "a member reads someone else's grab count", eve.ref("grab
 await expect("DENIED", "a member writes their own grab count", eve.ref("grabCount/eve/n").set(999));
 await expect("DENIED", "bot grab count with an extra field", db("bot").ref("grabCount/eve/who").set("bob"));
 await expect("ALLOWED", "the bot clears a grab count", db("bot").ref("grabCount/eve").set(null));
-const stageNow = { online: 3, deck: [{ id: "dj1", n: "dj1", av: "robohash:set2" }, { id: "dj2", n: "dj2", bm: "2.5.12.30.4.9.40.10.50.20.0.8.3.40.0.0.12.0" }], colors: { color: "#123456", txt: "#fff" }, style: "bouletmaton",
+const stageNow = { online: 3, deck: [{ id: "dj1", n: "dj1", av: "robohash:set2" }, { id: "dj2", n: "dj2", bm: "2.5.7.12.3.30.4.40.10.1.20.18.21.8.40.9.1.33.20" }], colors: { color: "#123456", txt: "#fff" }, style: "bouletmaton",
   theme: "Italo Night", bpm: { started: 1700000000000, bpm: 120 }, tag: { cid: "abc", adamData: { track_name: "Song", artist: "Artist", playcount: 4 } },
   fires: { started: 1700000000000, count: 2 } };
 await expect("ALLOWED", "bot publishes the stage summary", db("bot").ref("stage").set(stageNow));
