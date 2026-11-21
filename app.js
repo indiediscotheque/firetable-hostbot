@@ -239,37 +239,30 @@ firebase.database().ref("roomSettings/avatarStyle").on("value", function(snapsho
   roomAvatarChoice = null;
 });
 
-// The avatar style stamped on new trading cards: the room's active one, the
-// way the site picks it (a supermod's choice, else config.js avatarset, else
-// the seasonal theme, else Robohash robots). AVATARSET overrides them all.
-function cardAvatarStyle() {
+// The season's style that everyone wears, Bouletmatons too (October's
+// monsters), the way the site picks it: only while config.js has no avatarset.
+// AVATARSET in .env forces a style on cards all year.
+function forcedAvatarStyle() {
   var forced = normalizeAvatarStyle(process.env.AVATARSET);
   if (forced) return forced;
+  if (normalizeAvatarStyle(siteSeasons.avatarset) || !Array.isArray(siteSeasons.avatarSeasons)) return null;
   var now = new Date();
-  var style = roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset);
-  if (!style && Array.isArray(siteSeasons.avatarSeasons)) {
-    for (var i = 0; i < siteSeasons.avatarSeasons.length; i++) {
-      var season = siteSeasons.avatarSeasons[i];
-      if (season && inMonths(season.months, now)) {
-        style = normalizeAvatarStyle(season.style);
-        break;
-      }
-    }
+  for (var i = 0; i < siteSeasons.avatarSeasons.length; i++) {
+    var season = siteSeasons.avatarSeasons[i];
+    if (season && inMonths(season.months, now)) return normalizeAvatarStyle(season.style);
   }
-  return style || avatars.DEFAULT_STYLE;
+  return null;
 }
 
 // What a card stamps so it always shows the DJ as the room drew them when it
-// was printed: the style (avs), the Robohash set (set, which older copies of
-// the site read; robots for any other style), and with Bouletmaton the DJ's
-// own (bm: the one they made, else the one made from their uid).
+// was printed (lib/avatars.js avatarFor): the style (avs: October's monsters,
+// else "bouletmaton" with their own (bm) when it's on, else the room's), and
+// the Robohash set (set, which older copies of the site read; robots for any
+// other style).
 function cardAvatar(djid) {
-  var style = cardAvatarStyle();
-  var out = { avs: style, set: style.indexOf("robohash:") === 0 ? style.slice(9) : "set1" };
-  if (style === "bouletmaton") {
-    var u = users[djid] || {};
-    out.bm = avatars.isBoulet(u.boulet) ? u.boulet : avatars.randomBoulet(String(djid || ""));
-  }
+  var a = avatars.avatarFor(users[djid] || {}, roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset), forcedAvatarStyle());
+  var out = { avs: a.style, set: a.style.indexOf("robohash:") === 0 ? a.style.slice(9) : "set1" };
+  if (a.bm) out.bm = a.bm;
   return out;
 }
 
