@@ -135,6 +135,7 @@
           "id": { ".validate": "newData.isString() && newData.val().length <= 128" },
           "n": { ".validate": "newData.isString() && newData.val().length <= 40" },
           "av": { ".validate": "newData.isString() && newData.val().length <= 80" },
+          "bm": { ".validate": "newData.isString() && newData.val().matches(/^[1-4]\\.([1-9]|1[0-2])(\\.[0-9]{1,2}){16}$/)" },
           "$other": { ".validate": false }
         }
       },
@@ -144,6 +145,7 @@
         "$other": { ".validate": false }
       },
       "theme": { ".validate": "newData.isString() && newData.val().length <= 80" },
+      "style": { ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[124]|dicebear:(notionists|pixel-art)|bouletmaton)$/)" },
       "bpm": {
         "started": { ".validate": "newData.isNumber()" },
         "bpm": { ".validate": "newData.isNumber()" },
@@ -572,7 +574,7 @@
       ".read": true,
       "avatarStyle": {
         ".write": "root.child('users/' + auth.uid + '/supermod').val() == true || root.child('users/' + auth.uid + '/hostbot').val() == true",
-        ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[1-4]|dicebear:[a-z0-9-]{1,32})$/)"
+        ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[124]|dicebear:(notionists|pixel-art)|bouletmaton)$/)"
       }
     },
     "banned": {
@@ -649,9 +651,13 @@
             ".validate": "$slot.matches(/^[0-5]$/) && newData.isString() && newData.val().length <= 40 && root.child('cards/' + newData.val() + '/owner').val() == auth.uid"
           }
         },
+        "boulet": {
+          ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
+          ".validate": "newData.isString() && newData.val().matches(/^[1-4]\\.([1-9]|1[0-2])(\\.[0-9]{1,2}){16}$/)"
+        },
         "avatarStyle": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",
-          ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[1-4]|dicebear:[a-z0-9-]{1,32})$/)"
+          ".validate": "newData.isString() && newData.val().matches(/^(robohash:set[124]|dicebear:(notionists|pixel-art)|bouletmaton)$/)"
         },
         "username": {
           ".write": "auth.uid == $uid && root.child('banned/' + auth.uid).val() != true",

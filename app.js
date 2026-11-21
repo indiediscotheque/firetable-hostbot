@@ -31,6 +31,7 @@ var ytmsync = require('./lib/ytmsync');
 var apple = require('./lib/apple');
 var discover = require('./lib/discover');
 var stage = require('./lib/stage');
+var avatars = require('./lib/avatars');
 var grabCounts = require('./lib/grabs');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
@@ -224,12 +225,9 @@ function inMonths(months, date) {
   return Array.isArray(months) && months.map(Number).indexOf(date.getMonth() + 1) !== -1;
 }
 
-// Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2".
-function normalizeAvatarStyle(val) {
-  val = String(val || "").trim();
-  if (!val) return null;
-  return /^(robohash|dicebear):/.test(val) ? val : "robohash:" + val;
-}
+// Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2", and a
+// style the room no longer offers → null (lib/avatars.js).
+var normalizeAvatarStyle = avatars.normalizeAvatarStyle;
 
 // Everyone's avatar style when a supermod has picked one (the site's Mod tools,
 // roomSettings/avatarStyle); null means the room's default below. With older
@@ -241,11 +239,12 @@ firebase.database().ref("roomSettings/avatarStyle").on("value", function(snapsho
   roomAvatarChoice = null;
 });
 
-// Robohash set stamped on new trading cards: the room's avatar theme, the way
-// the site picks it (a supermod's choice, else config.js avatarset, else the
-// seasonal theme).
-function cardAvatarSet() {
-  if (process.env.AVATARSET) return process.env.AVATARSET;
+// The avatar style stamped on new trading cards: the room's active one, the
+// way the site picks it (a supermod's choice, else config.js avatarset, else
+// the seasonal theme, else Robohash robots). AVATARSET overrides them all.
+function cardAvatarStyle() {
+  var forced = normalizeAvatarStyle(process.env.AVATARSET);
+  if (forced) return forced;
   var now = new Date();
   var style = roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset);
   if (!style && Array.isArray(siteSeasons.avatarSeasons)) {
@@ -257,8 +256,21 @@ function cardAvatarSet() {
       }
     }
   }
-  // Cards draw Robohash sets only; a DiceBear room theme keeps the robots.
-  return style && style.indexOf("robohash:") === 0 ? (style.slice(9) || "set1") : "set1";
+  return style || avatars.DEFAULT_STYLE;
+}
+
+// What a card stamps so it always shows the DJ as the room drew them when it
+// was printed: the style (avs), the Robohash set (set, which older copies of
+// the site read; robots for any other style), and with Bouletmaton the DJ's
+// own (bm: the one they made, else the one made from their uid).
+function cardAvatar(djid) {
+  var style = cardAvatarStyle();
+  var out = { avs: style, set: style.indexOf("robohash:") === 0 ? style.slice(9) : "set1" };
+  if (style === "bouletmaton") {
+    var u = users[djid] || {};
+    out.bm = avatars.isBoulet(u.boulet) ? u.boulet : avatars.randomBoulet(String(djid || ""));
+  }
+  return out;
 }
 
 // Stage string lights. The site keeps them on by itself in its lights months;
@@ -1465,11 +1477,11 @@ var printCard = function(newEntry) {
       title: newEntry.title,
       artist: newEntry.artist,
       image: newEntry.img,
-      set: cardAvatarSet(),
       date: now,
       special: cardSpecial,
       owner: false
     };
+    Object.assign(cardData, cardAvatar(newEntry.djid));
     cardData = JSON.parse(JSON.stringify(cardData)); // Firebase refuses undefined fields
 
     var ref = firebase.database().ref("cards");
