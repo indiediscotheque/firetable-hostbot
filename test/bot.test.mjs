@@ -403,6 +403,9 @@ const scenarios = {
     await sleep(2500);
     let st = await get("/");
     check(st.globalTracks && st.globalTracks["1yt9"] && st.globalTracks["1yt9"].song === "t1", "a new upload of a known song is linked to its track by its tags");
+    check(st.globalTracks["1yt9"].artist === "Foals" && st.globalTracks["1yt9"].title === "My Number", "and is written the track's way, not the upload's (" + JSON.stringify(st.globalTracks["1yt9"]) + ")");
+    check(st.tagUpdate && st.tagUpdate.adamData.artist === "Foals" && st.tagUpdate.adamData.track_name === "My Number", "the room sees the track's tags");
+    check(Object.values(st.queues.dj1).some((t) => t.cid === "yt9" && t.name === "Foals - My Number"), "and so does the DJ's queue");
     check(st.globalSongs.t1.plays === 42 && st.globalWorks.s1.plays === 61 && st.globalSongs.t1.last_play_dj === "dj1", "the play is counted on the track and on the song (all versions)");
     const ad = st.tagUpdate && st.tagUpdate.adamData || {};
     check(st.tagUpdate && st.tagUpdate.cid === "yt9" && ad.playcount === 41 && ad.all_versions_playcount === 60 && /^2016-08-23/.test(ad.first_play || "") && ad.first_play_dj === "understater" && ad.last_play_dj === "eve",
@@ -420,7 +423,7 @@ const scenarios = {
     check(s.some((t) => /Only mods can sort out tags, dj2/.test(t)) && s.some((t) => /#1 \(1 waiting\): same track\?/.test(t)), "!review: mods only, shows the next question");
     check(st.tagReview.q1.decision === "merge" && st.tagReview.q1.by === "boss", "!same records a mod's answer for the next history refresh");
     const log = Object.values(st.tagLog || {});
-    check(log.some((e) => e.k === "1yt9" && e.a === "Foals" && e.t === "My Number" && e.by === "boss" && e.ft === "My Number (Official Video)"), "!fixtags is logged with what it replaced");
+    check(log.some((e) => e.k === "1yt9" && e.a === "Foals" && e.t === "My Number" && e.by === "boss" && e.ft === "My Number"), "!fixtags is logged with what it replaced");
     check(st.globalSongKeys[key] === "t1" && st.globalSongs.t1.title === "My Number", "the fixed spelling points at the same track");
     // the upload is really the remix: it moves to the remix's track, and the
     // original keeps its name and its other upload

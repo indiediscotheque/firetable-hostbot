@@ -3568,14 +3568,22 @@ var gts = {
           // a first play has no earlier play to show
           if (!songIndex.ready) return gts.reportNp(s, listRef, played ? up : { artist: up.artist, title: up.title, type: up.type });
           return gts.countPlay(s, upKey, up).then(function(track) {
-            // the history writes this track with accents the upload's tags
-            // lost (the old Last.fm bug): use them, and keep them
             var fixed = {};
-            if (track.artist && tags.accentsRestored(up.artist, track.artist)) fixed.artist = track.artist;
-            if (track.title && tags.accentsRestored(up.title, track.title)) fixed.title = track.title;
+            if (!played && gts.knownSpelling(track)) {
+              // an upload new to the room, of a track the history already
+              // has: it's written the track's way (a mod's fix, or the
+              // history's best spelling), not the way this upload came in
+              if (track.artist !== up.artist) fixed.artist = track.artist;
+              if (track.title !== up.title) fixed.title = track.title;
+            } else {
+              // the history writes this track with accents the upload's tags
+              // lost (the old Last.fm bug): use them, and keep them
+              if (track.artist && tags.accentsRestored(up.artist, track.artist)) fixed.artist = track.artist;
+              if (track.title && tags.accentsRestored(up.title, track.title)) fixed.title = track.title;
+            }
             if (fixed.artist || fixed.title) {
               up = Object.assign({}, up, fixed);
-              globalpeek.update(fixed).catch(function(err) { console.log("accent restore error:", err && err.message); });
+              globalpeek.update(fixed).catch(function(err) { console.log("track spelling error:", err && err.message); });
             }
             gts.reportNp(s, listRef, up, track);
           }, function(err) {
@@ -3588,8 +3596,15 @@ var gts = {
         console.log("global tags error:", err && err.message);
       });
   },
+  // Does the history have its own spelling of this track (countPlay's result)?
+  // A track this play made has only the upload's own tags.
+  knownSpelling: function(track) {
+    return !!(track && track.known && track.artist && track.title && track.artist !== "Unknown" &&
+      !placeholderTags.is(track.artist, track.title));
+  },
   // The track this upload is (linking it the first time, by its tags), with
-  // this play counted. Resolves with {id, plays, first..., prev..., work}.
+  // this play counted. Resolves with {id, plays, first..., prev..., work,
+  // known: the track was in the history before this play}.
   countPlay: function(s, upKey, up) {
     var db = firebase.database();
     var dj = s.djname || null;
@@ -3597,7 +3612,9 @@ var gts = {
     var title = up.title && up.artist && up.artist !== "Unknown" ? up.title : s.title;
     return gts.linkTrack(upKey, up, artist, title).then(function(link) {
       var prev = null;
+      var existed = false;
       var counted = db.ref("globalSongs/" + link.id).transaction(function(cur) {
+        existed = !!(cur && cur.artist);
         cur = cur || { artist: artist, title: title, work: link.work, plays: 0 };
         prev = { plays: cur.plays || 0, date: cur.last_play_date || null, dj: cur.last_play_dj || null };
         cur.plays = (cur.plays || 0) + 1;
@@ -3615,7 +3632,7 @@ var gts = {
         var workId = t.work || link.work;
         s.songId = link.id;
         var track = {
-          id: link.id, plays: prev ? prev.plays : (t.plays || 1) - 1, artist: t.artist, title: t.title,
+          id: link.id, plays: prev ? prev.plays : (t.plays || 1) - 1, artist: t.artist, title: t.title, known: existed,
           first_play_date: t.first_play_date, first_play_dj: t.first_play_dj,
           prev_play_date: prev && prev.date, prev_play_dj: prev && prev.dj
         };
