@@ -3584,6 +3584,9 @@ var gts = {
             if (fixed.artist || fixed.title) {
               up = Object.assign({}, up, fixed);
               globalpeek.update(fixed).catch(function(err) { console.log("track spelling error:", err && err.message); });
+              var respelled = {};
+              respelled[upKey] = { artist: up.artist, title: up.title };
+              discoverDo("retag", function(d) { return d.retag(respelled); });
             }
             gts.reportNp(s, listRef, up, track);
           }, function(err) {
@@ -3879,6 +3882,11 @@ var spreadTags = {
       var result = retag.plan(e, { tracks: lib.tracks, songs: lib.songs, works: lib.works, history: v[1].val() || {} }, { isPlaceholder: placeholderTags.is });
       // the site's fix renames the upload's track in the play history, as !fixtags does
       var linked = fromSite && up.song ? Promise.resolve(gts.learnSpelling(up.song, e.a, e.t, e.k)) : Promise.resolve();
+      // Discover's published rows (charts, new releases, theme nights) follow
+      var changes = {};
+      changes[e.k] = { artist: e.a, title: e.t };
+      if (result) Object.assign(changes, result.renamed);
+      discoverDo("retag", function(d) { return d.retag(changes); });
       if (!result) return linked;
       var paths = Object.keys(result.updates);
       var batches = [];

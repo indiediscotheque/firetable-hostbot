@@ -338,3 +338,43 @@ test("only the theme nights that changed are written", async () => {
   await d.refreshThemes(36);
   assert.equal(db.writes.length, n);
 });
+
+test("Discover names songs the room's way: a fix replaces the tags rows were built from, and goes on what's published at once", async () => {
+  const W45 = local(2026, 11, 3);
+  const playLog = { p0: play("A", W45), p1: play("B", W45 + 1), p2: play("B", W45 + 2) };
+  const { db, d } = setup({
+    playLog,
+    // a mod fixed A; B's upload has only an "Unknown" artist: its play's tags stay
+    globalTracks: {
+      "1a": { artist: "Fixed", title: "Song A" },
+      "1b": { artist: "Unknown", title: "Whatever" },
+      "1gta": { artist: "Justice", title: "Starting From Zero (feat. Michael McDonald)" }
+    }
+  }, {
+    now: () => local(2026, 11, 5),
+    playlist: async () => ({ tracks: [
+      { cid: "gta", artist: "Justice, Michael McDonald & Grand Theft Auto VI", title: "Starting From Zero [From GTAVI: Original Score] (feat. Michael McDonald)", added: local(2026, 11, 4) },
+      { cid: "fresh", artist: "Gavin Sultan", title: "Lost in a River", added: local(2026, 11, 4) }
+    ] })
+  });
+  await d.refreshPeriod("week");
+  await d.refreshNew();
+  const week = () => db.get("discover/charts/week/2026-W45").rows.map((r) => r.cid + ":" + r.a + " - " + r.t);
+  const fresh = () => db.get("discover/new").tracks.map((r) => r.cid + ":" + r.a + " - " + r.t);
+  assert.deepEqual(week(), ["b:Artist B - Title B", "a:Fixed - Song A"], "the chart names A the fixed way, not as it was logged");
+  assert.deepEqual(fresh().sort(), ["fresh:Gavin Sultan - Lost in a River", "gta:Justice - Starting From Zero (feat. Michael McDonald)"],
+    "a new release the room has tags for shows them, not YouTube Music's");
+  // a mod fixes B and the new release: only those fields are sent
+  const before = db.writes.length;
+  const n = await d.retag({ "1b": { artist: "Band B", title: "Bee" }, "1fresh": { artist: "Gavin Sultan", title: "Lost In A River" } });
+  assert.equal(n, 2);
+  assert.deepEqual(week(), ["b:Band B - Bee", "a:Fixed - Song A"]);
+  assert.ok(fresh().includes("fresh:Gavin Sultan - Lost In A River"));
+  assert.deepEqual(db.writes.slice(before).sort(), ["discover/charts/week/2026-W45/rows/0/a", "discover/charts/week/2026-W45/rows/0/t", "discover/new/tracks/" + db.get("discover/new").tracks.findIndex((t) => t.cid === "fresh") + "/t"].sort(),
+    "each changed field, nothing else");
+  // rebuilt from the play log (still "Artist B"), the chart keeps the fix and isn't sent again
+  await d.refreshPeriod("week");
+  assert.deepEqual(week(), ["b:Band B - Bee", "a:Fixed - Song A"]);
+  assert.equal(db.writes.length, before + 3, "nothing changed: nothing sent");
+  assert.equal(await d.retag({ "1zzz": { artist: "X", title: "Y" } }), 0, "a fix to a song Discover doesn't show changes nothing");
+});
