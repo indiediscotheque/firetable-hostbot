@@ -411,6 +411,20 @@ await expect("ALLOWED", "the bot finishes", db("bot").ref("importJobs/eve/-Nimp0
 await expect("DENIED", "a status the bot doesn't use", db("bot").ref("importJobs/eve/-Nimp001/status").set("whatever"));
 await expect("ALLOWED", "you delete yours when you're done with it", eve.ref("importJobs/eve/-Nimp001").remove());
 await expect("ALLOWED", "the bot clears an old one", db("bot").ref("importJobs/eve/-Nimp010").set(null));
+console.log("-- importing a Spotify playlist (importJobs with spotify)");
+const spotifyJob = (extra) => Object.assign({ spotify: "6rqhFgbbKwnb9MLmUQDhG6", format: "ytm", status: "new", at: TS }, extra);
+await expect("ALLOWED", "ask the bot to read a Spotify playlist (no songs yet)", eve.ref("importJobs/eve/-Nspo001").set(spotifyJob()));
+await expect("DENIED", "a job with neither songs nor a playlist", eve.ref("importJobs/eve/-Nspo002").set(spotifyJob({ spotify: null })));
+await expect("DENIED", "a playlist id that isn't one", eve.ref("importJobs/eve/-Nspo003").set(spotifyJob({ spotify: "../../users/bob" })));
+await expect("DENIED", "write the playlist's name yourself", eve.ref("importJobs/eve/-Nspo004").set(spotifyJob({ name: "Mine" })));
+await expect("ALLOWED", "the bot writes the playlist's songs, name and owner", db("bot").ref("importJobs/eve/-Nspo001").update({ status: "working", n: 0,
+  items: [{ a: "Khruangbin", t: "Maria Tambien", d: 245 }], name: "Night Drive", by: "Chris", skipped: 1 }));
+await expect("DENIED", "a playlist name of 200 KB", db("bot").ref("importJobs/eve/-Nspo001/name").set(big));
+await expect("ALLOWED", "the bot says why it can't", db("bot").ref("importJobs/eve/-Nspo001").update({ status: "failed", note: "Spotify won't share that playlist." }));
+await expect("ALLOWED", "the bot says the site can offer Spotify", db("bot").ref("discover/caps/spotify").set(true));
+await expect("DENIED", "someone else says so", eve.ref("discover/caps/spotify").set(true));
+await expect("ALLOWED", "a visitor reads it", visitor.ref("discover/caps/spotify").once("value"));
+
 await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("banned/bob").set(true));
 await expect("DENIED", "someone suspended asks", bob().ref("importJobs/bob/-Nimp011").set(importJob()));
 

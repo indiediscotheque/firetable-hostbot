@@ -144,3 +144,55 @@ test("start() picks up new jobs in order, and old ones are cleared", async () =>
   assert.equal(db.get("importJobs/eve/k1/status"), "done");
   assert.equal(db.get("importJobs/eve/k2/results/0/s"), "song");
 });
+
+// ---- Spotify playlists (1.21)
+const fakeSpotify = (playlists, opts = {}) => ({
+  configured: () => opts.configured !== false,
+  check: async () => opts.ok !== false,
+  playlist: async (id) => {
+    if (playlists[id]) return playlists[id];
+    throw Object.assign(new Error("not shared"), { code: "gone" });
+  }
+});
+
+test("a Spotify playlist: its songs, name and owner go into the job, then each is found", async () => {
+  const db = fakeDb(Object.assign(room(), { importJobs: { eve: {
+    s1: { spotify: "6rqhFgbbKwnb9MLmUQDhG6", format: "ytm", status: "new", at: NOW },
+    s2: { spotify: "37i9dQZF1DXcBWIGoYBM5M", format: "ytm", status: "new", at: NOW } } } }));
+  const d = deps(db);
+  d.spotify = fakeSpotify({ "6rqhFgbbKwnb9MLmUQDhG6": { name: "Night Drive", by: "Chris", total: 3, skipped: 1,
+    tracks: [{ a: "Khruangbin", t: "María También", d: 245 }, { a: "Men I Trust", t: "Show Me How", d: 215 }] } });
+  const imp = imports.createImports(d);
+  await imp.runJob("eve", "s1");
+  const job = db.get("importJobs/eve/s1");
+  assert.equal(job.status, "done");
+  assert.equal(job.name, "Night Drive");
+  assert.equal(job.by, "Chris");
+  assert.equal(job.skipped, 1);
+  assert.deepEqual(job.items, [{ a: "Khruangbin", t: "María También", d: 245 }, { a: "Men I Trust", t: "Show Me How", d: 215 }]);
+  assert.equal(job.results[0].s, "room");
+  assert.equal(job.results[1].s, "song");
+  // one Spotify won't share: a note that says why
+  await imp.runJob("eve", "s2");
+  const no = db.get("importJobs/eve/s2");
+  assert.equal(no.status, "failed");
+  assert.match(no.note, /private, or one of Spotify's own mixes/);
+  assert.equal(no.items, undefined);
+});
+
+test("without working Spotify keys: a Spotify job fails with a note, and the site isn't offered Spotify", async () => {
+  const db = fakeDb(Object.assign(room(), { discover: { caps: { spotify: true } }, importJobs: { eve: { s3: { spotify: "6rqhFgbbKwnb9MLmUQDhG6", format: "ytm", status: "new", at: NOW } } } }));
+  const d = deps(db);
+  d.spotify = fakeSpotify({}, { configured: false });
+  const imp = imports.createImports(d);
+  await imp.runJob("eve", "s3");
+  assert.equal(db.get("importJobs/eve/s3/status"), "failed");
+  assert.match(db.get("importJobs/eve/s3/note"), /isn't working on the room's bot/);
+  assert.equal(await imp.publishCaps(), false);
+  assert.equal(db.get("discover/caps/spotify"), null);
+  // keys that work: offered
+  const d2 = deps(db);
+  d2.spotify = fakeSpotify({});
+  assert.equal(await imports.createImports(d2).publishCaps(), true);
+  assert.equal(db.get("discover/caps/spotify"), true);
+});
