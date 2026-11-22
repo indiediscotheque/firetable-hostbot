@@ -904,17 +904,24 @@ const scenarios = {
   }
 };
 
+// BOT_SHARD=2/3 runs every third scenario starting with the second, so CI can
+// split them across jobs side by side (each job has its own emulators)
 const only = process.argv[2];
-for (const [name, run] of Object.entries(scenarios)) {
-  if (only && name !== only) continue;
+const [shard, shards] = (process.env.BOT_SHARD || "1/1").split("/").map(Number);
+if (!(shards >= 1 && shard >= 1 && shard <= shards)) throw new Error("BOT_SHARD must look like 1/2, not " + process.env.BOT_SHARD);
+const names = Object.keys(scenarios).filter((name, i) => only ? name === only : i % shards === shard - 1);
+if (!names.length) throw new Error("no scenario " + (only ? "named " + only : "in shard " + shard + "/" + shards));
+for (const name of names) {
   console.log("\n== " + name);
+  const started = Date.now();
   let p;
-  try { p = await run(); } catch (e) { check(false, "scenario threw: " + e.stack); }
+  try { p = await scenarios[name](); } catch (e) { check(false, "scenario threw: " + e.stack); }
   if (p) {
     if (process.env.SHOW_LOG) console.log(p.out);
     p.kill();
     await sleep(400);
   }
+  console.log("  (" + ((Date.now() - started) / 1000).toFixed(1) + " s)");
 }
 console.log(failures ? "\n" + failures + " BOT TEST(S) FAILED" : "\nbot: all passed");
 process.exit(failures ? 1 : 0);

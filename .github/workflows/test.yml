@@ -1,4 +1,4 @@
-# Checks every push and pull request:
+# Checks every pull request and every push to master:
 #   - app.js, the auto-update script and firebase-rules.json parse
 #   - ESLint on app.js, lib/ and tools/, and unit tests of its small helpers
 #   - the tag matcher and the play history toolkit (tools/history) on sample
@@ -9,6 +9,8 @@
 #     push-service answers: outages, broken tracks, skips, commands, names,
 #     push notifications, the YOUTUBE MUSIC playlist sync, restarts
 #   - the auto-update script: updates, rollbacks and dependency installs
+# The bot's scenarios (the slowest part by far) run as three jobs beside the
+# rest (BOT_SHARD in test/bot.test.mjs), each with its own emulators.
 # Run the same on your computer (needs Java 21 for the emulators):
 #   npm ci && cd test && npm ci && npm test
 # Nothing in test/ is installed on the bot server.
@@ -17,7 +19,13 @@ name: Tests
 
 on:
   push:
+    branches: [master] # other branches: their pull request runs these (once, not twice)
   pull_request:
+
+# a newer push to a pull request stops its older run
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -65,10 +73,38 @@ jobs:
           export JAVA_HOME="$JAVA_HOME_21_X64" PATH="$JAVA_HOME_21_X64/bin:$PATH"
           cd test && npm run test:rules
 
+      - name: Auto-update script
+        run: cd test && npm run test:auto-update
+
+  bot:
+    name: bot (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            test/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          (cd test && npm ci --no-audit --no-fund)
+
       - name: The bot in the emulators
+        env:
+          BOT_SHARD: ${{ matrix.shard }}/3
         run: |
           export JAVA_HOME="$JAVA_HOME_21_X64" PATH="$JAVA_HOME_21_X64/bin:$PATH"
           cd test && npm run test:bot
-
-      - name: Auto-update script
-        run: cd test && npm run test:auto-update
