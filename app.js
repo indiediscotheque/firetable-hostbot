@@ -33,6 +33,7 @@ var discover = require('./lib/discover');
 var stage = require('./lib/stage');
 var avatars = require('./lib/avatars');
 var grabCounts = require('./lib/grabs');
+var imports = require('./lib/imports');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
 var retag = require('./lib/retag');
@@ -1804,6 +1805,15 @@ var usersLoaded = false;
 // each DJ's grab stats, summed (lib/grabs.js), so the site needn't download
 // every grab a DJ has had at every sign-in
 var grabSummaries = grabCounts.createGrabCounts({ db: firebase.database(), log: console.log });
+// lists of songs people import on the site (lib/imports.js): each found in the
+// room's own uploads first, then with the swap search's free lookups
+var songImports = imports.createImports({
+  db: firebase.database(),
+  lookup: function(items, o) { return swapper().lookup(items, o); },
+  verify: function(cids) { return youtubeProblems(cids); },
+  scSearch: process.env.SOUNDCLOUD_SWAPS === "false" ? null : function(q) { return soundcloudSearch(q); },
+  log: console.log
+});
 var stagePub = stage.createStage({
   db: firebase.database(),
   users: function() { return users; },
@@ -3429,6 +3439,7 @@ var markChatReady = function() {
   stagePub.start();
   spreadTags.start();
   grabSummaries.start();
+  songImports.start();
   claimLowercaseNames();
   pruneMentions();
   push.init();

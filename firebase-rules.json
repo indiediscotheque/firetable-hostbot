@@ -188,6 +188,32 @@
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       "$cid": { ".validate": "$cid.matches(/^[A-Za-z0-9_-]{11}$/) && newData.isString() && newData.val().matches(/^(a|v[0-3])$/)" }
     },
+    "importJobs": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      "$uid": {
+        ".read": "auth.uid == $uid",
+        "$job": {
+          ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || (auth.uid == $uid && root.child('banned/' + auth.uid).val() != true && (!newData.exists() || (!data.exists() && newData.child('status').val() == 'new')))",
+          ".validate": "$job.matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.hasChildren(['items', 'format', 'status', 'at'])",
+          "items": {
+            "$i": {
+              ".validate": "$i.matches(/^[0-9]{1,3}$/) && newData.hasChildren(['a', 't'])",
+              "a": { ".validate": "newData.isString() && newData.val().length <= 300" },
+              "t": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 300" },
+              "d": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 86400" },
+              "$other": { ".validate": false }
+            }
+          },
+          "format": { ".validate": "newData.isString() && newData.val().matches(/^(ytm|video|sc)$/)" },
+          "at": { ".validate": "newData.isNumber()" },
+          "status": { ".validate": "newData.isString() && newData.val().matches(/^(new|working|done|failed)$/)" },
+          "n": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+          "note": { ".validate": "newData.isString() && newData.val().length <= 300" },
+          "results": { ".validate": "root.child('users/' + auth.uid + '/hostbot').val() == true" },
+          "$other": { ".validate": false }
+        }
+      }
+    },
     "ytmSync": {
       ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
