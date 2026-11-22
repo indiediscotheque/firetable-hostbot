@@ -883,6 +883,15 @@ const scenarios = {
     check(st.discover && st.discover.chartIds && st.discover.chartIds.week && Object.keys(st.discover.chartIds.week).length >= 2, "last week's chart is finished off too");
     check(!(st.discover && st.discover.chat), "the retired chat peek is cleared, and members' messages aren't published");
     check(st.discover && st.discover.new && Array.isArray(st.discover.new.tracks || []), "new releases are published");
+    // a mod fixes that song's tags on the site: the published chart follows at once
+    const row = (week.rows || []).find((r) => r.cid === "old") || {};
+    const weekId = Object.keys(st.discover.charts.week).find((id) => !st.discover.charts.week[id].final);
+    await put("/globalTracks/1old/artist", "Fixed Artist");
+    await put("/globalTracks/1old/title", "Fixed Title");
+    await post("/tagLog", { k: "1old", a: "Fixed Artist", t: "Fixed Title", fa: row.a || "", ft: row.t || "", by: "boss", at: { ".sv": "timestamp" } });
+    await sleep(2500);
+    const fixed = ((await get("/discover/charts/week/" + weekId)) || { rows: [] }).rows.find((r) => r.cid === "old") || {};
+    check(fixed.a === "Fixed Artist" && fixed.t === "Fixed Title", "a mod's tag fix goes on the published chart right away (" + JSON.stringify(fixed) + ")");
     await healthy(p);
     return p;
   },
