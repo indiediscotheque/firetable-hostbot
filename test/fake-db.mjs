@@ -31,6 +31,7 @@ export function fakeDb(data) {
     endAt: (v) => query(p, { ...q, end: v }),
     equalTo: (v) => query(p, { ...q, start: v, end: v }),
     limitToLast: (n) => query(p, { ...q, last: n }),
+    limitToFirst: (n) => query(p, { ...q, first: n }),
     once: async () => {
       reads.push(p);
       const val = get(p);
@@ -38,6 +39,7 @@ export function fakeDb(data) {
       let list = Object.entries(val || {}).filter(([, v]) => matches(q, v))
         .sort((a, b) => (a[1][q.child] < b[1][q.child] ? -1 : a[1][q.child] > b[1][q.child] ? 1 : 0));
       if (q.last) list = list.slice(-q.last);
+      if (q.first) list = list.slice(0, q.first);
       return snapOf(parts(p).pop(), list, true);
     },
     // child events on a path's children (and a query's), from now on

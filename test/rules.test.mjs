@@ -391,6 +391,29 @@ await expect("DENIED", "the bot reads the rest of their preferences", db("bot").
 await expect("DENIED", "someone else reads them", bob().ref("playlistPrefs/eve/format").once("value"));
 await expect("ALLOWED", "you read your own", eve.ref("playlistPrefs/eve").once("value"));
 
+console.log("-- importing a list of songs (importJobs)");
+const importJob = (extra) => Object.assign({ items: [{ a: "Khruangbin", t: "Maria Tambien", d: 245 }, { a: "", t: "Just a title" }], format: "ytm", status: "new", at: TS }, extra);
+await expect("ALLOWED", "ask the bot to find a list of songs", eve.ref("importJobs/eve/-Nimp001").set(importJob()));
+await expect("ALLOWED", "read your own", eve.ref("importJobs/eve/-Nimp001").once("value"));
+await expect("DENIED", "someone else reads it", bob().ref("importJobs/eve/-Nimp001").once("value"));
+await expect("DENIED", "ask in someone else's name", eve.ref("importJobs/bob/-Nimp002").set(importJob()));
+await expect("DENIED", "write the bot's answers yourself", eve.ref("importJobs/eve/-Nimp003").set(importJob({ results: { 0: { s: "room" } } })));
+await expect("DENIED", "start one as done", eve.ref("importJobs/eve/-Nimp004").set(importJob({ status: "done" })));
+await expect("DENIED", "change one after asking", eve.ref("importJobs/eve/-Nimp001/format").set("sc"));
+await expect("DENIED", "a song name of 200 KB", eve.ref("importJobs/eve/-Nimp005").set(importJob({ items: [{ a: big, t: "x" }] })));
+await expect("DENIED", "a song with no title", eve.ref("importJobs/eve/-Nimp006").set(importJob({ items: [{ a: "A", t: "" }] })));
+await expect("DENIED", "more than a thousand songs", eve.ref("importJobs/eve/-Nimp007").set(importJob({ items: { 1000: { a: "A", t: "B" } } })));
+await expect("DENIED", "a format that isn't one of the three", eve.ref("importJobs/eve/-Nimp008").set(importJob({ format: "spotify" })));
+await expect("DENIED", "an extra field", eve.ref("importJobs/eve/-Nimp009").set(importJob({ junk: big })));
+await expect("ALLOWED", "the bot reads every job", db("bot").ref("importJobs").once("value"));
+await expect("ALLOWED", "the bot answers", db("bot").ref("importJobs/eve/-Nimp001").update({ status: "working", n: 1, "results/0": { s: "room", picks: [{ type: 1, cid: "khaudio0001" }] } }));
+await expect("ALLOWED", "the bot finishes", db("bot").ref("importJobs/eve/-Nimp001").update({ status: "done", n: 2 }));
+await expect("DENIED", "a status the bot doesn't use", db("bot").ref("importJobs/eve/-Nimp001/status").set("whatever"));
+await expect("ALLOWED", "you delete yours when you're done with it", eve.ref("importJobs/eve/-Nimp001").remove());
+await expect("ALLOWED", "the bot clears an old one", db("bot").ref("importJobs/eve/-Nimp010").set(null));
+await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("banned/bob").set(true));
+await expect("DENIED", "someone suspended asks", bob().ref("importJobs/bob/-Nimp011").set(importJob()));
+
 await env.cleanup();
 console.log(failed ? "\n" + failed + " RULES TEST(S) FAILED" : "\nrules: all as expected");
 process.exit(failed ? 1 : 0);
