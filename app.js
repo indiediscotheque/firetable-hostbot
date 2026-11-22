@@ -34,6 +34,7 @@ var stage = require('./lib/stage');
 var avatars = require('./lib/avatars');
 var grabCounts = require('./lib/grabs');
 var imports = require('./lib/imports');
+var spotify = require('./lib/spotify');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
 var retag = require('./lib/retag');
@@ -1812,6 +1813,12 @@ var songImports = imports.createImports({
   lookup: function(items, o) { return swapper().lookup(items, o); },
   verify: function(cids) { return youtubeProblems(cids); },
   scSearch: process.env.SOUNDCLOUD_SWAPS === "false" ? null : function(q) { return soundcloudSearch(q); },
+  // Spotify playlists (1.21): only with SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in .env
+  spotify: spotify.createSpotify({
+    clientId: process.env.SPOTIFY_CLIENT_ID || "",
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET || "",
+    http: http
+  }),
   log: console.log
 });
 var stagePub = stage.createStage({

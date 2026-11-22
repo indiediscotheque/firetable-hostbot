@@ -194,7 +194,7 @@
         ".read": "auth.uid == $uid",
         "$job": {
           ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true || (auth.uid == $uid && root.child('banned/' + auth.uid).val() != true && (!newData.exists() || (!data.exists() && newData.child('status').val() == 'new')))",
-          ".validate": "$job.matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.hasChildren(['items', 'format', 'status', 'at'])",
+          ".validate": "$job.matches(/^[A-Za-z0-9_-]{1,40}$/) && newData.hasChildren(['format', 'status', 'at']) && (newData.hasChild('items') || newData.hasChild('spotify'))",
           "items": {
             "$i": {
               ".validate": "$i.matches(/^[0-9]{1,3}$/) && newData.hasChildren(['a', 't'])",
@@ -204,6 +204,10 @@
               "$other": { ".validate": false }
             }
           },
+          "spotify": { ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9]{22}$/)" },
+          "name": { ".validate": "root.child('users/' + auth.uid + '/hostbot').val() == true && newData.isString() && newData.val().length <= 100" },
+          "by": { ".validate": "root.child('users/' + auth.uid + '/hostbot').val() == true && newData.isString() && newData.val().length <= 100" },
+          "skipped": { ".validate": "root.child('users/' + auth.uid + '/hostbot').val() == true && newData.isNumber()" },
           "format": { ".validate": "newData.isString() && newData.val().matches(/^(ytm|video|sc)$/)" },
           "at": { ".validate": "newData.isNumber()" },
           "status": { ".validate": "newData.isString() && newData.val().matches(/^(new|working|done|failed)$/)" },
