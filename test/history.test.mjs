@@ -969,6 +969,24 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.deepEqual(repeats, [], "no library list repeats a song");
     assert.ok(Object.keys(u).some((k) => /^discover\/lib\/onThisDay\/\d\d-\d\d$/.test(k)), "On this day, by date");
     assert.ok(Object.keys(u["discover/lib/artistIndex"]).length > 0, "artist pages");
+    // an artist's sound, and who sounds like them: only artists with a page, never themselves
+    const artistPages = Object.keys(u["discover/lib/artistIndex"]).map((k) => [k, u["discover/lib/artist/" + k]]);
+    assert.ok(artistPages.every(([, a]) => Array.isArray(a.g) && a.g.length >= 1 && a.g.length <= 3 && a.g.every((g) => u["discover/lib/genres"][library.slugOf(g)])),
+      "every artist has one to three genres, each with a genre page (" + JSON.stringify(artistPages.map(([, a]) => a.g)) + ")");
+    assert.ok(artistPages.every(([k, a]) => Array.isArray(a.sim) && a.sim.length <= 8 && a.sim.every((x) => x.k !== k && u["discover/lib/artistIndex"][x.k] && u["discover/lib/artistIndex"][x.k][0] === x.n)),
+      "Sounds like: other artists with pages, by slug and name");
+    // who sounds like whom, on artists made for it: A and B share DJs and a genre, C shares neither, D made a song with A
+    const T = new Map([["a1", { plays: 40 }], ["b1", { plays: 30 }], ["c1", { plays: 50 }], ["ad", { plays: 30 }], ["d1", { plays: 5 }]]);
+    const G = new Map([["a1", ["Nu-Disco", "Disco"]], ["b1", ["Nu-Disco"]], ["c1", ["Techno"]], ["ad", ["Nu-Disco"]], ["d1", ["Synthpop"]]]);
+    const mk = (name, tracks, djsOf) => ({ name, slug: name.toLowerCase(), plays: tracks.reduce((n, id) => n + T.get(id).plays, 0), tracks, djs: new Map(Object.entries(djsOf)) });
+    const made = [mk("A", ["a1", "ad"], { x: 20, y: 15, z: 5 }), mk("B", ["b1"], { x: 12, y: 10, z: 8 }), mk("C", ["c1"], { q: 30, r: 15, s: 5 }), mk("D", ["d1", "ad"], { q: 9, r: 9, s: 2 })];
+    library.similarArtists(made, T, G);
+    const [A, B, C, D] = made;
+    assert.deepEqual([A.genres, B.genres, D.genres], [["Nu-Disco", "Disco"], ["Nu-Disco"], ["Nu-Disco"]], "an artist's genres: the first, and any other with a fifth of their plays");
+    assert.equal(A.similar[0], B, "the same DJs and the same genre: alike");
+    assert.ok(B.similar.includes(A) && !A.similar.includes(C) && !C.similar.includes(A), "it goes both ways, and other DJs with another genre aren't alike");
+    assert.ok(A.similar.includes(D) && D.similar.includes(A), "a song made together counts");
+    assert.ok(made.every((a) => !a.similar.includes(a) && !("gv" in a)), "nobody sounds like themselves, and the working numbers are gone");
     assert.equal(library.slugOf("Röyksopp & Robyn"), "royksopp-and-robyn");
     db.close();
   } finally {
