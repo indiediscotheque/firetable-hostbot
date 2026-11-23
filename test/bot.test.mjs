@@ -448,17 +448,27 @@ const scenarios = {
         "1ytcopy": { artist: "POOLSIDE", title: "Harvest Moon (Official Video)", type: 1 },
         "1ytother": { artist: "POOLSIDE", title: "Do It Again", type: 1, song: "t9" },
         "1ytguest": { artist: "Someone", title: "Song (POOLSIDE Remix)", type: 1 },
-        "1ytkeep": { artist: "Poolsider", title: "Harvest Moon", type: 1 }
+        "1ytkeep": { artist: "Poolsider", title: "Harvest Moon", type: 1 },
+        "1ytsolo": { artist: "Solo Act", title: "Tune", type: 1, song: "t5" }
       },
-      globalSongs: { t9: { artist: "POOLSIDE", title: "Do It Again" } },
+      globalSongs: { t9: { artist: "POOLSIDE", title: "Do It Again" }, t5: { artist: "Solo Act", title: "Tune" } },
       songHistory: { h1: { artist: "POOLSIDE", title: "Harvest Moon", cid: "ytfix", type: 1 } }
     })));
     const p = startBot("tag_spread");
     await waitFor(p, "Listening now.");
     await sleep(1500);
-    await post("/tagLog", { k: "1ytfix", a: "Poolside", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon", by: "boss", at: { ".sv": "timestamp" } });
+    // a fix naming another song spreads nothing (and needs no library read),
+    // but the upload's track in the play history still takes the new name
+    await put("/globalSongsMeta/ready", true);
+    await sleep(300);
+    await post("/tagLog", { k: "1ytsolo", a: "Solo Act", t: "Another Tune", fa: "Solo Act", ft: "Tune", by: "boss", at: { ".sv": "timestamp" } });
     await sleep(2500);
     let st = await get("/");
+    check(st.globalSongs.t5.title === "Another Tune" && st.globalSongs.t5.artist === "Solo Act", "a fix that names another song renames the upload's track (" + JSON.stringify(st.globalSongs.t5) + ")");
+    check(st.globalTracks["1ytcopy"].artist === "POOLSIDE" && st.songHistory.h1.artist === "POOLSIDE", "and changes nothing else");
+    await post("/tagLog", { k: "1ytfix", a: "Poolside", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon", by: "boss", at: { ".sv": "timestamp" } });
+    await sleep(2500);
+    st = await get("/");
     const gt = st.globalTracks;
     check(gt["1ytcopy"].artist === "Poolside" && gt["1ytcopy"].title === "Harvest Moon", "the site's fix goes on the other copies of those tags (" + JSON.stringify(gt["1ytcopy"]) + ")");
     check(gt["1ytother"].artist === "Poolside" && gt["1ytguest"].title === "Song (Poolside Remix)" && st.globalSongs.t9.artist === "Poolside" && st.songHistory.h1.artist === "Poolside",

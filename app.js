@@ -2145,7 +2145,12 @@ var songSiblings = function(uploads) {
   return Promise.all((uploads || []).map(function(u) {
     return db.ref("globalTracks/" + u.type + u.cid + "/song").once("value").then(function(s) { return s.val(); }, function() { return null; });
   })).then(function(songs) {
-    songs = songs.filter(function(id, i) { return id && songs.indexOf(id) === i; });
+    var seenSong = new Set();
+    songs = songs.filter(function(id) {
+      if (!id || seenSong.has(id)) return false;
+      seenSong.add(id);
+      return true;
+    });
     return Promise.all(songs.map(function(id) {
       return db.ref("globalTracks").orderByChild("song").equalTo(id).limitToFirst(25).once("value").then(function(snap) {
         var out = [];
@@ -3857,12 +3862,15 @@ var gts = {
 // A mod's tag fix (tagLog: the site's tag editor, or !fixtags) goes on every
 // copy of those tags and, when an artist was respelled ("POOLSIDE" ->
 // "Poolside"), on all their songs (lib/retag.js). The library is read once
-// and kept a few minutes, so a mod tidying up a run of songs reads it once.
+// and kept a few minutes, so a mod tidying up a run of songs reads it once,
+// then let go. A fix that can't spread (another song or version: most of
+// them) doesn't read it at all.
 var spreadTags = {
   own: {}, // tagLog keys !fixtags wrote: it has linked those itself
   cache: null,
   cacheAt: 0,
   CACHE_MS: 5 * 60 * 1000,
+  dropTimer: null,
   queue: Promise.resolve(),
   started: false,
   start: function() {
@@ -3879,13 +3887,24 @@ var spreadTags = {
       console.log("couldn't follow tagLog (deploy firebase-rules.json):", err && err.message);
     });
   },
+  // the library as last read, while it's fresh
+  cached: function() {
+    return spreadTags.cache && Date.now() - spreadTags.cacheAt < spreadTags.CACHE_MS ? spreadTags.cache : null;
+  },
   library: function() {
-    if (spreadTags.cache && Date.now() - spreadTags.cacheAt < spreadTags.CACHE_MS) return Promise.resolve(spreadTags.cache);
+    if (spreadTags.cached()) return Promise.resolve(spreadTags.cache);
     var db = firebase.database();
     var read = function(path) { return db.ref(path).once("value").then(function(snap) { return snap.val() || {}; }); };
     return Promise.all([read("globalTracks"), read("globalSongs"), read("globalWorks")]).then(function(v) {
       spreadTags.cache = { tracks: v[0], songs: v[1], works: v[2] };
       spreadTags.cacheAt = Date.now();
+      // let go of it once it's stale, so the whole library isn't held for good
+      clearTimeout(spreadTags.dropTimer);
+      spreadTags.dropTimer = setTimeout(function() {
+        spreadTags.cache = null;
+        spreadTags.dropTimer = null;
+      }, spreadTags.CACHE_MS);
+      if (spreadTags.dropTimer.unref) spreadTags.dropTimer.unref();
       return spreadTags.cache;
     });
   },
@@ -3895,6 +3914,25 @@ var spreadTags = {
     var mine = spreadTags.own[key];
     delete spreadTags.own[key];
     var fromSite = !mine && e.by && e.by !== botid;
+    if (!retag.spreads(e, { isPlaceholder: placeholderTags.is })) {
+      // nothing else to fix: just this upload's track and Discover's rows
+      var lib = spreadTags.cached();
+      var up = lib ? lib.tracks[e.k] || (lib.tracks[e.k] = {}) : null;
+      if (up) {
+        up.artist = e.a;
+        up.title = e.t;
+      }
+      // its track, from the library if it's held, else just that one field
+      var songOf = !fromSite ? Promise.resolve(null) : up ? Promise.resolve(up.song) :
+        db.ref("globalTracks/" + e.k + "/song").once("value").then(function(snap) { return snap.val(); });
+      return songOf.then(function(songId) {
+        var linked = songId ? Promise.resolve(gts.learnSpelling(songId, e.a, e.t, e.k)) : Promise.resolve();
+        var changes = {};
+        changes[e.k] = { artist: e.a, title: e.t };
+        discoverDo("retag", function(d) { return d.retag(changes); });
+        return linked;
+      });
+    }
     return Promise.all([spreadTags.library(), db.ref("songHistory").once("value")]).then(function(v) {
       var lib = v[0];
       var up = lib.tracks[e.k] || (lib.tracks[e.k] = {});

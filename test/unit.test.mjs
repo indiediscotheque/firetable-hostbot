@@ -931,7 +931,9 @@ test("swap runner: what's over the search limits gets a catch-up pass the same d
     u1: { a: broken("dead0000001", "Radiohead - Airbag"), b: broken("dead0000002", "Radiohead - Let Down"), c: broken("dead0000003", "Radiohead - Lucky") },
     u2: { a: broken("dead0000004", "Radiohead - Karma Police") }
   } };
-  const { db } = fakeDb(data);
+  const { db: store } = fakeDb(data);
+  const reads = [];
+  const db = { ref: (p) => Object.assign({}, store.ref(p), { once: (...a) => { reads.push(p); return store.ref(p).once(...a); } }) };
   const timers = [];
   let t = Date.UTC(2026, 10, 13, 4);
   const users = { u1: { username: "u1", status: true }, u2: { username: "u2", idle: { since: t - 1000 } } };
@@ -961,11 +963,59 @@ test("swap runner: what's over the search limits gets a catch-up pass the same d
   // someone comes online after a day: looked at in a few minutes
   t += 25 * 60 * 60 * 1000;
   timers.length = 0;
+  reads.length = 0;
   assert.equal(await sw.online("u2"), true);
   assert.equal(timers.length, 1);
   assert.equal(timers[0].ms, 5 * 60 * 1000);
   assert.equal(await sw.online("u2"), true, "a second arrival shares the pass already planned");
   assert.equal(timers.length, 1);
+  assert.ok(!reads.some((p) => /^swapScans/.test(p)), "an arrival this run has marked costs no read (" + reads.join(", ") + ")");
+});
+
+test("swap runner: an arrival reads just that person's mark, never everyone's", async () => {
+  const t = Date.UTC(2026, 10, 13, 4);
+  const data = { swapScans: { u3: t - 60 * 60 * 1000, u4: t - 2 * 86400000, u5: 0 } };
+  const { db } = fakeDb(data);
+  const reads = [];
+  const timers = [];
+  const sw = swaps.createSwapper({
+    db: { ref: (p) => Object.assign({}, db.ref(p), { once: (...a) => { reads.push(p); return db.ref(p).once(...a); } }) },
+    shallowKeys: async () => [], users: () => ({}), botid: () => "bot", delayMs: 0, now: () => t, notify: () => {},
+    search: async () => realSearch([]), verify: async () => ({}), catchUp: true,
+    setTimer: (fn, ms) => { const tm = { fn, ms }; timers.push(tm); return tm; }, clearTimer: (tm) => { tm.cancelled = true; }
+  });
+  assert.equal(await sw.online("u3"), false, "looked through an hour ago: nothing to do");
+  assert.equal(await sw.online("u4"), true, "two days ago: a pass soon");
+  assert.equal(await sw.online("u5"), true, "marked not done");
+  assert.equal(await sw.online("new1"), true, "never looked at");
+  assert.deepEqual(reads, ["swapScans/u3", "swapScans/u4", "swapScans/u5", "swapScans/new1"]);
+  assert.equal(timers.length, 1);
+});
+
+test("swap runner: saved answers kept in memory are capped; older ones are read again from the database", async () => {
+  const data = {};
+  const { db } = fakeDb(data);
+  const reads = [];
+  const searches = [];
+  const rows = { "Radiohead Airbag": "studio00001", "Radiohead Lucky": "studio00002", "Radiohead Let Down": "studio00003" };
+  const sw = swaps.createSwapper({
+    db: { ref: (p) => Object.assign({}, db.ref(p), { once: (...a) => { reads.push(p); return db.ref(p).once(...a); } }) },
+    shallowKeys: async () => [], delayMs: 0, log: () => {}, memCacheMax: 2,
+    search: async (q) => { searches.push(q); return realSearch([{ cid: rows[q], title: q.replace("Radiohead ", ""), artists: ["Radiohead"], dur: 200 }]); },
+    verify: async (ids) => Object.fromEntries(ids.map((i) => [i, { problem: 0, dur: 200, audio: true }]))
+  });
+  const items = Object.keys(rows).map((q) => ({ name: q.replace("Radiohead ", "Radiohead - "), dur: 200 }));
+  const first = await sw.lookup(items);
+  assert.deepEqual(first.picks.map((p) => p[0] && p[0].cid), Object.values(rows));
+  assert.equal(searches.length, 3);
+  assert.equal(Object.keys(data.swapCache).length, 3, "all three saved in the database");
+  // the database loses them: only the two newest are still in memory
+  delete data.swapCache;
+  reads.length = 0;
+  const again = await sw.lookup(items);
+  assert.deepEqual(again.picks.map((p) => p[0] && p[0].cid), Object.values(rows), "the same answers");
+  assert.equal(reads.filter((p) => /^swapCache\//.test(p)).length, 1, "only the oldest is read again");
+  assert.equal(searches.length, 4, "and, gone from the database, searched again");
 });
 
 // --------------------------------------------------------- the stage summary
@@ -1167,6 +1217,33 @@ test("retag: vague, unchanged or old-style entries spread nothing", () => {
   assert.equal(retag.plan({ k: "x", a: "Song", t: "B", fa: "Placeholder", ft: "B" }, { tracks: { y: { artist: "Placeholder", title: "B" } } }, { isPlaceholder: (a) => a === "Placeholder" }), null);
 });
 
+test("retag: spreads() says up front which fixes can spread, as plan() finds (so app.js reads the library only for them)", () => {
+  const ph = { isPlaceholder: (a) => a === "Placeholder" };
+  const none = [
+    { k: "1kites", a: "Foals", t: "Kites (Limousines Remix)", fa: "Foals", ft: "Kites" }, // another version
+    { k: "1daft", a: "Daft Punk", t: "Digital Love", fa: "Daft Punk", ft: "One More Time" }, // another song
+    { k: "1daft", a: "Justice", t: "One More Time", fa: "Daft Punk", ft: "One More Time" }, // another artist
+    { k: "x", a: "Unknown", t: "Intro (Live)", fa: "Unknown", ft: "Intro" },
+    { k: "x", a: "UNKNOWN ARTIST", t: "Song", fa: "Unknown Artist", ft: "Song" },
+    { k: "1fix", a: "POOLSIDE", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon" }, // unchanged
+    { k: "1fix", a: "Poolside", t: "Harvest Moon" }, // an older site: no old tags
+    { k: "x", a: "Song", t: "B", fa: "Placeholder", ft: "B" }
+  ];
+  for (const e of none) {
+    assert.equal(retag.spreads(e, ph), false, JSON.stringify(e));
+    assert.equal(retag.plan(e, library(), ph), null, "and plan() finds nothing for it: " + JSON.stringify(e));
+  }
+  const some = [
+    { k: "1fix", a: "Poolside", t: "Harvest Moon", fa: "POOLSIDE", ft: "Harvest Moon" }, // the artist respelled
+    { k: "x", a: "Poolside", t: "Harvest Moon", fa: "Poolsdie", ft: "Harvest Moon" }, // a spelling fix: its copies
+    { k: "x", a: "Daft Punk", t: "One More Time", fa: "Daft Punk", ft: "One More Tme" }
+  ];
+  for (const e of some) assert.equal(retag.spreads(e, ph), true, JSON.stringify(e));
+  // it may spread and still find nothing to change in this library
+  assert.equal(retag.spreads({ k: "x", a: "Nobody", t: "Here", fa: "NOBODY", ft: "Here" }), true);
+  assert.equal(retag.plan({ k: "x", a: "Nobody", t: "Here", fa: "NOBODY", ft: "Here" }, library()), null);
+});
+
 test("retag: respelling names keeps the rest of the artist list and title", () => {
   const key = "poolside";
   assert.equal(retag.respellArtist("POOLSIDE, Friend & poolside", key, "Poolside"), "Poolside, Friend & Poolside");
@@ -1174,4 +1251,47 @@ test("retag: respelling names keeps the rest of the artist list and title", () =
   assert.equal(retag.respellTitle("Song (POOLSIDE's Remix)", key, "Poolside"), "Song (Poolside's Remix)");
   assert.equal(retag.respellTitle("Song ft. Friend & POOLSIDE [Live]", key, "Poolside"), "Song ft. Friend & Poolside [Live]");
   assert.equal(retag.respellTitle("Poolside Dreams", key, "Poolside"), "Poolside Dreams");
+});
+
+// ─── The room's colours from artwork (lib/colors.js) ────────────────────────
+// A real 4x4 PNG of one colour, so the colours are worked out for real
+function png(r, g, b) {
+  const zlib = require("zlib");
+  const crc = (buf) => { let c, n = 0xffffffff; for (const byte of buf) { c = (n ^ byte) & 0xff; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; n = (n >>> 8) ^ c; } return (n ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(4, 0); ihdr.writeUInt32BE(4, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.concat(Array.from({ length: 4 }, () => Buffer.from([0, r, g, b, r, g, b, r, g, b, r, g, b])));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+test("artwork colours: an image seen lately isn't downloaded again; one that couldn't be read is tried again", async () => {
+  const { artworkColors } = require("../lib/colors.js");
+  const realFetch = global.fetch;
+  const asked = [];
+  global.fetch = async (url) => {
+    asked.push(String(url));
+    return /bad/.test(url)
+      ? new Response("not really a jpeg", { status: 200, headers: { "content-type": "image/jpeg" } })
+      : new Response(png(200, 30, 40), { status: 200, headers: { "content-type": "image/png" } });
+  };
+  try {
+    const first = await artworkColors("https://img.test/cache-a.png");
+    assert.match(first.color, /^#[0-9a-f]{6}$/i);
+    first.color = "#000000"; // what a caller does with its copy stays with it
+    const again = await artworkColors("https://img.test/cache-a.png");
+    assert.notEqual(again.color, "#000000");
+    assert.equal(again.txt, first.txt);
+    assert.deepEqual(asked, ["https://img.test/cache-a.png"], "the second time comes from memory");
+    await assert.rejects(artworkColors("https://img.test/bad.jpg"));
+    await assert.rejects(artworkColors("https://img.test/bad.jpg"));
+    assert.equal(asked.filter((u) => /bad/.test(u)).length, 2, "a failure isn't remembered");
+    // only the last 500 images are kept: the first goes
+    for (let i = 0; i < 500; i++) await artworkColors("https://img.test/many-" + i + ".png");
+    asked.length = 0;
+    await artworkColors("https://img.test/cache-a.png");
+    await artworkColors("https://img.test/many-499.png");
+    assert.deepEqual(asked, ["https://img.test/cache-a.png"]);
+  } finally {
+    global.fetch = realFetch;
+  }
 });
