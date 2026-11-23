@@ -3559,7 +3559,10 @@ var gts = {
         var now = Date.now();
         var dj = s.djname || null;
         var upload;
-        var played = !!(thing && thing.artist);
+        // played before: it has a play date (an upload a mod tagged in
+        // Discover before anyone played it has its tags and nothing else)
+        var played = !!(thing && thing.artist && (thing.first_play_date || thing.last_play_date));
+        var preTagged = !played && !!(thing && thing.artist);
         if (played) {
           // played before: use its saved tags, then update the last play
           // (just those fields: a mod's tag fix at the same moment stays)
@@ -3572,22 +3575,23 @@ var gts = {
           }
           upload = globalpeek.update(lastPlay).then(function() { return thing; });
         } else {
-          // first play of this upload (or one the history linked but never played)
-          thing = Object.assign({}, thing || {}, {
-            artist: s.artist, title: s.title, type: s.type,
+          // first play of this upload (or one the history linked but never
+          // played): under the tags a mod gave it in Discover, if they did
+          var firstPlay = {
+            artist: preTagged ? thing.artist : s.artist, title: preTagged ? String(thing.title || "") : s.title, type: s.type,
             first_play_date: now, first_play_dj: dj, last_play_date: now, last_play_dj: dj
-          });
-          upload = globalpeek.update({
-            artist: s.artist, title: s.title, type: s.type,
-            first_play_date: now, first_play_dj: dj, last_play_date: now, last_play_dj: dj
-          }).then(function() { return thing; });
+          };
+          thing = Object.assign({}, thing || {}, firstPlay);
+          upload = globalpeek.update(firstPlay).then(function() { return thing; });
         }
         return upload.then(function(up) {
           // a first play has no earlier play to show
           if (!songIndex.ready) return gts.reportNp(s, listRef, played ? up : { artist: up.artist, title: up.title, type: up.type });
           return gts.countPlay(s, upKey, up).then(function(track) {
             var fixed = {};
-            if (!played && gts.knownSpelling(track)) {
+            if (preTagged) {
+              // a mod's own tags: they stand
+            } else if (!played && gts.knownSpelling(track)) {
               // an upload new to the room, of a track the history already
               // has: it's written the track's way (a mod's fix, or the
               // history's best spelling), not the way this upload came in

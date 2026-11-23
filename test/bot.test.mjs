@@ -497,6 +497,27 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async tagged_before_first_play() {
+    // a mod fixed a new release's tags in Discover before anyone played it:
+    // its upload has those tags and nothing else
+    await put("/", base({
+      queues: { dj1: { k1: yt("ytpre", "WRONG band - wrong song") }, dj2: { s1: yt("yt2") } },
+      globalTracks: { "1ytpre": { artist: "Right Band", title: "Right Song" } }
+    }));
+    const p = startBot("pretagged");
+    await waitFor(p, "Listening now.");
+    await sleep(2500);
+    const st = await get("/");
+    const np = (st.tagUpdate && st.tagUpdate.adamData) || {};
+    check(st.songToPlay.cid === "ytpre" && np.artist === "Right Band" && np.track_name === "Right Song",
+      "its first play is under the mod's tags (" + np.artist + " - " + np.track_name + ")");
+    const up = st.globalTracks["1ytpre"];
+    check(up.artist === "Right Band" && up.title === "Right Song" && typeof up.first_play_date === "number" && up.first_play_dj === "dj1",
+      "and it's saved as its first play (" + JSON.stringify(up) + ")");
+    check(!np.last_play && !np.playcount, "the room hears it's a first play, not a repeat");
+    await healthy(p);
+    return p;
+  },
   async release_topic_artist() {
     // queued as "Release - Fresh Song" (named from YouTube's stand-in
     // "Release - Topic" channel); release2 was first played that way before
