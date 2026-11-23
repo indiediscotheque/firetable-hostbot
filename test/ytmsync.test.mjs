@@ -253,13 +253,14 @@ function setup(extra = {}) {
   const db = fakeDb({ playlists: { [BOT]: { other: { name: "Other list", list: { x: { type: 1, cid: "zzz", name: "untouched" } } },
     ytm1: { name: "YOUTUBE MUSIC", list } } } }, extra.hooks);
   const searches = [];
-  const calls = { videos: 0 };
+  const calls = { videos: 0, asked: [] };
   const sync = ytmsync.createSync({
     db,
     botid: () => BOT,
     shallowKeys: async (p) => Object.keys(db.get(p) || {}),
     videos: async (ids) => {
       calls.videos++;
+      calls.asked.push(ids);
       assert.ok(ids.length <= 50);
       if (extra.youtubeDown) throw new Error("quota exceeded");
       const out = {};
@@ -287,7 +288,7 @@ function setup(extra = {}) {
 }
 
 test("a sync replaces broken tracks, adds new songs, removes duplicates and shuffles", async () => {
-  const { db, sync, keys, tracks, searches } = setup();
+  const { db, sync, keys, tracks, searches, calls } = setup();
   const before = Object.keys(tracks());
   const s = await sync.run({ reason: "test" });
   const after = tracks();
@@ -347,6 +348,10 @@ test("a sync replaces broken tracks, adds new songs, removes duplicates and shuf
   assert.ok(!s.failed);
   assert.match(ytmsync.summary(s), /2 broken tracks replaced, 1 with no match yet \(kept, 1 newly flagged\); 1 new song from 2 year playlists \(1 DJ-mixed skipped\); 1 video swapped for YouTube Music tracks; 1 duplicate removed/);
   assert.deepEqual(searches.sort(), ["Nobody Unfindable Song", "Radiohead Karma Police", "SC Artist Old Song"]);
+  // YouTube is asked about each video once, in the list's order (the list
+  // has One More Time's upload twice; SoundCloud tracks aren't asked)
+  assert.deepEqual(calls.asked[0], ["kpdead00001", "offtheme001", "omt00000001", "omt00000002", "lose0000001", "nomatch0001"]);
+  assert.deepEqual(calls.asked[1], ["chromeo0001", "omt00000003", "blocked0001", "gone0000001"], "then the year playlists' new tracks, Chromeo once though both have it");
 
   // the bot's other playlists aren't touched; the searches are remembered
   assert.deepEqual(db.get("playlists/" + BOT + "/other/list"), { x: { type: 1, cid: "zzz", name: "untouched" } });
@@ -514,6 +519,29 @@ test("videos become YouTube Music tracks; a video with none yet stays", async ()
   assert.equal(s.upgraded, 4);
   assert.equal(s.videosLeft, 1);
   assert.match(ytmsync.summary(s), /4 videos swapped for YouTube Music tracks \(1 with none yet\)/);
+});
+
+test("a broken track whose song is already in the list goes; one by another artist of the same title waits", async () => {
+  const k = (n) => pushKey(Date.UTC(2021, 0, n));
+  const db = fakeDb({ playlists: { [BOT]: { ytm: { name: "YOUTUBE MUSIC", list: {
+    [k(1)]: { type: 1, cid: "deadcopy001", name: "Daft Punk - One More Time" }, // gone, but the list has it
+    [k(2)]: { type: 1, cid: "deadother01", name: "Justice - One More Time" }, // gone, another artist's song
+    [k(3)]: { type: 1, cid: "omtaudio001", name: "Daft Punk feat. Romanthony - One More Time" },
+    [k(4)]: { type: 1, cid: "omtaudio002", name: "Daft Punk - One More Time" } // a later copy: a duplicate
+  } } } } });
+  const videos = { omtaudio001: VIDEO(320, "Daft Punk - Topic", "One More Time"), omtaudio002: VIDEO(320, "Daft Punk - Topic", "One More Time") };
+  const sync = ytmsync.createSync({
+    db, botid: () => BOT, shallowKeys: async (p) => Object.keys(db.get(p) || {}),
+    videos: async (ids) => Object.fromEntries(ids.filter((id) => videos[id]).map((id) => [id, videos[id]])),
+    playlist: async () => ({ tracks: [] }), search: async () => ({ songs: [], any: 1 }),
+    sources: [], delayMs: 0, now: () => T0, log: () => {}
+  });
+  const s = await sync.run();
+  const list = Object.values(db.get("playlists/" + BOT + "/ytm/list"));
+  assert.deepEqual(list.map((t) => t.cid).sort(), ["deadother01", "omtaudio001"]);
+  assert.deepEqual(list.find((t) => t.cid === "deadother01").flagged, { date: T0, code: 2 }, "kept, flagged, for a later sync");
+  assert.equal(s.duplicates, 2);
+  assert.equal(s.noMatch, 1);
 });
 
 test("duplicates: a YouTube Music track is kept over an earlier video", () => {
