@@ -11,7 +11,10 @@
 //   discover/lib/dj/<key>          taste, most played, brought here first, similar
 //                                  DJs, when they play, recent sets, cards
 //   discover/lib/artistIndex       artist slug -> [name, plays] (the 5,000 most played)
-//   discover/lib/artist/<slug>     their songs here, who plays them, first play
+//   discover/lib/artist/<slug>     their songs here, who plays them, first play,
+//                                  their genres (g) and the artists who sound
+//                                  like them (sim: played by the same DJs, in
+//                                  the same genres, or on a song together)
 //   discover/lib/years             each year playlist: songs, room plays, top genre, covers
 //   discover/lib/year/<year>       most played from that year, and finds not played yet
 //   discover/lib/rising            plays up most, the last 4 weeks against the 4 before
@@ -31,6 +34,9 @@ var ROWS = { fav: 100, newHere: 50, deep: 50, dj: 30, artist: 25, year: 40, year
 var DJ_MIN_PLAYS = 25;
 var ARTIST_MIN_PLAYS = 5;
 var ARTIST_MAX = 5000;
+var ARTIST_GENRES = 3;    // an artist's sound: up to this many genres
+var ARTIST_SIMILAR = 8;   // "Sounds like": up to this many artists
+var SIMILAR_MIN = 0.55;   // and only ones this alike (0 to 1)
 var SET_GAP = 2 * 3600 * 1000;
 var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -413,9 +419,16 @@ function buildLibrary(db, opts) {
     var sl = slugOf(name);
     if (artistSlugs[sl]) sl += "-" + tags.hash(name).slice(0, 4).toLowerCase().replace(/[^a-z0-9]/g, "0");
     artistSlugs[sl] = true;
+    a.name = name;
+    a.slug = sl;
+  });
+  similarArtists(artistList, tracks, genreOf);
+  artistList.forEach(function(a) {
+    var name = a.name, sl = a.slug;
     artistIndex[sl] = [name, a.plays];
     updates["discover/lib/artist/" + sl] = Object.assign({
       name: name, plays: a.plays, songs: a.tracks.length, first: isFinite(a.first) ? a.first : null,
+      g: a.genres, sim: a.similar.map(function(o) { return { k: o.slug, n: o.name }; }),
       rows: rows(a.tracks.slice().sort(byPlays), ROWS.artist),
       djs: Array.from(a.djs.entries()).sort(function(x, y) { return y[1] - x[1]; }).slice(0, 5).map(function(e) {
         return Object.assign({ plays: e[1], key: keyOfDj.get(e[0]) || null }, whoOf(e[0]));
@@ -498,6 +511,93 @@ function buildLibrary(db, opts) {
 
   updates["discover/lib/meta"] = { at: now, genres: counts.genres, djs: counts.djs, artists: counts.artists, years: counts.years };
   return { updates: updates, counts: counts };
+}
+
+/**
+ * Each artist's sound and who sounds like them, from the room's own plays.
+ * Sets on every artist: genres (names, most played first: a genre needs a
+ * fifth of the artist's plays, the first one always counts) and similar (the
+ * most alike artists, most alike first).
+ *
+ * Two artists are alike when the same DJs play them (each DJ weighted down
+ * the more artists they play, so one DJ who plays everything links nobody)
+ * and their plays fall in the same genres; making a song together counts too.
+ * @param {Object[]} list - artists: {name, slug, plays, tracks: [track id], djs: Map(dj -> plays)}
+ * @param {Map} tracks - track id -> {plays, ...}
+ * @param {Map} genreOf - track id -> [genre names], strongest first
+ */
+function similarArtists(list, tracks, genreOf) {
+  var genreIx = new Map(), djIx = new Map(), djArtists = [];
+  var ix = function(map, key) { if (!map.has(key)) map.set(key, map.size); return map.get(key); };
+  list.forEach(function(a) {
+    // genres: every play of a song counts for its first genre, half for its second
+    var g = new Map();
+    a.tracks.forEach(function(id) {
+      var plays = (tracks.get(id) || {}).plays || 0;
+      (genreOf.get(id) || []).slice(0, 2).forEach(function(name, i) { g.set(name, (g.get(name) || 0) + plays * (i ? 0.5 : 1)); });
+    });
+    var top = Array.from(g.entries()).sort(function(x, y) { return y[1] - x[1]; });
+    var all = top.reduce(function(sum, e) { return sum + e[1]; }, 0);
+    a.genres = top.filter(function(e, i) { return e[1] > 0 && (i === 0 || e[1] >= all * 0.2); }).slice(0, ARTIST_GENRES).map(function(e) { return e[0]; });
+    a.gv = top.map(function(e) { return [ix(genreIx, e[0]), e[1]]; });
+    a.djs.forEach(function(n, dj) { var d = ix(djIx, dj); djArtists[d] = (djArtists[d] || 0) + 1; });
+  });
+  var G = genreIx.size;
+  list.forEach(function(a, i) {
+    // genres as a full row of numbers, DJs as a short sorted list: both of length 1
+    var gv = new Float64Array(G), norm = 0;
+    a.gv.forEach(function(e) { gv[e[0]] = e[1]; norm += e[1] * e[1]; });
+    norm = Math.sqrt(norm);
+    if (norm) for (var k = 0; k < G; k++) gv[k] /= norm;
+    a.gv = gv;
+    a.hasGenres = norm > 0;
+    var dv = [];
+    a.djs.forEach(function(n, dj) { var d = djIx.get(dj); dv.push([d, Math.log(1 + n) * Math.log(1 + list.length / djArtists[d])]); });
+    dv.sort(function(x, y) { return x[0] - y[0]; });
+    var dn = Math.sqrt(dv.reduce(function(sum, e) { return sum + e[1] * e[1]; }, 0));
+    a.dk = Int32Array.from(dv.map(function(e) { return e[0]; }));
+    a.dw = Float64Array.from(dv.map(function(e) { return dn ? e[1] / dn : 0; }));
+    a.i = i;
+    a.best = [];
+  });
+  // artists on a song together
+  var together = new Set(); // "i_j", i < j
+  var byTrack = new Map();
+  list.forEach(function(a) { a.tracks.forEach(function(id) { if (!byTrack.has(id)) byTrack.set(id, []); byTrack.get(id).push(a.i); }); });
+  byTrack.forEach(function(on) {
+    for (var x = 0; x < on.length; x++) for (var y = x + 1; y < on.length; y++) together.add(Math.min(on[x], on[y]) + "_" + Math.max(on[x], on[y]));
+  });
+  var keep = function(a, other, score) {
+    if (a.best.length >= ARTIST_SIMILAR && score <= a.best[a.best.length - 1][0]) return;
+    a.best.push([score, other]);
+    a.best.sort(function(x, y) { return y[0] - x[0] || y[1].plays - x[1].plays; });
+    if (a.best.length > ARTIST_SIMILAR) a.best.pop();
+  };
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i];
+    for (var j = i + 1; j < list.length; j++) {
+      var b = list[j];
+      var gs = 0;
+      for (var k = 0; k < G; k++) gs += a.gv[k] * b.gv[k];
+      var ds = 0, x = 0, y = 0;
+      while (x < a.dk.length && y < b.dk.length) {
+        if (a.dk[x] === b.dk[y]) ds += a.dw[x++] * b.dw[y++];
+        else if (a.dk[x] < b.dk[y]) x++;
+        else y++;
+      }
+      // an artist only one or two DJs play says little through them: lean on the genres
+      var few = Math.min(a.dk.length, b.dk.length) < 3;
+      var score = a.hasGenres && b.hasGenres ? (few ? 0.75 * gs + 0.25 * ds : 0.5 * gs + 0.5 * ds) : (few ? 0 : 0.8 * ds);
+      if (together.size && together.has(i + "_" + j)) score = Math.min(1, score + 0.25);
+      if (score < SIMILAR_MIN) continue;
+      keep(a, b, score);
+      keep(b, a, score);
+    }
+  }
+  list.forEach(function(a) {
+    a.similar = a.best.map(function(e) { return e[1]; });
+    delete a.gv; delete a.dk; delete a.dw; delete a.best; delete a.hasGenres; delete a.i;
+  });
 }
 
 /**
@@ -635,4 +735,4 @@ async function publishLibrary(db, env, opts, log) {
   return built.counts;
 }
 
-module.exports = { buildLibrary: buildLibrary, publishLibrary: publishLibrary, foundViaReport: foundViaReport, writeFoundVia: writeFoundVia, slugOf: slugOf, usualTime: usualTime, readAxis: readAxis };
+module.exports = { buildLibrary: buildLibrary, publishLibrary: publishLibrary, foundViaReport: foundViaReport, writeFoundVia: writeFoundVia, slugOf: slugOf, usualTime: usualTime, readAxis: readAxis, similarArtists: similarArtists };
