@@ -920,13 +920,20 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     const built = library.buildLibrary(db, {
       users, bpm: {}, cards: { c1: { owner: "u1" } },
       years: { 2017: [{ cid: upload.cid, artist: "A", title: "B" }, { cid: "sameSong002", artist: "A", title: "B" }, { cid: "notplayed01", artist: "New", title: "Find" }] },
-      now: Date.UTC(2026, 10, 11)
+      now: Date.UTC(2026, 10, 11), genreYearMin: 1
     });
     const u = built.updates;
     assert.ok(u["discover/lib/genres"]["nu-disco"].songs >= 2, "every track in its genres");
     assert.deepEqual(u["discover/lib/genres"]["indie-dance"].next, ["nu-disco"], "next door: genres that share songs");
     assert.equal(u["discover/lib/genres"]["nu-disco"].x, 0.64, "the sound map position from genre-axis.csv");
     assert.match(u["discover/lib/genres"]["nu-disco"].about, /^Disco's grooves/, "one line about it, from genre-about.csv");
+    // a few sentences about it, from genre-stories.md: on the genre's own page, not in the list every page reads
+    const story = u["discover/lib/genre/nu-disco"].story;
+    assert.ok(Array.isArray(story) && story.length >= 2 && story.length <= 3 && /^Nu-disco is disco rebuilt/.test(story[0]) && story.every((p) => p.length <= 700 && !/\n/.test(p)), "its write-up, a paragraph at a time");
+    assert.equal(u["discover/lib/genres"]["nu-disco"].story, undefined);
+    const told = library.readStories(null), named = Object.keys(u["discover/lib/genres"]).map((k) => u["discover/lib/genres"][k].name);
+    assert.ok(named.every((g) => told[g]), "every genre in the library has a write-up");
+    assert.deepEqual(Object.keys(told).filter((g) => !/^[A-Z]/.test(g) || told[g].some((p) => /—|–/.test(p))), [], "write-ups: named as the genres are, no dashes for commas");
     const dec = u["discover/lib/genres"]["nu-disco"].dec;
     assert.ok(Object.keys(dec).length && Object.keys(dec).every((d) => /^\d{3}0$/.test(d)) && Object.values(dec).reduce((a, b) => a + b, 0) > 0, "plays by decade, for the sound map (" + JSON.stringify(dec) + ")");
     const fav = u["discover/lib/genre/nu-disco"].fav;
@@ -949,6 +956,13 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
     assert.equal(u["discover/lib/years"][2017].played, 1);
     assert.deepEqual(u["discover/lib/years"][2017].covers, [year.top[0].type + "_" + year.top[0].cid], "a year's covers: its most played");
     assert.equal(year.top.length, 1, "and is listed once in Most played here");
+    // a genre's songs released in a year (the year's playlist says which): a page of their own, listed on the genre
+    const gy = u["discover/lib/genreYear/nu-disco_2017"];
+    assert.ok(gy && gy.songs === 1 && gy.top.length === 1 && gy.top[0].cid === year.top[0].cid && gy.plays === year.top[0].plays, "the genre's songs of that year, most played first (" + JSON.stringify(gy) + ")");
+    assert.deepEqual(u["discover/lib/genres"]["nu-disco"].ys, [2017], "and the genre lists the years it has");
+    const strict = library.buildLibrary(db, { users, bpm: {}, cards: {}, years: { 2017: [{ cid: upload.cid, artist: "A", title: "B" }] }, now: Date.UTC(2026, 10, 11) }).updates;
+    assert.ok(strict["discover/lib/year/2017"] && !Object.keys(strict).some((k) => /^discover\/lib\/genreYear\//.test(k)) && !strict["discover/lib/genres"]["nu-disco"].ys,
+      "a year with fewer than 8 of a genre's songs has no page of its own");
     // the audit: no list on any library page holds a song twice (same upload, or same artist and title)
     const repeats = [];
     Object.keys(u).forEach((path) => {

@@ -6,7 +6,11 @@
 //   discover/lib/meta              when, and how many of each
 //   discover/lib/genres            every genre: name, songs, plays, usual BPM,
 //                                  first year, DJs, map position, covers, next door
-//   discover/lib/genre/<slug>      favorites, new here, deep cuts, by year, who plays it
+//   discover/lib/genre/<slug>      favorites, new here, deep cuts, by year, who plays it,
+//                                  and a few sentences about it (story)
+//   discover/lib/genreYear/<slug>_<year>  a genre's most played songs released that
+//                                  year (the year playlists say which year); the
+//                                  genre's entry in genres lists the years (ys)
 //   discover/lib/djs               DJs with 25+ plays: name, plays, firsts, top genres
 //   discover/lib/dj/<key>          taste, most played, brought here first, similar
 //                                  DJs, when they play, recent sets, cards
@@ -30,8 +34,9 @@ var genres = require("./genres");
 var store = require("./store");
 
 var DAY = 86400000;
-var ROWS = { fav: 100, newHere: 50, deep: 50, dj: 30, artist: 25, year: 40, yearMore: 24, rising: 20, onThisDay: 8 };
+var ROWS = { fav: 100, newHere: 50, deep: 50, dj: 30, artist: 25, year: 40, genreYear: 40, yearMore: 24, rising: 20, onThisDay: 8 };
 var DJ_MIN_PLAYS = 25;
+var GENRE_YEAR_MIN = 8;    // a genre's year gets a page with this many of its songs played here
 var ARTIST_MIN_PLAYS = 5;
 var ARTIST_MAX = 5000;
 var ARTIST_GENRES = 3;    // an artist's sound: up to this many genres
@@ -58,6 +63,28 @@ function readAxis(dir) {
       if (i > 0 && isFinite(v)) out[line.slice(0, i).trim()] = Math.max(0, Math.min(1, v));
     });
   });
+  return out;
+}
+
+/**
+ * A few sentences about each genre, from genre-stories.md (a copy in
+ * history-data/ wins): "## Genre name", then its paragraphs, a blank line
+ * between them. Up to three paragraphs of 700 characters each.
+ * @returns {Object<string, string[]>} genre name -> paragraphs
+ */
+function readStories(dir) {
+  var f = [dir ? path.join(dir, "genre-stories.md") : null, path.join(__dirname, "genre-stories.md")].filter(function(x) { return x && fs.existsSync(x); })[0];
+  var out = {};
+  if (!f) return out;
+  var name = null;
+  fs.readFileSync(f, "utf8").split(/\r?\n\s*\r?\n/).forEach(function(block) {
+    block = block.trim();
+    var h = /^##\s+(.+)$/.exec(block.split(/\r?\n/)[0]);
+    if (h) { name = h[1].trim(); out[name] = []; block = block.split(/\r?\n/).slice(1).join(" ").trim(); }
+    if (!name || !block || /^#/.test(block)) return;
+    if (out[name].length < 3) out[name].push(block.replace(/\s+/g, " ").slice(0, 700));
+  });
+  Object.keys(out).forEach(function(k) { if (!out[k].length) delete out[k]; });
   return out;
 }
 
@@ -114,6 +141,7 @@ function usualTime(times) {
  * @param {Object<string, {bpm}|number>} [opts.bpm] - tempos by "type_cid" (bpm/)
  * @param {Object<string, {owner}>} [opts.cards] - trading cards (cards/)
  * @param {Object<string, Array<{cid, artist, title}>>} [opts.years] - year playlists by year
+ * @param {number} [opts.genreYearMin] - songs a genre needs from one year for that year's page (GENRE_YEAR_MIN)
  * @param {number} [opts.now]
  * @param {string} [opts.dir] - history-data (for a genre-axis.csv of your own)
  * @returns {{updates: Object, counts: Object}}
@@ -251,6 +279,7 @@ function buildLibrary(db, opts) {
 
   var axis = readAxis(opts.dir);
   var about = readAbout(opts.dir);
+  var stories = readStories(opts.dir);
   // each track's plays by decade, for the sound map's decade filter
   var trackDecades = new Map(); // track -> {2010: n, ...}
   db.prepare("SELECT track_id, at FROM plays WHERE at IS NOT NULL").all().forEach(function(p) {
@@ -293,6 +322,7 @@ function buildLibrary(db, opts) {
     var years = {};
     gi.tracks.forEach(function(id) { var f = tracks.get(id).first_play_at; if (f) { var y = new Date(f).getFullYear(); years[y] = (years[y] || 0) + 1; } });
     updates["discover/lib/genre/" + sl] = {
+      story: stories[name] || null,
       fav: rows(ids, ROWS.fav),
       newHere: rows(gi.tracks.slice().sort(function(a, b) { return (tracks.get(b).first_play_at || 0) - (tracks.get(a).first_play_at || 0); }), ROWS.newHere),
       deep: rows(gi.tracks.filter(function(id) { return (tracks.get(id).plays || 0) <= 2; }).sort(function(a, b) { return (tracks.get(b).last_play_at || 0) - (tracks.get(a).last_play_at || 0); }), ROWS.deep),
@@ -442,6 +472,7 @@ function buildLibrary(db, opts) {
   var trackOfUpload = new Map();
   db.prepare("SELECT type, cid, track_id FROM uploads").all().forEach(function(u) { trackOfUpload.set(u.type + "_" + u.cid, u.track_id); });
   var yearIndex = {};
+  var genreYearMin = opts.genreYearMin || GENRE_YEAR_MIN;
   Object.keys(opts.years || {}).forEach(function(year) {
     var list = opts.years[year] || [];
     var played = [];
@@ -450,6 +481,7 @@ function buildLibrary(db, opts) {
     var genreCount = new Map();
     var seen = new Set();
     var seenTrack = new Set();
+    var byGenre = new Map(); // genre -> this year's songs played here
     list.forEach(function(it) {
       if (!it || !it.cid || seen.has(it.cid)) return;
       seen.add(it.cid);
@@ -463,6 +495,7 @@ function buildLibrary(db, opts) {
         played.push(id);
         plays += t.plays || 0;
         (genreOf.get(id) || []).slice(0, 1).forEach(function(g) { genreCount.set(g, (genreCount.get(g) || 0) + (t.plays || 0)); });
+        (genreOf.get(id) || []).forEach(function(g) { if (!byGenre.has(g)) byGenre.set(g, []); byGenre.get(g).push(id); });
       } else {
         unplayed.push({ type: 1, cid: it.cid, a: it.artist || "", t: it.title || "", plays: 0 });
       }
@@ -476,7 +509,21 @@ function buildLibrary(db, opts) {
     var more = [];
     for (var i = 0; i < unplayed.length && more.length < ROWS.yearMore; i += step) more.push(unplayed[i]);
     updates["discover/lib/year/" + year] = { top: rows(played.sort(byPlays), ROWS.year), more: more };
+    // a genre's songs from this year: "the best nu-disco of 2014", when there are enough of them
+    if (/^\d{4}$/.test(year)) {
+      byGenre.forEach(function(ids, g) {
+        var sl = genres.slug(g);
+        if (ids.length < genreYearMin || !genreIndex[sl]) return;
+        var top = rows(ids.slice().sort(byPlays), ROWS.genreYear);
+        if (top.length < genreYearMin) return;
+        updates["discover/lib/genreYear/" + sl + "_" + year] = {
+          songs: ids.length, plays: ids.reduce(function(sum, id) { return sum + (tracks.get(id).plays || 0); }, 0), top: top
+        };
+        (genreIndex[sl].ys = genreIndex[sl].ys || []).push(Number(year));
+      });
+    }
   });
+  Object.keys(genreIndex).forEach(function(sl) { if (genreIndex[sl].ys) genreIndex[sl].ys.sort(); });
   if (Object.keys(yearIndex).length) updates["discover/lib/years"] = yearIndex;
   counts.years = Object.keys(yearIndex).length;
 
@@ -722,7 +769,7 @@ async function publishLibrary(db, env, opts, log) {
     return built.counts;
   }
   // pages that are gone since the last run leave too
-  for (var coll of ["genre", "dj", "artist", "year", "onThisDay"]) {
+  for (var coll of ["genre", "genreYear", "dj", "artist", "year", "onThisDay"]) {
     var have = await c.keys("discover/lib/" + coll);
     have.forEach(function(k) {
       var p = "discover/lib/" + coll + "/" + k;
@@ -735,4 +782,4 @@ async function publishLibrary(db, env, opts, log) {
   return built.counts;
 }
 
-module.exports = { buildLibrary: buildLibrary, publishLibrary: publishLibrary, foundViaReport: foundViaReport, writeFoundVia: writeFoundVia, slugOf: slugOf, usualTime: usualTime, readAxis: readAxis, similarArtists: similarArtists };
+module.exports = { buildLibrary: buildLibrary, publishLibrary: publishLibrary, foundViaReport: foundViaReport, writeFoundVia: writeFoundVia, slugOf: slugOf, usualTime: usualTime, readAxis: readAxis, similarArtists: similarArtists, readStories: readStories };
