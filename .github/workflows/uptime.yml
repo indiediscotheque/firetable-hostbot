@@ -1,0 +1,61 @@
+# Is the room's bot up? Every 20 minutes, reads botSeen (the time the running
+# bot last wrote, every minute: app.js "Heartbeat") from the room's database
+# and fails when it's more than 10 minutes old or missing. GitHub emails a
+# failed run (Settings → Notifications → Actions: "Failed workflows only"),
+# so a crashed, hung or disconnected bot gets noticed. Run it by hand:
+# Actions → Bot uptime → Run workflow.
+# Needs the repository secret FIREBASE_DB (the bot's .env value, already set
+# for the Play history workflow). botSeen is public: no sign-in.
+# GitHub pauses scheduled workflows after 60 days without a commit to the
+# repository; Actions → Bot uptime → Enable workflow starts it again.
+
+name: Bot uptime
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: uptime
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FIREBASE_DB: ${{ secrets.FIREBASE_DB }}
+    steps:
+      - name: Check the bot's heartbeat
+        run: |
+          if [ -z "$FIREBASE_DB" ]; then
+            echo "::warning::No FIREBASE_DB secret, so the bot's heartbeat can't be checked."
+            exit 0
+          fi
+          db="${FIREBASE_DB%/}"
+          case "$db" in http*) ;; *) db="https://$db" ;; esac
+          seen=""
+          for try in 1 2 3; do
+            seen=$(curl -fsS -m 20 "$db/botSeen.json") && break
+            seen=""
+            sleep 20
+          done
+          if [ -z "$seen" ]; then
+            echo "::error::Couldn't read the heartbeat from the database (is it down, or are the rules not published?)."
+            exit 1
+          fi
+          now=$(date +%s%3N)
+          if ! [[ "$seen" =~ ^[0-9]+$ ]]; then
+            echo "::error::The bot has never written its heartbeat (botSeen is $seen): it isn't running, or firebase-rules.json isn't published."
+            exit 1
+          fi
+          age=$(( (now - seen) / 60000 ))
+          echo "Last heartbeat: $(date -u -d @$((seen / 1000)) '+%Y-%m-%d %H:%M:%S UTC') ($age min ago)."
+          if [ "$age" -gt 10 ]; then
+            echo "::error::The bot hasn't written its heartbeat for $age minutes: it has stopped, hung or lost its connection. Check it: pm2 status / pm2 logs hostbot."
+            exit 1
+          fi

@@ -306,6 +306,11 @@
       ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
+    "botSeen": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".validate": "newData.isNumber() && newData.val() == now"
+    },
     "pushKey": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",

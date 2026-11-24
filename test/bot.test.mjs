@@ -91,6 +91,7 @@ const scenarios = {
     check(flags(st.queues.dj1).length === 0 && JSON.stringify(Object.keys(st.queues.dj1)) === '["k1","k2"]', "YouTube outage: nothing flagged, list untouched");
     check(st.songToPlay.cid === "sc1" && st.songToPlay.djid === "dj2", "decks passed to the DJ with a SoundCloud track");
     check(said(st).filter((t) => /can't reach YouTube/.test(t)).length === 1, "room told once");
+    check(typeof st.botSeen === "number" && Math.abs(Date.now() - st.botSeen) < 60000, "heartbeat: botSeen holds the server's time (" + st.botSeen + ")");
     await healthy(p);
     return p;
   },
