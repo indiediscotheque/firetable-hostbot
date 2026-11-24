@@ -147,87 +147,14 @@ function lightsCommand(command, namebo) {
   });
 }
 
-// ─── One copy at a time ─────────────────────────────────────────────────────
-// Two copies of the bot (say, one started on a laptop with the live .env)
-// would each run every command and fight over the decks. The running copy
-// holds botLock, refreshed every minute and removed when it disconnects; a
-// second copy waits and takes over if the first stops, or if its lock goes
-// stale (3 minutes without a refresh). Before firebase-rules.json allows
-// botLock, the bot says so and runs without the guard.
-var INSTANCE_ID = require('crypto').randomUUID();
-var LOCK_REFRESH_MS = 60 * 1000;
-var LOCK_STALE_MS = 3 * 60 * 1000;
-var botLock = {
-  held: false,
-  waitingSaid: false,
-  ref: function() { return firebase.database().ref("botLock"); },
-  // Resolves once this copy holds the lock (or the rules don't allow it yet).
-  acquire: function() {
-    return new Promise(function(resolve) {
-      var tryNow = function() {
-        botLock.ref().transaction(function(cur) {
-          if (!cur || cur.id === INSTANCE_ID || !(serverNow() - (cur.seen || 0) < LOCK_STALE_MS)) {
-            return {
-              id: INSTANCE_ID,
-              host: require('os').hostname(),
-              pid: process.pid,
-              since: firebase.database.ServerValue.TIMESTAMP,
-              seen: firebase.database.ServerValue.TIMESTAMP
-            };
-          }
-          return; // someone else holds it
-        }).then(function(result) {
-          if (result.committed) {
-            botLock.held = true;
-            // messages that came in while another copy ran were its to handle
-            if (botLock.waitingSaid) chatWaiting = [];
-            botLock.ref().onDisconnect().remove();
-            botLock.watch();
-            console.log("holding the bot lock (only this copy runs the room)");
-            return resolve();
-          }
-          var cur = result.snapshot.val() || {};
-          if (!botLock.waitingSaid) {
-            botLock.waitingSaid = true;
-            console.log("another copy of the bot is running (on " + cur.host + ", pid " + cur.pid + "); this one waits and takes over if it stops.");
-          }
-          setTimeout(tryNow, 30 * 1000);
-        }).catch(function(err) {
-          if (/permission/i.test(err.code || err.message)) {
-            console.log("bot lock: the database rules don't allow botLock yet (publish firebase-rules.json); running without the one-copy guard.");
-            return resolve();
-          }
-          console.log("bot lock: " + err.message + "; trying again");
-          setTimeout(tryNow, 30 * 1000);
-        });
-      };
-      tryNow();
-    });
-  },
-  // While holding it: refresh it, take it back after a reconnect (a
-  // disconnect removes it), and stop if another copy took it meanwhile.
-  watch: function() {
-    setInterval(function() {
-      botLock.ref().child("seen").set(firebase.database.ServerValue.TIMESTAMP).catch(function() {});
-    }, LOCK_REFRESH_MS);
-    firebase.database().ref(".info/connected").on("value", function(snap) {
-      if (snap.val() !== true) return;
-      botLock.ref().transaction(function(cur) {
-        if (cur && cur.id !== INSTANCE_ID) return; // taken: handled below
-        return Object.assign({}, cur || {}, { id: INSTANCE_ID, host: require('os').hostname(), pid: process.pid, seen: firebase.database.ServerValue.TIMESTAMP });
-      }).then(function(result) {
-        if (result.committed) return botLock.ref().onDisconnect().remove();
-        botLock.lost(result.snapshot.val());
-      }).catch(function(err) {
-        console.log("bot lock refresh failed:", err.message);
-      });
-    });
-  },
-  lost: function(cur) {
-    console.log("another copy of the bot took over (on " + (cur && cur.host) + "); stopping this one.");
-    process.exit(0);
-  }
-};
+// ─── One copy at a time, and the heartbeat (lib/lock.js) ────────────────────
+var lock = require("./lib/lock").createLock({
+  db: function() { return firebase.database(); },
+  serverNow: serverNow,
+  tookOver: function() { chatWaiting = []; }
+});
+var botLock = lock.botLock;
+var heartbeat = lock.heartbeat;
 
 // Read the deck, waitlist, spotlight and playing song (all at once), then
 // pick up where the last copy left off.
@@ -262,27 +189,6 @@ var loadRoom = function() {
   });
 };
 
-// ─── Heartbeat ──────────────────────────────────────────────────────────────
-// botSeen: the server's time, written every minute while this copy runs the
-// room. Anyone can read it (a number, nothing else), so an outside check can
-// tell the room's bot is up: .github/workflows/uptime.yml fails, and GitHub
-// emails, when it's more than 10 minutes old. A hung bot or one that lost
-// its connection stops writing it, the same as one that crashed.
-var HEARTBEAT_MS = 60 * 1000;
-var heartbeat = {
-  timer: null,
-  beat: function() {
-    firebase.database().ref("botSeen").set(firebase.database.ServerValue.TIMESTAMP).catch(function(err) {
-      if (!heartbeat.warned) console.log("heartbeat: " + err.message + (/permission/i.test(err.code || err.message) ? " (publish firebase-rules.json)" : ""));
-      heartbeat.warned = true;
-    });
-  },
-  start: function() {
-    if (heartbeat.timer) return;
-    heartbeat.beat();
-    heartbeat.timer = setInterval(heartbeat.beat, HEARTBEAT_MS);
-  }
-};
 
 var starting = false;
 firebase.auth().onAuthStateChanged(function(user) {
@@ -1785,93 +1691,12 @@ var reactionForOtherSong = function(chatData) {
   return !!(chatData.forSong && song && song.started && chatData.forSong !== song.started);
 };
 
-// ─── Song tempo (BPM) ────────────────────────────────────────────────────────
-// When a song starts, look up its tempo on Deezer (free, no key) and publish
-// it as songBpm {started, bpm, src} so the site can bop to the beat (not on
-// songToPlay: clients treat any change there as a new song). Tempos are cached per
-// track in bpm/<type>_<cid>; anyone DJing or a mod can correct one with
-// "!bpm 128" (manual values are never overwritten by a lookup).
-var BPM_MIN = 40, BPM_MAX = 250;
-// Bump when the lookup gets better, so tracks it missed are tried again
-var BPM_LOOKUP_VERSION = 2;
-var bpmKey = function(type, cid) {
-  return String(type) + "_" + String(cid).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
-};
-var normalizeForMatch = function(str) {
-  return String(str || "").toLowerCase()
-    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/&amp;/g, "&").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "") // (Official Video), [Remastered]...
-    .replace(/\b(feat|ft|featuring)\.?\s.*$/, "")
-    .replace(/[^a-z0-9]+/g, " ").trim();
-};
-var looselyMatches = function(a, b) {
-  a = normalizeForMatch(a); b = normalizeForMatch(b);
-  if (!a || !b) return false;
-  return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0;
-};
-var getJSON = function(url) {
-  return http(url, { timeout: 10000 }).then(function(res) {
-    var body = res.json;
-    if (res.status !== 200 || !body || body.error) {
-      throw new Error((body && body.error && (body.error.message || body.error.type)) || "HTTP " + res.status);
-    }
-    return body;
-  });
-};
-// Deezer's fielded search (artist:"x" track:"y") returns nothing these days,
-// so search plainly and pick the hits whose artist and title match. Many
-// Deezer tracks have no tempo (bpm 0), so try the other matching versions of
-// the song (album, single, radio edit...) until one has it.
-var deezerBpm = function(artist, title) {
-  var q = (normalizeForMatch(artist) + " " + normalizeForMatch(title)).trim();
-  return getJSON("https://api.deezer.com/search?limit=15&q=" + encodeURIComponent(q)).then(function(res) {
-    var hits = (res.data || []).filter(function(t) {
-      return t && t.id && t.artist && looselyMatches(t.artist.name, artist) && looselyMatches(t.title, title);
-    }).slice(0, 4);
-    var tryHit = function(i) {
-      if (i >= hits.length) return null;
-      return getJSON("https://api.deezer.com/track/" + hits[i].id).then(function(t) {
-        var bpm = Number(t && t.bpm);
-        return bpm >= BPM_MIN && bpm <= BPM_MAX ? Math.round(bpm * 10) / 10 : tryHit(i + 1);
-      }, function() { return tryHit(i + 1); });
-    };
-    return tryHit(0);
-  });
-};
-// Put a tempo on the playing song, if it's still the same song
-var setSongBpm = function(started, bpm, src) {
-  if (!song || song.started !== started) return Promise.resolve();
-  song.bpm = bpm;
-  song.bpmSrc = src;
-  return firebase.database().ref("songBpm").set({ started: started, bpm: bpm, src: src }).catch(function(e) {
-    console.log("bpm update failed:", e.message);
-  });
-};
-var findBpm = function(s) {
-  if (!s || !s.cid || !s.started) return;
-  var key = bpmKey(s.type, s.cid);
-  firebase.database().ref("bpm/" + key).once("value").then(function(snap) {
-    var cached = snap.val();
-    if (cached && cached.bpm) return setSongBpm(s.started, cached.bpm, cached.src || "cache");
-    if (cached && cached.none && cached.v >= BPM_LOOKUP_VERSION && Date.now() - cached.at < 30 * 24 * 3600 * 1000) return; // looked up recently, nothing found
-    if (!s.artist || !s.title || s.artist === "Unknown") return;
-    return deezerBpm(s.artist, s.title).then(function(bpm) {
-      var entry = bpm ? { bpm: bpm, src: "deezer", at: Date.now() } : { none: true, v: BPM_LOOKUP_VERSION, at: Date.now() };
-      return firebase.database().ref("bpm/" + key).set(entry).then(function() {
-        if (bpm) return setSongBpm(s.started, bpm, "deezer");
-      });
-    });
-  }).catch(function(e) {
-    console.log("bpm lookup failed:", e && e.message);
-  });
-};
-var bpmLookedUpFor = null;
-firebase.database().ref("songToPlay").on("value", function(snap) {
-  var s = snap.val();
-  if (!s || !s.started || s.started === bpmLookedUpFor) return;
-  bpmLookedUpFor = s.started;
-  setTimeout(function() { findBpm(s); }, 500); // let the song settle first
-});
+// ─── Song tempo (BPM): Deezer, cached in bpm/ (lib/bpm.js) ──────────────────
+var bpmLib = require("./lib/bpm");
+var BPM_MIN = bpmLib.BPM_MIN, BPM_MAX = bpmLib.BPM_MAX, bpmKey = bpmLib.bpmKey;
+var tempo = bpmLib.createTempo({ db: function() { return firebase.database(); }, song: function() { return song; } });
+var setSongBpm = tempo.setSongBpm;
+tempo.watch();
 
 // !flag / !flagplay reasons
 var flagCodeFor = function(reason) {
