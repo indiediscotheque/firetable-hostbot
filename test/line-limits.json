@@ -1,0 +1,78 @@
+{
+  "//": "Files over 500 lines of code, and functions over 80: today's sizes, which may only go down (cd test && npm run size; --write after making one smaller)",
+  "app.js": {
+    "lines": 2113,
+    "longFunctions": 2
+  },
+  "lib/commands.js": {
+    "lines": 503,
+    "longFunctions": 3
+  },
+  "lib/discover.js": {
+    "lines": 718,
+    "longFunctions": 1
+  },
+  "lib/gts.js": {
+    "longFunctions": 1
+  },
+  "lib/imports.js": {
+    "longFunctions": 1
+  },
+  "lib/lock.js": {
+    "longFunctions": 1
+  },
+  "lib/media.js": {
+    "longFunctions": 1
+  },
+  "lib/push.js": {
+    "longFunctions": 1
+  },
+  "lib/swaps.js": {
+    "lines": 1259,
+    "longFunctions": 5
+  },
+  "lib/tags.js": {
+    "lines": 506,
+    "longFunctions": 1
+  },
+  "lib/ytmsync.js": {
+    "lines": 742,
+    "longFunctions": 3
+  },
+  "lib/ytmusic.js": {
+    "lines": 509
+  },
+  "lib/ytplaylists.js": {
+    "longFunctions": 2
+  },
+  "tools/history/cli.js": {
+    "longFunctions": 1
+  },
+  "tools/history/firebase.js": {
+    "longFunctions": 1
+  },
+  "tools/history/library.js": {
+    "lines": 645,
+    "longFunctions": 1
+  },
+  "tools/history/placeholders.js": {
+    "longFunctions": 1
+  },
+  "tools/history/publish.js": {
+    "longFunctions": 1
+  },
+  "tools/history/reconcile.js": {
+    "lines": 1096,
+    "longFunctions": 2
+  },
+  "tools/history/report.js": {
+    "longFunctions": 1
+  },
+  "tools/history/sources.js": {
+    "lines": 675,
+    "longFunctions": 1
+  },
+  "tools/history/verify.js": {
+    "longFunctions": 1
+  }
+}

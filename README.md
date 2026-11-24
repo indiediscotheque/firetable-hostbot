@@ -403,8 +403,25 @@ Usernames are unique whatever their case ("Boss" and "boss" are one name): names
 
 Chat messages are saved together with their chat feed entry in one write. Older copies of the site that save them in three steps keep working. The bot acts on each message once, and ignores commands more than 2 minutes old (sent before a long disconnect, or a copy of an old message added to the feed again).
 
+## code layout
+`app.js` is the room: its state (the deck, the line, the song), the song flow and autopilot, and the wiring. The rest is in `lib/`, one job a module, each made by a `create…(deps)` that gets what it needs from `app.js`:
+
+| module | what it does |
+|---|---|
+| `lib/commands.js` | the chat commands (`!addme`, `!skip`, `!theme`, `!flag`, `!bpm`, …) |
+| `lib/gts.js` | the global tag system: each upload linked to its track, and mods' tag fixes spread |
+| `lib/push.js` | push notifications (Web Push, `lib/webpush.js`) |
+| `lib/media.js` | YouTube Data API and SoundCloud lookups |
+| `lib/bpm.js` | song tempos (Deezer, cached in `bpm/`) |
+| `lib/lock.js` | one copy at a time (`botLock`) and the heartbeat (`botSeen`) |
+| `lib/seasons.js` | the seasons read from the live site's `config.js` (never run) |
+| `lib/lastfm.js` | scrobbling and play counts |
+| `lib/swaps.js`, `lib/ytmsync.js`, `lib/ytplaylists.js`, `lib/discover.js`, `lib/imports.js`, `lib/stage.js`, … | swap suggestions, the YOUTUBE MUSIC playlist, genre playlists, Discover, imports, the live stage's summary (their sections above) |
+
+New features go in a module of their own. Files are held to 500 lines of code and functions to 80 (ESLint `max-lines`; comments don't count); the ones already over keep today's size as their cap, which only goes down (`test/line-limits.json`, `cd test && npm run size`; CLAUDE.md, "File size").
+
 ## tests
-`.github/workflows/test.yml` runs on every pull request and every push to `master` (the bot's scenarios as three jobs side by side, `BOT_SHARD`): ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), their types (`npm run typecheck`: TypeScript checks the code against its JSDoc comments, `jsconfig.json`; no build step, the bot runs as written, so a comment saying what a function takes or returns has to stay true), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation; the YOUTUBE MUSIC sync against an in-memory database, with DJ-mix titles from the real year playlists), the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, the YOUTUBE MUSIC sync, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
+`.github/workflows/test.yml` runs on every pull request and every push to `master` (the bot's scenarios as three jobs side by side, `BOT_SHARD`): ESLint on `app.js`, `lib/` and `tools/` (it catches undeclared variables), file and function size (`npm run size`, see [code layout](#code-layout)), their types (`npm run typecheck`: TypeScript checks the code against its JSDoc comments, `jsconfig.json`; no build step, the bot runs as written, so a comment saying what a function takes or returns has to stay true), unit tests of the helpers in `lib/` (push encryption is checked against `http_ece`, the reference implementation; the YOUTUBE MUSIC sync against an in-memory database, with DJ-mix titles from the real year playlists), the tag matcher and the play history toolkit on sample ADAM / Last.fm / Firebase exports, the rules against the Firebase emulator (what users mustn't write, and everything the site and bot do write), the bot itself in the emulators with fake YouTube / SoundCloud / push-service answers (outages, broken tracks, skips, commands, names, push notifications, the YOUTUBE MUSIC sync, restarts), and the auto-update script with a fake pm2. Run them on your computer (Java 21 needed for the emulators):
 ```
 npm ci && cd test && npm ci && npm test
 ```

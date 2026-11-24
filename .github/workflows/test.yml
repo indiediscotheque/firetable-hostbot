@@ -66,6 +66,10 @@ jobs:
       - name: Types
         run: cd test && npm run typecheck
 
+      # 500 lines of code a file, 80 a function; the big files only shrink (test/line-limits.json)
+      - name: File and function size
+        run: cd test && npm run size
+
       - name: Unit tests
         run: cd test && npm run test:unit
 
