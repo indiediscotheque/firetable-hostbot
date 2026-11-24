@@ -289,6 +289,34 @@ await expect("DENIED", "read every device", eve.ref("pushSubs").once("value"));
 await expect("DENIED", "read the bot's private key", eve.ref("pushVapid").once("value"));
 await expect("DENIED", "change the public push key", eve.ref("pushKey").set(P256));
 
+console.log("-- visitors' reports (clientErrors, clientVitals: the site's js/telemetry.js)");
+const anon = env.unauthenticatedContext().database();
+const errRep = (x) => Object.assign({ m: "TypeError: x is undefined", f: "js/chat.js?v=0123456789", l: 1, c: 2048, st: "at a (https://example.com/js/chat.js?v=0123456789:1:2048)",
+  p: "/#live", b: "Chrome 140 / Android", v: "0123456789", u: false, at: TS }, x);
+const vitRep = (x) => Object.assign({ lcp: 1800, fcp: 900, ttfb: 200, inp: 120, cls: 0.02, view: "live", mob: true, b: "Safari 18 / iOS", v: "0123456789", u: true, at: TS }, x);
+await expect("ALLOWED", "a visitor's browser reports an error", anon.ref("clientErrors").push(errRep()));
+await expect("ALLOWED", "a member's browser reports how fast the visit felt", eve.ref("clientVitals").push(vitRep()));
+await expect("ALLOWED", "a report with only what's known", anon.ref("clientVitals").push({ ttfb: 300, at: TS }));
+await expect("DENIED", "a visitor reads the reports", anon.ref("clientErrors").once("value"));
+await expect("DENIED", "a member reads the reports", eve.ref("clientVitals").once("value"));
+await expect("ALLOWED", "a supermod reads the reports", db("boss").ref("clientErrors").once("value"));
+await expect("ALLOWED", "the bot reads the reports", db("bot").ref("clientVitals").once("value"));
+await env.withSecurityRulesDisabled((ctx) => ctx.database().ref("clientErrors/kept").set({ m: "kept", at: 1 }));
+await expect("DENIED", "someone changes a report", anon.ref("clientErrors/kept/m").set("changed"));
+await expect("DENIED", "someone replaces a report", eve.ref("clientErrors/kept").set(errRep()));
+await expect("DENIED", "someone deletes a report", eve.ref("clientErrors/kept").remove());
+await expect("DENIED", "someone deletes every report", eve.ref("clientErrors").remove());
+await expect("ALLOWED", "the bot prunes a report", db("bot").ref("clientErrors/kept").remove());
+await expect("DENIED", "an error report of 200 KB", anon.ref("clientErrors").push(errRep({ m: big })));
+await expect("DENIED", "a stack of 200 KB", anon.ref("clientErrors").push(errRep({ st: big })));
+await expect("DENIED", "an extra field", anon.ref("clientErrors").push(errRep({ junk: "x" })));
+await expect("DENIED", "an error report without its message", anon.ref("clientErrors").push(errRep({ m: null })));
+await expect("DENIED", "a backdated report", anon.ref("clientErrors").push(errRep({ at: 1 })));
+await expect("DENIED", "a vital that's text", anon.ref("clientVitals").push(vitRep({ lcp: "fast" })));
+await expect("DENIED", "a vital out of range", anon.ref("clientVitals").push(vitRep({ cls: 1000 })));
+await expect("DENIED", "a negative vital", anon.ref("clientVitals").push(vitRep({ inp: -1 })));
+await expect("DENIED", "an extra field in a vitals report", anon.ref("clientVitals").push(vitRep({ uid: "eve" })));
+
 console.log("-- heartbeat (botSeen)");
 await expect("ALLOWED", "bot writes its heartbeat (server time)", db("bot").ref("botSeen").set(TS));
 await expect("ALLOWED", "anyone, signed in or not, reads it", env.unauthenticatedContext().database().ref("botSeen").once("value"));

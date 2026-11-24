@@ -625,6 +625,32 @@ var pruneNotices = function() {
 };
 setInterval(pruneNotices, 6 * 60 * 60 * 1000);
 
+// What visitors' browsers report (the site's js/telemetry.js): errors in its
+// scripts (clientErrors) and how fast each visit felt (clientVitals). The
+// weekly Site health workflow (tools/site-health.js) reads the last week;
+// anything older than two weeks goes, 500 at a time.
+var REPORT_DAYS = 14;
+var pruneReports = function() {
+  var cutoff = serverNow() - REPORT_DAYS * 24 * 60 * 60 * 1000;
+  ["clientErrors", "clientVitals"].forEach(function(path) {
+    var ref = firebase.database().ref(path);
+    var round = function() {
+      return ref.orderByChild("at").endAt(cutoff).limitToFirst(500).once("value").then(function(snap) {
+        var updates = {};
+        snap.forEach(function(item) { updates[item.key] = null; });
+        var n = Object.keys(updates).length;
+        if (!n) return;
+        return ref.update(updates).then(function() { if (n === 500) return round(); });
+      });
+    };
+    round().catch(function(err) {
+      if (!/permission/i.test((err && (err.code || err.message)) || "")) console.log(path + " prune error:", err && err.message);
+    });
+  });
+};
+setInterval(pruneReports, 6 * 60 * 60 * 1000);
+setTimeout(pruneReports, 10 * 1000); // and soon after a start
+
 // Room state only the bot writes (deck, line, spotlight, play limit, dance,
 // colours). Everyone in the room downloads every write, even one that changes
 // nothing, so only values that changed are sent.

@@ -1295,3 +1295,53 @@ test("artwork colours: an image seen lately isn't downloaded again; one that cou
     global.fetch = realFetch;
   }
 });
+
+// ─── Site health (tools/site-health.js) ─────────────────────────────────────
+const health = require("../tools/site-health.js");
+// esbuild --minify --sourcemap of a small script: greet() on lines 1-4, broken() on 5-8
+const GEN = 'var greet=function(r){var e="hi "+r;return e.toUpperCase()};function broken(r){var e=r[0];return e.missing.value}';
+const MAP = { version: 3, sources: ["demo.js"], names: ["personName", "message", "things", "first"],
+  mappings: "AAAA,IAAI,MAAQ,SAAUA,EAAY,CAChC,IAAIC,EAAU,MAAQD,EACtB,OAAOC,EAAQ,YAAY,CAC7B,EACA,SAAS,OAAOC,EAAQ,CACtB,IAAIC,EAAQD,EAAO,CAAC,EACpB,OAAOC,EAAM,QAAQ,KACvB" };
+
+test("site health: a minified position maps back to its line in the source", () => {
+  const col = (s) => GEN.indexOf(s) + 1; // browsers count columns from 1
+  assert.equal(health.originalPosition(MAP, 1, col("e.missing")).line, 7);
+  assert.equal(health.originalPosition(MAP, 1, col("e.missing")).name, "first");
+  assert.equal(health.originalPosition(MAP, 1, col("e.toUpperCase")).line, 3);
+  assert.equal(health.originalPosition(MAP, 1, col("var e=r[0]")).line, 6);
+  assert.equal(health.originalPosition(MAP, 1, 1).line, 1);
+  assert.equal(health.originalPosition(MAP, 2, 1), null); // no such line
+  assert.deepEqual(health.vlq("AAAA"), [0, 0, 0, 0]);
+  assert.deepEqual(health.vlq("D"), [-1]);
+  assert.deepEqual(health.vlq("gB"), [16]);
+});
+
+test("site health: errors group by what and where, vitals take the 75th percentile", async () => {
+  assert.deepEqual(health.splitFile("js/chat.js?v=0123456789"), { path: "js/chat.js", v: "0123456789" });
+  assert.deepEqual(health.splitFile(""), { path: "", v: null });
+  const errors = {
+    a: { m: "boom", f: "js/chat.js?v=0123456789", l: 1, c: 50, b: "Chrome 140 / Android", p: "/#live", at: 1 },
+    b: { m: "boom", f: "js/chat.js?v=0123456789", l: 1, c: 50, b: "Chrome 140 / Android", p: "/#live", at: 3 },
+    c: { m: "other", f: "js/ui.js?v=aaaaaaaaaa", l: 1, c: 9, b: "Safari 17 / iOS", at: 2 }
+  };
+  const g = health.groupErrors(errors);
+  assert.equal(g.length, 2);
+  assert.equal(g[0].count, 2);
+  assert.equal(g[0].last, 3);
+  assert.equal(health.p75([1, 2, 3, 4]), 3);
+  assert.equal(health.p75([]), null);
+  const vitals = {};
+  for (let i = 0; i < 20; i++) vitals["p" + i] = { lcp: 5000 + i, inp: 100, cls: 0.01, mob: true, at: i };
+  for (let i = 0; i < 4; i++) vitals["c" + i] = { lcp: 1000, inp: 600, cls: 0.5, mob: false, at: i };
+  const v = health.vitalsBy(vitals);
+  assert.equal(v.phones.visits, 20);
+  assert.equal(v.phones.lcp, 5014);
+  assert.equal(v.computers.inp, 600);
+  // a live error and a poor vital over enough visits need a look; a poor one over 4 visits doesn't
+  const r = await health.report({ errors, vitals, days: 7, live: async (grp) => ({ where: grp.path, live: grp.m === "boom" }) });
+  assert.match(r.markdown, /\| 2 \| boom \| js\/chat\.js \| \*\*yes\*\*/);
+  assert.deepEqual(r.problems, ["2× boom", "Largest paint on phones: 5014 ms"]);
+  const quiet = await health.report({ errors: {}, vitals: {}, days: 7, live: async () => ({ where: "", live: false }) });
+  assert.deepEqual(quiet.problems, []);
+  assert.match(quiet.markdown, /None reported/);
+});

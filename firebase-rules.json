@@ -311,6 +311,47 @@
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
       ".validate": "newData.isNumber() && newData.val() == now"
     },
+    "clientErrors": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".indexOn": ["at"],
+      "$id": {
+        ".write": "!data.exists()",
+        ".validate": "$id.length <= 40 && newData.hasChildren(['m', 'at'])",
+        "m": { ".validate": "newData.isString() && newData.val().length <= 300" },
+        "f": { ".validate": "newData.isString() && newData.val().length <= 120" },
+        "l": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000000" },
+        "c": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000000" },
+        "st": { ".validate": "newData.isString() && newData.val().length <= 800" },
+        "p": { ".validate": "newData.isString() && newData.val().length <= 80" },
+        "b": { ".validate": "newData.isString() && newData.val().length <= 60" },
+        "v": { ".validate": "newData.isString() && newData.val().length <= 20" },
+        "u": { ".validate": "newData.isBoolean()" },
+        "at": { ".validate": "newData.val() == now" },
+        "$other": { ".validate": false }
+      }
+    },
+    "clientVitals": {
+      ".read": "root.child('users/' + auth.uid + '/hostbot').val() == true || root.child('users/' + auth.uid + '/supermod').val() == true",
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
+      ".indexOn": ["at"],
+      "$id": {
+        ".write": "!data.exists()",
+        ".validate": "$id.length <= 40 && newData.hasChild('at')",
+        "lcp": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 600000" },
+        "fcp": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 600000" },
+        "ttfb": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 600000" },
+        "inp": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 600000" },
+        "cls": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
+        "view": { ".validate": "newData.isString() && newData.val().length <= 12" },
+        "mob": { ".validate": "newData.isBoolean()" },
+        "b": { ".validate": "newData.isString() && newData.val().length <= 60" },
+        "v": { ".validate": "newData.isString() && newData.val().length <= 20" },
+        "u": { ".validate": "newData.isBoolean()" },
+        "at": { ".validate": "newData.val() == now" },
+        "$other": { ".validate": false }
+      }
+    },
     "pushKey": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",

@@ -902,7 +902,10 @@ const scenarios = {
     // the song on the decks when the bot starts has ended: its play is logged
     await put("/", base({ queues: { dj1: { k1: yt("yt1") }, dj2: { s1: yt("yt2") } },
       users: Object.assign(base({}).users, { quiet: { username: "quiet", status: true, publicName: false } }),
-      discover: { chat: { msgs: [{ txt: "left over from before" }] } } }));
+      discover: { chat: { msgs: [{ txt: "left over from before" }] } },
+      // visitors' reports (the site's js/telemetry.js): two weeks are kept
+      clientErrors: { old1: { m: "old", at: Date.now() - 15 * 86400000 }, new1: { m: "new", at: Date.now() - 86400000 } },
+      clientVitals: { old1: { lcp: 1, at: Date.now() - 15 * 86400000 }, new1: { lcp: 2, at: Date.now() - 86400000 } } }));
     const p = startBot("discover", { YTMUSIC_SOURCES: "2026=PLfakeyear2001" });
     check(await waitFor(p, "Listening now."), "bot says Listening now.");
     await say("dj1", "this one is great");
@@ -915,6 +918,8 @@ const scenarios = {
     check(st.discover && st.discover.chartIds && st.discover.chartIds.week && Object.keys(st.discover.chartIds.week).length >= 2, "last week's chart is finished off too");
     check(!(st.discover && st.discover.chat), "the retired chat peek is cleared, and members' messages aren't published");
     check(st.discover && st.discover.new && Array.isArray(st.discover.new.tracks || []), "new releases are published");
+    check(JSON.stringify(Object.keys(st.clientErrors || {})) === '["new1"]' && JSON.stringify(Object.keys(st.clientVitals || {})) === '["new1"]',
+      "visitors' error and speed reports older than two weeks are pruned soon after a start (" + JSON.stringify([st.clientErrors, st.clientVitals]) + ")");
     // a mod fixes that song's tags on the site: the published chart follows at once
     const row = (week.rows || []).find((r) => r.cid === "old") || {};
     const weekId = Object.keys(st.discover.charts.week).find((id) => !st.discover.charts.week[id].final);
