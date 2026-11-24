@@ -418,7 +418,30 @@ var loadRoom = function() {
     updateThings();
     started = true;
     markChatReady();
+    heartbeat.start();
   });
+};
+
+// ─── Heartbeat ──────────────────────────────────────────────────────────────
+// botSeen: the server's time, written every minute while this copy runs the
+// room. Anyone can read it (a number, nothing else), so an outside check can
+// tell the room's bot is up: .github/workflows/uptime.yml fails, and GitHub
+// emails, when it's more than 10 minutes old. A hung bot or one that lost
+// its connection stops writing it, the same as one that crashed.
+var HEARTBEAT_MS = 60 * 1000;
+var heartbeat = {
+  timer: null,
+  beat: function() {
+    firebase.database().ref("botSeen").set(firebase.database.ServerValue.TIMESTAMP).catch(function(err) {
+      if (!heartbeat.warned) console.log("heartbeat: " + err.message + (/permission/i.test(err.code || err.message) ? " (publish firebase-rules.json)" : ""));
+      heartbeat.warned = true;
+    });
+  },
+  start: function() {
+    if (heartbeat.timer) return;
+    heartbeat.beat();
+    heartbeat.timer = setInterval(heartbeat.beat, HEARTBEAT_MS);
+  }
 };
 
 var starting = false;

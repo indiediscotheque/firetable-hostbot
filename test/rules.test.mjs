@@ -288,6 +288,13 @@ await expect("DENIED", "read someone else's devices", eve.ref("pushSubs/bob").on
 await expect("DENIED", "read every device", eve.ref("pushSubs").once("value"));
 await expect("DENIED", "read the bot's private key", eve.ref("pushVapid").once("value"));
 await expect("DENIED", "change the public push key", eve.ref("pushKey").set(P256));
+
+console.log("-- heartbeat (botSeen)");
+await expect("ALLOWED", "bot writes its heartbeat (server time)", db("bot").ref("botSeen").set(TS));
+await expect("ALLOWED", "anyone, signed in or not, reads it", env.unauthenticatedContext().database().ref("botSeen").once("value"));
+await expect("DENIED", "someone else writes the heartbeat", eve.ref("botSeen").set(TS));
+await expect("DENIED", "bot writes a made-up time", db("bot").ref("botSeen").set(Date.now() + 3600000));
+await expect("DENIED", "bot writes text", db("bot").ref("botSeen").set("up"));
 await expect("DENIED", "device on your own server (not a push service)", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "https://evil.example/push" })));
 await expect("DENIED", "device on a look-alike host", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "https://fcm.googleapis.com.evil.example/x" })));
 await expect("DENIED", "device on plain http", eve.ref("pushSubs/eve/dev_eve_3").set(device({ endpoint: "http://fcm.googleapis.com/fcm/send/x" })));

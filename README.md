@@ -99,6 +99,8 @@ Two things it can't do for you: if `firebase-rules.json` changed, deploy the rul
 Without auto-update: `cd ~/firetable-hostbot && git pull && npm ci && pm2 restart hostbot`
 
 ## if the bot goes down
+**Finding out:** the running bot writes the server's time to `botSeen` every minute (public, a number only). The **Bot uptime** workflow (`.github/workflows/uptime.yml`) reads it every 20 minutes and fails when it's more than 10 minutes old, so GitHub emails you about a crashed, hung or disconnected bot (it uses the `FIREBASE_DB` repository secret the Play history workflow already has; publish `firebase-rules.json` first). Check by hand: Actions → Bot uptime → Run workflow.
+
 Work down the list; stop when it's back.
 
 **1. Connect.** `ssh -i $HOME\.ssh\hostbot.key ubuntu@<server-ip>`. If it times out or is refused, the server is off: go to step 4.
