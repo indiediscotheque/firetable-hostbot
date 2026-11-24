@@ -1345,3 +1345,53 @@ test("site health: errors group by what and where, vitals take the 75th percenti
   assert.deepEqual(quiet.problems, []);
   assert.match(quiet.markdown, /None reported/);
 });
+
+// ─── Seasons from the site (lib/seasons.js) ─────────────────────────────────
+const seasons = require("../lib/seasons.js");
+
+test("seasons: the site's settings are read as plain data, never run", () => {
+  const src = `var AVATAR_SEASONS = [{ months: [10], style: "set2" }];
+    var ftconfigs = { avatarset: "", lightsMonths: [11, 12], roomName: \`Basement\` };
+    ftconfigs.snowMonths = [1, 2];
+    window.LIGHTS_MONTHS = [12];
+    var ran = (function () { globalThis.__ranSiteCode = true; return 1; })();
+    var __proto__ = { polluted: true };
+    ftconfigs.__proto__ = { polluted: true };
+    var neg = -3, re = /x/;`;
+  const out = seasons.readPlainData(src, "config.js");
+  assert.deepEqual(out.AVATAR_SEASONS, [{ months: [10], style: "set2" }]);
+  assert.deepEqual(out.ftconfigs, { avatarset: "", lightsMonths: [11, 12], roomName: "Basement", snowMonths: [1, 2] });
+  assert.deepEqual(out.LIGHTS_MONTHS, [12]);
+  assert.equal(out.neg, -3);
+  assert.ok(!("ran" in out) && !("re" in out), "code and regexes aren't data");
+  assert.equal(globalThis.__ranSiteCode, undefined, "nothing in the file runs");
+  assert.equal(({}).polluted, undefined);
+  assert.equal(Object.getPrototypeOf(out.ftconfigs), Object.prototype);
+  assert.throws(() => seasons.readPlainData("var x = {", "broken.js"));
+});
+
+test("seasons: without SITE_URL the defaults hold, and .env forces a value", async () => {
+  const quiet = () => {};
+  const def = seasons.createSiteSeasons({}, quiet);
+  await def.refresh();
+  assert.deepEqual(def.lightsMonths(), seasons.SITE_SEASON_DEFAULTS.lightsMonths);
+  assert.equal(def.isLightsSeason(new Date(2026, 11, 5)), true);
+  assert.equal(def.isLightsSeason(new Date(2026, 5, 5)), false);
+  assert.equal(def.avatarset(), "");
+  const forced = seasons.createSiteSeasons({ AVATARSET: "set4", LIGHTS_MONTHS: "6,7" }, quiet);
+  assert.equal(forced.forcedAvatarStyle(), "robohash:set4");
+  assert.deepEqual(forced.lightsMonths(), [6, 7]);
+  assert.equal(forced.isLightsSeason(new Date(2026, 5, 5)), true);
+});
+
+// ─── Last.fm (lib/lastfm.js) ────────────────────────────────────────────────
+test("lastfm: calls are signed the way Last.fm asks, and nothing is sent without the secret", () => {
+  const { createLastfm } = require("../lib/lastfm.js");
+  const { createHash } = require("crypto");
+  const lf = createLastfm({ LASTFM_APIKEY: "key", LASTFM_SECRET: "shh", LASTFM_SESSIONKEY: "sk" });
+  const params = { method: "track.scrobble", track: "Song ü", artist: "Artist", api_key: "key", sk: "sk" };
+  // sorted by name: api_key, artist, method, sk, track; then the secret
+  const raw = "api_keykey" + "artistArtist" + "methodtrack.scrobble" + "sksk" + "trackSong ü" + "shh";
+  assert.equal(lf.getApiSignature(params), createHash("md5").update(raw, "utf8").digest("hex"));
+  assert.equal(createLastfm({ LASTFM_APIKEY: "key" }).key, null, "no secret: no scrobbling");
+});

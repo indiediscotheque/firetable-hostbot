@@ -16,7 +16,6 @@ try {
 var firebase = require('@firebase/app-compat').default;
 require('@firebase/auth-compat');
 require('@firebase/database-compat');
-var acorn = require('acorn');
 var http = require('./lib/http').http;
 var artworkColors = require('./lib/colors').artworkColors;
 var text = require('./lib/text');
@@ -39,6 +38,7 @@ var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
 var social = require('./lib/social');
 var retag = require('./lib/retag');
+var lastfm = require('./lib/lastfm').createLastfm(process.env); // scrobbling
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -87,146 +87,10 @@ function serverNow() {
 }
 
 // ─── Seasons, from the site ─────────────────────────────────────────────────
-// The site (firetable-user) decides the seasonal trading-card avatars and the
-// string-lights months: js/seasons.js holds the defaults and config.js can
-// override them. With SITE_URL set, the bot reads both files from the live
-// site at startup and every 10 minutes, so a change there reaches the bot on
-// its own. Without SITE_URL (or if the site can't be reached) it uses the
-// last values it read, or these defaults, which match the site's.
-// AVATARSET / LIGHTS_MONTHS in .env still force a value, but leave them unset
-// to follow the site.
-var SITE_SEASONS_REFRESH_MS = 10 * 60 * 1000;
-var SITE_SEASON_DEFAULTS = {
-  avatarset: "",
-  avatarSeasons: [{ months: [10], style: "set2" }], // October: monsters
-  lightsMonths: [12] // December
-};
-var siteSeasons = JSON.parse(JSON.stringify(SITE_SEASON_DEFAULTS));
-var siteSeasonsRead = false;
-
-function fetchSiteFile(path) {
-  var url = new URL(path, process.env.SITE_URL.trim().replace(/\/?$/, "/"));
-  url.searchParams.set("t", String(Date.now())); // skip any cached copy
-  return fetch(url, { signal: AbortSignal.timeout(15000) }).then(function(res) {
-    if (!res.ok) throw new Error(path + " answered HTTP " + res.status);
-    return res.text();
-  });
-}
-
-// The top-level settings in one of the site's scripts, read with a parser:
-// nothing in the file runs, so a broken or tampered site can't run code on the
-// bot. It reads `var NAME = <data>`, `NAME = <data>`, `window.NAME = <data>`
-// and `NAME.key = <data>`, where <data> is plain data (text, numbers,
-// true/false/null, lists and objects of those). Anything else is left out.
-var NOT_DATA = {};
-function plainValue(node) {
-  if (!node) return NOT_DATA;
-  switch (node.type) {
-    case "Literal":
-      return node.regex || typeof node.value === "bigint" ? NOT_DATA : node.value;
-    case "TemplateLiteral":
-      return node.expressions.length ? NOT_DATA : node.quasis[0].value.cooked;
-    case "UnaryExpression":
-      if ((node.operator === "-" || node.operator === "+") && node.argument.type === "Literal" && typeof node.argument.value === "number") {
-        return node.operator === "-" ? -node.argument.value : node.argument.value;
-      }
-      return NOT_DATA;
-    case "Identifier":
-      return node.name === "undefined" ? undefined : NOT_DATA;
-    case "ArrayExpression":
-      var list = [];
-      for (var i = 0; i < node.elements.length; i++) {
-        var item = node.elements[i] ? plainValue(node.elements[i]) : null;
-        if (item === NOT_DATA) return NOT_DATA;
-        list.push(item);
-      }
-      return list;
-    case "ObjectExpression":
-      var obj = {};
-      node.properties.forEach(function(prop) {
-        if (prop.type !== "Property" || prop.kind !== "init" || prop.method || prop.computed) return;
-        var key = prop.key.type === "Identifier" ? prop.key.name : String(prop.key.value);
-        var value = plainValue(prop.value);
-        if (value !== NOT_DATA && key !== "__proto__") obj[key] = value;
-      });
-      return obj;
-    default:
-      return NOT_DATA;
-  }
-}
-
-function readPlainData(source, filename) {
-  var ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "script", allowHashBang: true, sourceFile: filename });
-  var out = {};
-  var set = function(name, node) {
-    var value = plainValue(node);
-    if (value !== NOT_DATA && name !== "__proto__") out[name] = value;
-  };
-  ast.body.forEach(function(stmt) {
-    if (stmt.type === "VariableDeclaration") {
-      stmt.declarations.forEach(function(decl) {
-        if (decl.id.type === "Identifier" && decl.init) set(decl.id.name, decl.init);
-      });
-      return;
-    }
-    var expr = stmt.type === "ExpressionStatement" && stmt.expression;
-    if (!expr || expr.type !== "AssignmentExpression" || expr.operator !== "=") return;
-    var left = /** @type {any} */ (expr.left); // acorn's node: an Identifier or a MemberExpression here
-    if (left.type === "Identifier") return set(left.name, expr.right);
-    if (left.type !== "MemberExpression" || left.computed || left.object.type !== "Identifier") return;
-    if (left.object.name === "window") return set(left.property.name, expr.right);
-    // NAME.key = <data>, e.g. ftconfigs.avatarset = "set3"
-    var target = out[left.object.name];
-    var value = plainValue(expr.right);
-    if (target && typeof target === "object" && value !== NOT_DATA && left.property.name !== "__proto__") {
-      target[left.property.name] = value;
-    }
-  });
-  return out;
-}
-
-function firstDefined() {
-  for (var i = 0; i < arguments.length; i++) {
-    if (arguments[i] !== undefined) return arguments[i];
-  }
-}
-
-function refreshSiteSeasons() {
-  if (!process.env.SITE_URL) {
-    if (!siteSeasonsRead) console.log("site seasons: SITE_URL isn't set, using the defaults:", JSON.stringify(siteSeasons));
-    siteSeasonsRead = true;
-    return Promise.resolve();
-  }
-  return Promise.all([
-    // An older site without js/seasons.js still works: its defaults are ours.
-    fetchSiteFile("js/seasons.js").catch(function() { return ""; }),
-    fetchSiteFile("config.js")
-  ]).then(function(files) {
-    // Read the settings out of both files without running them (a syntax
-    // error throws, and the last values read are kept)
-    var context = Object.assign(readPlainData(files[0], "seasons.js"), readPlainData(files[1], "config.js"));
-    var cfg = context.ftconfigs || {};
-    var next = JSON.parse(JSON.stringify({
-      avatarset: String(cfg.avatarset || "").trim(),
-      avatarSeasons: firstDefined(cfg.avatarSeasons, context.AVATAR_SEASONS, SITE_SEASON_DEFAULTS.avatarSeasons),
-      lightsMonths: firstDefined(cfg.lightsMonths, context.LIGHTS_MONTHS, SITE_SEASON_DEFAULTS.lightsMonths)
-    }));
-    // Say what was read at startup, then only when something changes.
-    if (!siteSeasonsRead || JSON.stringify(next) !== JSON.stringify(siteSeasons)) {
-      console.log("site seasons:", JSON.stringify(next), "from", process.env.SITE_URL);
-    }
-    siteSeasons = next;
-    siteSeasonsRead = true;
-  }).catch(function(err) {
-    console.log("couldn't read seasons from " + process.env.SITE_URL + " (keeping the last ones):", err.message);
-  });
-}
-refreshSiteSeasons();
-setInterval(refreshSiteSeasons, SITE_SEASONS_REFRESH_MS);
-
-function inMonths(months, date) {
-  return Array.isArray(months) && months.map(Number).indexOf(date.getMonth() + 1) !== -1;
-}
+// The seasonal trading-card avatars and the string-lights months, read from
+// the live site every 10 minutes (lib/seasons.js).
+var siteSeasons = require("./lib/seasons").createSiteSeasons(process.env);
+siteSeasons.start();
 
 // Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2", and a
 // style the room no longer offers → null (lib/avatars.js).
@@ -242,38 +106,16 @@ firebase.database().ref("roomSettings/avatarStyle").on("value", function(snapsho
   roomAvatarChoice = null;
 });
 
-// The season's style that everyone wears, Bouletmatons too (October's
-// monsters), the way the site picks it: only while config.js has no avatarset.
-// AVATARSET in .env forces a style on cards all year.
-function forcedAvatarStyle() {
-  var forced = normalizeAvatarStyle(process.env.AVATARSET);
-  if (forced) return forced;
-  if (normalizeAvatarStyle(siteSeasons.avatarset) || !Array.isArray(siteSeasons.avatarSeasons)) return null;
-  var now = new Date();
-  for (var i = 0; i < siteSeasons.avatarSeasons.length; i++) {
-    var season = siteSeasons.avatarSeasons[i];
-    if (season && inMonths(season.months, now)) return normalizeAvatarStyle(season.style);
-  }
-  return null;
-}
-
 // What a card stamps so it always shows the DJ as the room drew them when it
 // was printed (lib/avatars.js avatarFor): the style (avs: October's monsters,
 // else "bouletmaton" with their own (bm) when it's on, else the room's), and
 // the Robohash set (set, which older copies of the site read; robots for any
 // other style).
 function cardAvatar(djid) {
-  var a = avatars.avatarFor(users[djid] || {}, roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset), forcedAvatarStyle());
+  var a = avatars.avatarFor(users[djid] || {}, roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset()), siteSeasons.forcedAvatarStyle());
   var out = { avs: a.style, set: a.style.indexOf("robohash:") === 0 ? a.style.slice(9) : "set1" };
   if (a.bm) out.bm = a.bm;
   return out;
-}
-
-// Stage string lights. The site keeps them on by itself in its lights months;
-// the rest of the year supermods switch them with !lights, !lightson, !lightsoff.
-function currentLightsMonths() {
-  if (process.env.LIGHTS_MONTHS) return process.env.LIGHTS_MONTHS.split(",").map(Number);
-  return siteSeasons.lightsMonths;
 }
 
 // Chat notices when a DJ's song is broken/blocked. .env values are strings,
@@ -284,12 +126,10 @@ firebase.database().ref("lights").on("value", function(snapshot) {
   lightsOn = !!snapshot.val();
 });
 
-function isLightsSeason() {
-  return inMonths(currentLightsMonths(), new Date());
-}
-
+// Stage string lights. The site keeps them on by itself in its lights months;
+// the rest of the year supermods switch them with !lights, !lightson, !lightsoff.
 function lightsCommand(command, namebo) {
-  if (isLightsSeason()) {
+  if (siteSeasons.isLightsSeason()) {
     var month = new Date().toLocaleString("en-US", { month: "long" });
     talk("🎄 The string lights stay on all " + month + ", " + namebo + ".");
     return;
@@ -4065,87 +3905,6 @@ var spreadTags = {
         else if (txt) talk(txt);
       });
     });
-  }
-};
-
-var LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
-var lastfm = {
-  sk: process.env.LASTFM_SESSIONKEY,
-  // Scrobbling needs the API key and its shared secret (.env LASTFM_SECRET)
-  key: process.env.LASTFM_SECRET ? process.env.LASTFM_APIKEY : null,
-  secret: process.env.LASTFM_SECRET,
-  playing: null, // {song, start (unix seconds)} for the song on the decks
-
-  // A song went on the decks: tell last.fm it's playing now.
-  started: function(s) {
-    lastfm.playing = { song: s, start: Math.floor(Date.now() / 1000) };
-    if (!lastfm.key) return;
-    lastfm.call({
-      method: "track.updateNowPlaying",
-      artist: s.artist,
-      track: s.title,
-      duration: s.duration
-    });
-  },
-  // The song ended or was skipped: scrobble it if it played long enough by
-  // last.fm's rule (lib/checks.js scrobbles).
-  ended: function(ranToEnd) {
-    var p = lastfm.playing;
-    lastfm.playing = null;
-    if (!p || !lastfm.key) return;
-    var played = Math.floor(Date.now() / 1000) - p.start;
-    if (!checks.scrobbles(p.song.duration, played, ranToEnd)) return;
-    lastfm.call({
-      method: "track.scrobble",
-      artist: p.song.artist, // tags fixed while it played are on this object
-      track: p.song.title,
-      timestamp: p.start,
-      duration: p.song.duration
-    });
-  },
-  // A signed write call (POST). Last.fm's refusals are logged, never thrown.
-  call: function(params) {
-    params.api_key = lastfm.key;
-    params.sk = lastfm.sk;
-    Object.keys(params).forEach(function(k) {
-      if (params[k] === undefined || params[k] === null) delete params[k];
-    });
-    params.api_sig = lastfm.getApiSignature(params);
-    params.format = "json"; // never signed
-    return http(LASTFM_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(params).toString()
-    }).then(function(res) {
-      if (res.status !== 200 || (res.json && res.json.error)) {
-        console.log("last.fm " + params.method + " refused: " + ((res.json && res.json.message) || "HTTP " + res.status));
-      }
-    }, function(err) {
-      console.log("last.fm " + params.method + " failed:", err.message);
-    });
-  },
-  // How often the room's last.fm account has played a track (false if unknown).
-  playcount: function(artist, title) {
-    if (!process.env.LASTFM_APIKEY || !process.env.LASTFM_USERNAME) return Promise.resolve(false);
-    var url = new URL(LASTFM_API);
-    url.searchParams.set("method", "track.getInfo");
-    url.searchParams.set("track", title);
-    url.searchParams.set("artist", artist);
-    url.searchParams.set("username", process.env.LASTFM_USERNAME);
-    url.searchParams.set("api_key", process.env.LASTFM_APIKEY);
-    url.searchParams.set("format", "json");
-    return http(url).then(function(res) {
-      var n = res.status === 200 && res.json && res.json.track && parseInt(res.json.track.userplaycount, 10);
-      return n > 0 ? n : false;
-    }, function() {
-      return false;
-    });
-  },
-  // Last.fm's api_sig: the params sorted by name, name+value joined, then the
-  // secret, MD5'd (UTF-8)
-  getApiSignature: function(params) {
-    var raw = Object.keys(params).sort().map(function(k) { return k + params[k]; }).join("");
-    return text.md5(raw + lastfm.secret);
   }
 };
 
