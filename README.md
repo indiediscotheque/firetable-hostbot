@@ -39,6 +39,7 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `DISCOVER` | the public data for the site's Discover side (charts, new releases, theme nights, fires), on unless set to `false` (see [discover](#discover)) |
 | `PUSH_NOTIFICATIONS` | push @mentions to phones and computers, on unless set to `false` (see [push notifications](#push-notifications)) |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
+| `SOCIAL_GITHUB_TOKEN` | optional: starts the site's social posting every hour (see [social posting](#social-posting)). `SOCIAL_MINUTE` the minute past each hour (default `17`); `SOCIAL_POSTING=false` turns it off |
 | `AWAY_CLOSED_MIN` / `AWAY_ANSWER_MIN` / `AWAY_LOST_HOURS` | optional: when DJs who left are asked and put on the bus (default `5` / `5` / `3`, see [away DJs](#away-djs)) |
 
 ## hosting (free, always on)
@@ -163,6 +164,7 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 - `!swaps`: how the last swap search went (see [swap suggestions](#swap-suggestions)). `!swapscan` (mods) runs it now for people seen since their last scan; `!swapscan all` for everyone.
 - `!ytmtest Artist - Title` (mods): what YouTube Music answers the bot's server for that song (songs, artist videos, fan uploads, the best match), to tell a missing song from a catalog that isn't answering.
 - `!genrelists`: how the last update of the [genre playlists on YouTube Music](#genre-playlists-on-youtube-music) went. `!genrelists run` (mods) runs one now.
+- `!social`: when the bot last started the site's social posting, or why it couldn't. `!social now` (mods) starts it now (see [social posting](#social-posting)).
 - `!ytmusic`: how the last sync of the bot's YOUTUBE MUSIC playlist went, or what it's doing now (see [the YOUTUBE MUSIC playlist](#the-youtube-music-playlist)). `!ytsync` (mods) runs one now.
 
 ## play history
@@ -309,6 +311,19 @@ A public playlist for each genre on the room's YouTube account, **"Indie Discoth
 4. Put the three lines it prints in the bot's `.env` and restart the bot. `!genrelists run` (mods) starts the first run straight away.
 
 If the sign-in is ever refused (the account's password changed, access removed), `!genrelists` and the log say so: run step 3 again. A playlist deleted on YouTube is made again the next day.
+
+## social posting
+The site posts the room's new releases, weekly chart and more to Instagram, Facebook, Threads, X, Bluesky and Discord from a GitHub Actions workflow ([firetable-user](https://github.com/indiediscotheque/firetable-user), `.github/workflows/social.yml`; its README, "social posting", says what and when). GitHub's own schedules run late or get skipped, so the bot starts that workflow itself once an hour, at 17 minutes past (`lib/social.js`). The workflow decides what's due; a start with nothing due finishes in a minute or two.
+
+To turn it on, make a token the bot can start the workflow with:
+1. GitHub → your picture → **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**.
+2. Name it (e.g. `hostbot social posting`), pick the **expiration** (the longest allowed, or no expiration if it's offered), and set **Resource owner** to `indiediscotheque`.
+3. **Repository access → Only select repositories → `firetable-user`**.
+4. **Permissions → Repository permissions → Actions: Read and write** (Metadata: Read-only is added by itself). Nothing else.
+5. **Generate token**, and copy it.
+6. On the server: `nano ~/firetable-hostbot/.env`, add `SOCIAL_GITHUB_TOKEN="github_pat_…"`, save, and `pm2 restart hostbot`.
+
+The bot's log then says `social posting: starting social.yml in indiediscotheque/firetable-user every hour at :17`, and `!social` in chat says when it last started it, or why GitHub refused (a wrong or expired token, or one without Actions access). If the organization requires approval for fine-grained tokens, an owner approves it under the organization's Settings → Personal access tokens. When the token expires, make a new one the same way.
 
 ## discover
 The site's Discover side shows the library to everyone, signed in or not. Most of it reads data that's already public (Recent, Fresh, the play history's songs and genres, tempos). The bot publishes the rest under `discover/`, which anyone can read and only the bot writes (`lib/discover.js`):

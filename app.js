@@ -37,6 +37,7 @@ var imports = require('./lib/imports');
 var spotify = require('./lib/spotify');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
+var social = require('./lib/social');
 var retag = require('./lib/retag');
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
@@ -2544,6 +2545,25 @@ var swapTick = function() {
 };
 setInterval(swapTick, 10 * 60 * 1000);
 
+// The room's social posting (firetable-user's social.yml workflow), started
+// once an hour from here: GitHub's own schedules run late or not at all
+// (lib/social.js). On once SOCIAL_GITHUB_TOKEN is set; SOCIAL_POSTING=false
+// turns it off. It runs whether or not the bot is in the room.
+var socialMinute = parseInt(process.env.SOCIAL_MINUTE, 10);
+var socialOn = process.env.SOCIAL_POSTING !== "false" && !!process.env.SOCIAL_GITHUB_TOKEN;
+var socialTrigger = socialOn ? social.createSocialTrigger({
+  http: http,
+  token: process.env.SOCIAL_GITHUB_TOKEN,
+  repo: process.env.SOCIAL_REPO,
+  workflow: process.env.SOCIAL_WORKFLOW,
+  minute: socialMinute >= 0 && socialMinute <= 59 ? socialMinute : 17,
+  log: console.log
+}) : null;
+if (socialTrigger) {
+  setInterval(socialTrigger.tick, 60 * 1000);
+  console.log("social posting: starting " + socialTrigger.status().workflow + " in " + socialTrigger.status().repo + " every hour at :" + String(socialTrigger.status().minute).padStart(2, "0"));
+}
+
 // Who a bus command is for: the sender, or (mods) someone of lower rank.
 var busRank = function(u) {
   if (!u) return 0;
@@ -3260,6 +3280,19 @@ var handleChat = function(chatID, feedKey) {
           } else {
             var ytmLast = ytmSync().state.last;
             talk(fitChat(ytmName + " (daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.brief(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
+          }
+        } else if (command == "social") {
+          if (!socialTrigger) {
+            talk("Social posting isn't started from here: the bot needs SOCIAL_GITHUB_TOKEN first (see the README).");
+          } else if (args && args.trim() == "now" && senderIsMod) {
+            socialTrigger.dispatch().then(function(ok) {
+              talk(ok ? ":mega: Social posting started: anything due goes out in a few minutes." : "Couldn't start social posting: " + socialTrigger.status().lastError);
+            });
+          } else {
+            var soc = socialTrigger.status();
+            talk(fitChat("Social posting runs every hour at :" + String(soc.minute).padStart(2, "0") + ". " +
+              (soc.lastError ? "The last start failed: " + soc.lastError : soc.lastOk ? "Last started " + Math.max(1, Math.round((Date.now() - soc.lastOk) / 60000)) + " min ago." : "Not started yet since I came online.") +
+              (senderIsMod ? " !social now starts it now." : "")));
           }
         } else if (command == "genrelists") {
           if (!genrePlaylistsOn) {
