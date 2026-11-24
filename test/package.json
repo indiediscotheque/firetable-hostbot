@@ -3,14 +3,15 @@
   "private": true,
   "description": "Tests for firetable-hostbot: the tag engine and play history toolkit, database rules and the bot itself in the Firebase emulators, and the auto-update script. Never installed on the bot server.",
   "scripts": {
-    "test": "npm run lint && npm run typecheck && npm run test:unit && npm run test:history && npm run test:rules && npm run test:bot && npm run test:auto-update",
+    "test": "npm run lint && npm run typecheck && npm run size && npm run test:unit && npm run test:history && npm run test:rules && npm run test:bot && npm run test:auto-update",
     "lint": "cd .. && test/node_modules/.bin/eslint app.js lib tools",
     "test:unit": "node --test unit.test.mjs ytmsync.test.mjs discover.test.mjs ytplaylists.test.mjs imports.test.mjs spotify.test.mjs social.test.mjs",
     "test:history": "node --test history.test.mjs",
     "test:rules": "cd .. && firebase emulators:exec --only database,auth --project demo-ft \"node test/rules.test.mjs\"",
     "test:bot": "cd .. && firebase emulators:exec --only database,auth --project demo-ft \"node test/bot.test.mjs\"",
     "test:auto-update": "bash auto-update.test.sh",
-    "typecheck": "cd .. && test/node_modules/.bin/tsc -p jsconfig.json"
+    "typecheck": "cd .. && test/node_modules/.bin/tsc -p jsconfig.json",
+    "size": "node line-limits.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

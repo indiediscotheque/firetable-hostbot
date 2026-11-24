@@ -16,12 +16,9 @@ try {
 var firebase = require('@firebase/app-compat').default;
 require('@firebase/auth-compat');
 require('@firebase/database-compat');
-var acorn = require('acorn');
 var http = require('./lib/http').http;
 var artworkColors = require('./lib/colors').artworkColors;
 var text = require('./lib/text');
-var tags = require('./lib/tags');
-var placeholderTags = require('./tools/history/placeholders').load(); // tags that aren't songs
 var splitTags = text.splitTags;
 var fitChat = text.fitChat;
 var checks = require('./lib/checks');
@@ -38,7 +35,7 @@ var spotify = require('./lib/spotify');
 var tracks = require('./lib/tracks');
 var ytplaylists = require('./lib/ytplaylists');
 var social = require('./lib/social');
-var retag = require('./lib/retag');
+var lastfm = require('./lib/lastfm').createLastfm(process.env); // scrobbling
 
 // A failed promise somewhere (a write the rules refused, a network blip) is
 // logged; it doesn't take the bot down (Node would exit otherwise).
@@ -87,146 +84,10 @@ function serverNow() {
 }
 
 // ─── Seasons, from the site ─────────────────────────────────────────────────
-// The site (firetable-user) decides the seasonal trading-card avatars and the
-// string-lights months: js/seasons.js holds the defaults and config.js can
-// override them. With SITE_URL set, the bot reads both files from the live
-// site at startup and every 10 minutes, so a change there reaches the bot on
-// its own. Without SITE_URL (or if the site can't be reached) it uses the
-// last values it read, or these defaults, which match the site's.
-// AVATARSET / LIGHTS_MONTHS in .env still force a value, but leave them unset
-// to follow the site.
-var SITE_SEASONS_REFRESH_MS = 10 * 60 * 1000;
-var SITE_SEASON_DEFAULTS = {
-  avatarset: "",
-  avatarSeasons: [{ months: [10], style: "set2" }], // October: monsters
-  lightsMonths: [12] // December
-};
-var siteSeasons = JSON.parse(JSON.stringify(SITE_SEASON_DEFAULTS));
-var siteSeasonsRead = false;
-
-function fetchSiteFile(path) {
-  var url = new URL(path, process.env.SITE_URL.trim().replace(/\/?$/, "/"));
-  url.searchParams.set("t", String(Date.now())); // skip any cached copy
-  return fetch(url, { signal: AbortSignal.timeout(15000) }).then(function(res) {
-    if (!res.ok) throw new Error(path + " answered HTTP " + res.status);
-    return res.text();
-  });
-}
-
-// The top-level settings in one of the site's scripts, read with a parser:
-// nothing in the file runs, so a broken or tampered site can't run code on the
-// bot. It reads `var NAME = <data>`, `NAME = <data>`, `window.NAME = <data>`
-// and `NAME.key = <data>`, where <data> is plain data (text, numbers,
-// true/false/null, lists and objects of those). Anything else is left out.
-var NOT_DATA = {};
-function plainValue(node) {
-  if (!node) return NOT_DATA;
-  switch (node.type) {
-    case "Literal":
-      return node.regex || typeof node.value === "bigint" ? NOT_DATA : node.value;
-    case "TemplateLiteral":
-      return node.expressions.length ? NOT_DATA : node.quasis[0].value.cooked;
-    case "UnaryExpression":
-      if ((node.operator === "-" || node.operator === "+") && node.argument.type === "Literal" && typeof node.argument.value === "number") {
-        return node.operator === "-" ? -node.argument.value : node.argument.value;
-      }
-      return NOT_DATA;
-    case "Identifier":
-      return node.name === "undefined" ? undefined : NOT_DATA;
-    case "ArrayExpression":
-      var list = [];
-      for (var i = 0; i < node.elements.length; i++) {
-        var item = node.elements[i] ? plainValue(node.elements[i]) : null;
-        if (item === NOT_DATA) return NOT_DATA;
-        list.push(item);
-      }
-      return list;
-    case "ObjectExpression":
-      var obj = {};
-      node.properties.forEach(function(prop) {
-        if (prop.type !== "Property" || prop.kind !== "init" || prop.method || prop.computed) return;
-        var key = prop.key.type === "Identifier" ? prop.key.name : String(prop.key.value);
-        var value = plainValue(prop.value);
-        if (value !== NOT_DATA && key !== "__proto__") obj[key] = value;
-      });
-      return obj;
-    default:
-      return NOT_DATA;
-  }
-}
-
-function readPlainData(source, filename) {
-  var ast = acorn.parse(source, { ecmaVersion: "latest", sourceType: "script", allowHashBang: true, sourceFile: filename });
-  var out = {};
-  var set = function(name, node) {
-    var value = plainValue(node);
-    if (value !== NOT_DATA && name !== "__proto__") out[name] = value;
-  };
-  ast.body.forEach(function(stmt) {
-    if (stmt.type === "VariableDeclaration") {
-      stmt.declarations.forEach(function(decl) {
-        if (decl.id.type === "Identifier" && decl.init) set(decl.id.name, decl.init);
-      });
-      return;
-    }
-    var expr = stmt.type === "ExpressionStatement" && stmt.expression;
-    if (!expr || expr.type !== "AssignmentExpression" || expr.operator !== "=") return;
-    var left = /** @type {any} */ (expr.left); // acorn's node: an Identifier or a MemberExpression here
-    if (left.type === "Identifier") return set(left.name, expr.right);
-    if (left.type !== "MemberExpression" || left.computed || left.object.type !== "Identifier") return;
-    if (left.object.name === "window") return set(left.property.name, expr.right);
-    // NAME.key = <data>, e.g. ftconfigs.avatarset = "set3"
-    var target = out[left.object.name];
-    var value = plainValue(expr.right);
-    if (target && typeof target === "object" && value !== NOT_DATA && left.property.name !== "__proto__") {
-      target[left.property.name] = value;
-    }
-  });
-  return out;
-}
-
-function firstDefined() {
-  for (var i = 0; i < arguments.length; i++) {
-    if (arguments[i] !== undefined) return arguments[i];
-  }
-}
-
-function refreshSiteSeasons() {
-  if (!process.env.SITE_URL) {
-    if (!siteSeasonsRead) console.log("site seasons: SITE_URL isn't set, using the defaults:", JSON.stringify(siteSeasons));
-    siteSeasonsRead = true;
-    return Promise.resolve();
-  }
-  return Promise.all([
-    // An older site without js/seasons.js still works: its defaults are ours.
-    fetchSiteFile("js/seasons.js").catch(function() { return ""; }),
-    fetchSiteFile("config.js")
-  ]).then(function(files) {
-    // Read the settings out of both files without running them (a syntax
-    // error throws, and the last values read are kept)
-    var context = Object.assign(readPlainData(files[0], "seasons.js"), readPlainData(files[1], "config.js"));
-    var cfg = context.ftconfigs || {};
-    var next = JSON.parse(JSON.stringify({
-      avatarset: String(cfg.avatarset || "").trim(),
-      avatarSeasons: firstDefined(cfg.avatarSeasons, context.AVATAR_SEASONS, SITE_SEASON_DEFAULTS.avatarSeasons),
-      lightsMonths: firstDefined(cfg.lightsMonths, context.LIGHTS_MONTHS, SITE_SEASON_DEFAULTS.lightsMonths)
-    }));
-    // Say what was read at startup, then only when something changes.
-    if (!siteSeasonsRead || JSON.stringify(next) !== JSON.stringify(siteSeasons)) {
-      console.log("site seasons:", JSON.stringify(next), "from", process.env.SITE_URL);
-    }
-    siteSeasons = next;
-    siteSeasonsRead = true;
-  }).catch(function(err) {
-    console.log("couldn't read seasons from " + process.env.SITE_URL + " (keeping the last ones):", err.message);
-  });
-}
-refreshSiteSeasons();
-setInterval(refreshSiteSeasons, SITE_SEASONS_REFRESH_MS);
-
-function inMonths(months, date) {
-  return Array.isArray(months) && months.map(Number).indexOf(date.getMonth() + 1) !== -1;
-}
+// The seasonal trading-card avatars and the string-lights months, read from
+// the live site every 10 minutes (lib/seasons.js).
+var siteSeasons = require("./lib/seasons").createSiteSeasons(process.env);
+siteSeasons.start();
 
 // Same as the site's normalizeAvatarStyle: "set2" → "robohash:set2", and a
 // style the room no longer offers → null (lib/avatars.js).
@@ -242,38 +103,16 @@ firebase.database().ref("roomSettings/avatarStyle").on("value", function(snapsho
   roomAvatarChoice = null;
 });
 
-// The season's style that everyone wears, Bouletmatons too (October's
-// monsters), the way the site picks it: only while config.js has no avatarset.
-// AVATARSET in .env forces a style on cards all year.
-function forcedAvatarStyle() {
-  var forced = normalizeAvatarStyle(process.env.AVATARSET);
-  if (forced) return forced;
-  if (normalizeAvatarStyle(siteSeasons.avatarset) || !Array.isArray(siteSeasons.avatarSeasons)) return null;
-  var now = new Date();
-  for (var i = 0; i < siteSeasons.avatarSeasons.length; i++) {
-    var season = siteSeasons.avatarSeasons[i];
-    if (season && inMonths(season.months, now)) return normalizeAvatarStyle(season.style);
-  }
-  return null;
-}
-
 // What a card stamps so it always shows the DJ as the room drew them when it
 // was printed (lib/avatars.js avatarFor): the style (avs: October's monsters,
 // else "bouletmaton" with their own (bm) when it's on, else the room's), and
 // the Robohash set (set, which older copies of the site read; robots for any
 // other style).
 function cardAvatar(djid) {
-  var a = avatars.avatarFor(users[djid] || {}, roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset), forcedAvatarStyle());
+  var a = avatars.avatarFor(users[djid] || {}, roomAvatarChoice || normalizeAvatarStyle(siteSeasons.avatarset()), siteSeasons.forcedAvatarStyle());
   var out = { avs: a.style, set: a.style.indexOf("robohash:") === 0 ? a.style.slice(9) : "set1" };
   if (a.bm) out.bm = a.bm;
   return out;
-}
-
-// Stage string lights. The site keeps them on by itself in its lights months;
-// the rest of the year supermods switch them with !lights, !lightson, !lightsoff.
-function currentLightsMonths() {
-  if (process.env.LIGHTS_MONTHS) return process.env.LIGHTS_MONTHS.split(",").map(Number);
-  return siteSeasons.lightsMonths;
 }
 
 // Chat notices when a DJ's song is broken/blocked. .env values are strings,
@@ -284,12 +123,10 @@ firebase.database().ref("lights").on("value", function(snapshot) {
   lightsOn = !!snapshot.val();
 });
 
-function isLightsSeason() {
-  return inMonths(currentLightsMonths(), new Date());
-}
-
+// Stage string lights. The site keeps them on by itself in its lights months;
+// the rest of the year supermods switch them with !lights, !lightson, !lightsoff.
 function lightsCommand(command, namebo) {
-  if (isLightsSeason()) {
+  if (siteSeasons.isLightsSeason()) {
     var month = new Date().toLocaleString("en-US", { month: "long" });
     talk("🎄 The string lights stay on all " + month + ", " + namebo + ".");
     return;
@@ -307,87 +144,14 @@ function lightsCommand(command, namebo) {
   });
 }
 
-// ─── One copy at a time ─────────────────────────────────────────────────────
-// Two copies of the bot (say, one started on a laptop with the live .env)
-// would each run every command and fight over the decks. The running copy
-// holds botLock, refreshed every minute and removed when it disconnects; a
-// second copy waits and takes over if the first stops, or if its lock goes
-// stale (3 minutes without a refresh). Before firebase-rules.json allows
-// botLock, the bot says so and runs without the guard.
-var INSTANCE_ID = require('crypto').randomUUID();
-var LOCK_REFRESH_MS = 60 * 1000;
-var LOCK_STALE_MS = 3 * 60 * 1000;
-var botLock = {
-  held: false,
-  waitingSaid: false,
-  ref: function() { return firebase.database().ref("botLock"); },
-  // Resolves once this copy holds the lock (or the rules don't allow it yet).
-  acquire: function() {
-    return new Promise(function(resolve) {
-      var tryNow = function() {
-        botLock.ref().transaction(function(cur) {
-          if (!cur || cur.id === INSTANCE_ID || !(serverNow() - (cur.seen || 0) < LOCK_STALE_MS)) {
-            return {
-              id: INSTANCE_ID,
-              host: require('os').hostname(),
-              pid: process.pid,
-              since: firebase.database.ServerValue.TIMESTAMP,
-              seen: firebase.database.ServerValue.TIMESTAMP
-            };
-          }
-          return; // someone else holds it
-        }).then(function(result) {
-          if (result.committed) {
-            botLock.held = true;
-            // messages that came in while another copy ran were its to handle
-            if (botLock.waitingSaid) chatWaiting = [];
-            botLock.ref().onDisconnect().remove();
-            botLock.watch();
-            console.log("holding the bot lock (only this copy runs the room)");
-            return resolve();
-          }
-          var cur = result.snapshot.val() || {};
-          if (!botLock.waitingSaid) {
-            botLock.waitingSaid = true;
-            console.log("another copy of the bot is running (on " + cur.host + ", pid " + cur.pid + "); this one waits and takes over if it stops.");
-          }
-          setTimeout(tryNow, 30 * 1000);
-        }).catch(function(err) {
-          if (/permission/i.test(err.code || err.message)) {
-            console.log("bot lock: the database rules don't allow botLock yet (publish firebase-rules.json); running without the one-copy guard.");
-            return resolve();
-          }
-          console.log("bot lock: " + err.message + "; trying again");
-          setTimeout(tryNow, 30 * 1000);
-        });
-      };
-      tryNow();
-    });
-  },
-  // While holding it: refresh it, take it back after a reconnect (a
-  // disconnect removes it), and stop if another copy took it meanwhile.
-  watch: function() {
-    setInterval(function() {
-      botLock.ref().child("seen").set(firebase.database.ServerValue.TIMESTAMP).catch(function() {});
-    }, LOCK_REFRESH_MS);
-    firebase.database().ref(".info/connected").on("value", function(snap) {
-      if (snap.val() !== true) return;
-      botLock.ref().transaction(function(cur) {
-        if (cur && cur.id !== INSTANCE_ID) return; // taken: handled below
-        return Object.assign({}, cur || {}, { id: INSTANCE_ID, host: require('os').hostname(), pid: process.pid, seen: firebase.database.ServerValue.TIMESTAMP });
-      }).then(function(result) {
-        if (result.committed) return botLock.ref().onDisconnect().remove();
-        botLock.lost(result.snapshot.val());
-      }).catch(function(err) {
-        console.log("bot lock refresh failed:", err.message);
-      });
-    });
-  },
-  lost: function(cur) {
-    console.log("another copy of the bot took over (on " + (cur && cur.host) + "); stopping this one.");
-    process.exit(0);
-  }
-};
+// ─── One copy at a time, and the heartbeat (lib/lock.js) ────────────────────
+var lock = require("./lib/lock").createLock({
+  db: function() { return firebase.database(); },
+  serverNow: serverNow,
+  tookOver: function() { chatWaiting = []; }
+});
+var botLock = lock.botLock;
+var heartbeat = lock.heartbeat;
 
 // Read the deck, waitlist, spotlight and playing song (all at once), then
 // pick up where the last copy left off.
@@ -422,27 +186,6 @@ var loadRoom = function() {
   });
 };
 
-// ─── Heartbeat ──────────────────────────────────────────────────────────────
-// botSeen: the server's time, written every minute while this copy runs the
-// room. Anyone can read it (a number, nothing else), so an outside check can
-// tell the room's bot is up: .github/workflows/uptime.yml fails, and GitHub
-// emails, when it's more than 10 minutes old. A hung bot or one that lost
-// its connection stops writing it, the same as one that crashed.
-var HEARTBEAT_MS = 60 * 1000;
-var heartbeat = {
-  timer: null,
-  beat: function() {
-    firebase.database().ref("botSeen").set(firebase.database.ServerValue.TIMESTAMP).catch(function(err) {
-      if (!heartbeat.warned) console.log("heartbeat: " + err.message + (/permission/i.test(err.code || err.message) ? " (publish firebase-rules.json)" : ""));
-      heartbeat.warned = true;
-    });
-  },
-  start: function() {
-    if (heartbeat.timer) return;
-    heartbeat.beat();
-    heartbeat.timer = setInterval(heartbeat.beat, HEARTBEAT_MS);
-  }
-};
 
 var starting = false;
 firebase.auth().onAuthStateChanged(function(user) {
@@ -896,115 +639,12 @@ var lookupWorked = function(source) {
   }
 };
 
-// ─── YouTube video lookups ──────────────────────────────────────────────────
-// One call to the YouTube Data API (videos.list, 1 unit of quota) for what the
-// bot checks: length, title, channel (and the description, which names the
-// artist of a new release YouTube files under "Release - Topic"), artwork, and whether it can play here
-// (privacy, embedding, region blocks, age limits, premieres; lib/checks.js).
-// cb(error, result): result is the API's answer ({items: [...]}); error when
-// it couldn't answer (quota, API key, network), with YouTube's own message.
-var YT_FIELDS = "items(snippet(title,channelTitle,description,publishedAt,thumbnails,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))";
-var youtubeVideo = function(id, cb) {
-  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
-  url.searchParams.set("part", "snippet,contentDetails,status");
-  url.searchParams.set("id", id);
-  url.searchParams.set("fields", YT_FIELDS);
-  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-  http(url).then(function(res) {
-    if (res.status === 200 && res.json && Array.isArray(res.json.items)) return cb(null, res.json);
-    var apiError = res.json && res.json.error;
-    var err = Object.assign(new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status), { code: (apiError && apiError.code) || res.status });
-    cb(err, null);
-  }, function(err) {
-    cb(err, null);
-  });
-};
-
-// ─── SoundCloud track lookups ───────────────────────────────────────────────
-// Free, and what the room uses: SoundCloud's own web API (api-v2) with a
-// client id (SOUNDCLOUD_KEY). It needs no registered app, but it isn't
-// SoundCloud's public API, so they can change it or stop that client id at any
-// time; the bot then can't check SoundCloud tracks and passes the decks (see
-// "soundcloud" in the README).
-// Optional: with SOUNDCLOUD_CLIENT_ID and SOUNDCLOUD_CLIENT_SECRET (a
-// registered SoundCloud app) set, it uses the official API with an OAuth token
-// instead. Unset, nothing changes.
-var scOfficial = !!(process.env.SOUNDCLOUD_CLIENT_ID && process.env.SOUNDCLOUD_CLIENT_SECRET);
-var scToken = null; // { value, expires }
-
-var scAccessToken = function(forceNew) {
-  if (!forceNew && scToken && scToken.expires > Date.now()) return Promise.resolve(scToken.value);
-  var basic = Buffer.from(process.env.SOUNDCLOUD_CLIENT_ID + ":" + process.env.SOUNDCLOUD_CLIENT_SECRET).toString("base64");
-  return http("https://secure.soundcloud.com/oauth/token", {
-    method: "POST",
-    headers: {
-      Authorization: "Basic " + basic,
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json; charset=utf-8"
-    },
-    body: "grant_type=client_credentials"
-  }).then(function(res) {
-    if (res.status !== 200 || !res.json || !res.json.access_token) {
-      throw new Error("SoundCloud token request answered HTTP " + res.status);
-    }
-    // reuse it until a minute before it expires (SoundCloud limits new tokens)
-    scToken = { value: res.json.access_token, expires: Date.now() + (Math.max(120, Number(res.json.expires_in) || 3600) - 60) * 1000 };
-    return scToken.value;
-  });
-};
-
-// cb(error, httpStatus, track): track is SoundCloud's track object when found
-var soundcloudTrack = function(cid, cb) {
-  var answered = function(status, track) { cb(null, status, track); };
-  var failed = function(err) { cb(err, null, null); };
-  if (!scOfficial) {
-    http('https://api-v2.soundcloud.com/resolve?url=https%3A//api.soundcloud.com/tracks/' + encodeURIComponent(cid) +
-      '&format=json&client_id=' + encodeURIComponent(process.env.SOUNDCLOUD_KEY || "")).then(function(res) {
-      answered(res.status, res.status === 200 ? res.json : null);
-    }, failed);
-    return;
-  }
-  var attempt = function(retried) {
-    return scAccessToken(retried).then(function(token) {
-      return http("https://api.soundcloud.com/tracks/" + encodeURIComponent(cid), {
-        headers: { Authorization: "OAuth " + token, Accept: "application/json; charset=utf-8" }
-      });
-    }).then(function(res) {
-      if (res.status === 401 && !retried) return attempt(true); // token expired early
-      answered(res.status, res.status === 200 ? res.json : null);
-    });
-  };
-  attempt(false).catch(failed);
-};
-
-// SoundCloud's track search (swap suggestions for lists kept to SoundCloud):
-// [{cid, title, user, dur (s), url, img, problem (flag code, 0 = plays in full)}]
-var soundcloudSearch = function(query) {
-  var shape = function(list) {
-    return (list || []).filter(function(tr) { return tr && tr.id && tr.kind !== "playlist"; }).map(function(tr) {
-      return { cid: String(tr.id), title: String(tr.title || ""), user: String((tr.user && tr.user.username) || ""),
-        dur: Math.round((Number(tr.full_duration || tr.duration) || 0) / 1000), url: String(tr.permalink_url || ""),
-        img: String(tr.artwork_url || (tr.user && tr.user.avatar_url) || ""), problem: checks.soundcloudProblem(tr) };
-    });
-  };
-  var failed = function(res) {
-    throw Object.assign(new Error("SoundCloud answered HTTP " + res.status), { status: res.status });
-  };
-  if (!scOfficial) {
-    return http("https://api-v2.soundcloud.com/search/tracks?q=" + encodeURIComponent(query) + "&limit=20&client_id=" +
-      encodeURIComponent(process.env.SOUNDCLOUD_KEY || ""), { timeout: 20000, maxBytes: 4 * 1024 * 1024 }).then(function(res) {
-      if (res.status !== 200 || !res.json) return failed(res);
-      return shape(res.json.collection);
-    });
-  }
-  return scAccessToken(false).then(function(token) {
-    return http("https://api.soundcloud.com/tracks?q=" + encodeURIComponent(query) + "&limit=20&linked_partitioning=true", {
-      timeout: 20000, maxBytes: 4 * 1024 * 1024, headers: { Authorization: "OAuth " + token, Accept: "application/json; charset=utf-8" } });
-  }).then(function(res) {
-    if (res.status !== 200 || !res.json) return failed(res);
-    return shape(Array.isArray(res.json) ? res.json : res.json.collection);
-  });
-};
+// ─── YouTube and SoundCloud lookups (lib/media.js) ──────────────────────────
+var media = require("./lib/media").createMedia(process.env);
+var scOfficial = media.scOfficial;
+var youtubeVideo = media.youtubeVideo, soundcloudTrack = media.soundcloudTrack, soundcloudSearch = media.soundcloudSearch;
+var youtubeProblems = media.youtubeProblems, youtubeSearch = media.youtubeSearch, youtubeVideos = media.youtubeVideos;
+var youtubeSnippets = media.youtubeSnippets, youtubePlaylistItems = media.youtubePlaylistItems;
 
 // ─── Starting a track ───────────────────────────────────────────────────────
 var songLoading = false; // a track is being looked up (between turns); !skip waits
@@ -1945,93 +1585,12 @@ var reactionForOtherSong = function(chatData) {
   return !!(chatData.forSong && song && song.started && chatData.forSong !== song.started);
 };
 
-// ─── Song tempo (BPM) ────────────────────────────────────────────────────────
-// When a song starts, look up its tempo on Deezer (free, no key) and publish
-// it as songBpm {started, bpm, src} so the site can bop to the beat (not on
-// songToPlay: clients treat any change there as a new song). Tempos are cached per
-// track in bpm/<type>_<cid>; anyone DJing or a mod can correct one with
-// "!bpm 128" (manual values are never overwritten by a lookup).
-var BPM_MIN = 40, BPM_MAX = 250;
-// Bump when the lookup gets better, so tracks it missed are tried again
-var BPM_LOOKUP_VERSION = 2;
-var bpmKey = function(type, cid) {
-  return String(type) + "_" + String(cid).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
-};
-var normalizeForMatch = function(str) {
-  return String(str || "").toLowerCase()
-    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/&amp;/g, "&").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "") // (Official Video), [Remastered]...
-    .replace(/\b(feat|ft|featuring)\.?\s.*$/, "")
-    .replace(/[^a-z0-9]+/g, " ").trim();
-};
-var looselyMatches = function(a, b) {
-  a = normalizeForMatch(a); b = normalizeForMatch(b);
-  if (!a || !b) return false;
-  return a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0;
-};
-var getJSON = function(url) {
-  return http(url, { timeout: 10000 }).then(function(res) {
-    var body = res.json;
-    if (res.status !== 200 || !body || body.error) {
-      throw new Error((body && body.error && (body.error.message || body.error.type)) || "HTTP " + res.status);
-    }
-    return body;
-  });
-};
-// Deezer's fielded search (artist:"x" track:"y") returns nothing these days,
-// so search plainly and pick the hits whose artist and title match. Many
-// Deezer tracks have no tempo (bpm 0), so try the other matching versions of
-// the song (album, single, radio edit...) until one has it.
-var deezerBpm = function(artist, title) {
-  var q = (normalizeForMatch(artist) + " " + normalizeForMatch(title)).trim();
-  return getJSON("https://api.deezer.com/search?limit=15&q=" + encodeURIComponent(q)).then(function(res) {
-    var hits = (res.data || []).filter(function(t) {
-      return t && t.id && t.artist && looselyMatches(t.artist.name, artist) && looselyMatches(t.title, title);
-    }).slice(0, 4);
-    var tryHit = function(i) {
-      if (i >= hits.length) return null;
-      return getJSON("https://api.deezer.com/track/" + hits[i].id).then(function(t) {
-        var bpm = Number(t && t.bpm);
-        return bpm >= BPM_MIN && bpm <= BPM_MAX ? Math.round(bpm * 10) / 10 : tryHit(i + 1);
-      }, function() { return tryHit(i + 1); });
-    };
-    return tryHit(0);
-  });
-};
-// Put a tempo on the playing song, if it's still the same song
-var setSongBpm = function(started, bpm, src) {
-  if (!song || song.started !== started) return Promise.resolve();
-  song.bpm = bpm;
-  song.bpmSrc = src;
-  return firebase.database().ref("songBpm").set({ started: started, bpm: bpm, src: src }).catch(function(e) {
-    console.log("bpm update failed:", e.message);
-  });
-};
-var findBpm = function(s) {
-  if (!s || !s.cid || !s.started) return;
-  var key = bpmKey(s.type, s.cid);
-  firebase.database().ref("bpm/" + key).once("value").then(function(snap) {
-    var cached = snap.val();
-    if (cached && cached.bpm) return setSongBpm(s.started, cached.bpm, cached.src || "cache");
-    if (cached && cached.none && cached.v >= BPM_LOOKUP_VERSION && Date.now() - cached.at < 30 * 24 * 3600 * 1000) return; // looked up recently, nothing found
-    if (!s.artist || !s.title || s.artist === "Unknown") return;
-    return deezerBpm(s.artist, s.title).then(function(bpm) {
-      var entry = bpm ? { bpm: bpm, src: "deezer", at: Date.now() } : { none: true, v: BPM_LOOKUP_VERSION, at: Date.now() };
-      return firebase.database().ref("bpm/" + key).set(entry).then(function() {
-        if (bpm) return setSongBpm(s.started, bpm, "deezer");
-      });
-    });
-  }).catch(function(e) {
-    console.log("bpm lookup failed:", e && e.message);
-  });
-};
-var bpmLookedUpFor = null;
-firebase.database().ref("songToPlay").on("value", function(snap) {
-  var s = snap.val();
-  if (!s || !s.started || s.started === bpmLookedUpFor) return;
-  bpmLookedUpFor = s.started;
-  setTimeout(function() { findBpm(s); }, 500); // let the song settle first
-});
+// ─── Song tempo (BPM): Deezer, cached in bpm/ (lib/bpm.js) ──────────────────
+var bpmLib = require("./lib/bpm");
+var BPM_MIN = bpmLib.BPM_MIN, BPM_MAX = bpmLib.BPM_MAX, bpmKey = bpmLib.bpmKey;
+var tempo = bpmLib.createTempo({ db: function() { return firebase.database(); }, song: function() { return song; } });
+var setSongBpm = tempo.setSongBpm;
+tempo.watch();
 
 // !flag / !flagplay reasons
 var flagCodeFor = function(reason) {
@@ -2124,68 +1683,6 @@ var SWAP_MAX_DEEP = parseInt(process.env.SWAP_MAX_DEEP, 10) || 300;
 var SWAP_API_UNITS = parseInt(process.env.SWAP_API_UNITS, 10);
 if (!(SWAP_API_UNITS >= 0)) SWAP_API_UNITS = 1000;
 
-// Can these YouTube videos play here, and are they YouTube Music audio
-// tracks? One videos.list call (1 unit) for up to 50. Resolves {id: {problem
-// (flag code, 0 = fine), audio, dur, channel, title}}; ids YouTube doesn't know are left out
-// (gone). Rejects when YouTube can't answer (quota, key, network).
-var youtubeProblems = function(ids) {
-  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
-  url.searchParams.set("part", "snippet,contentDetails,status");
-  url.searchParams.set("id", ids.join(","));
-  url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
-  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-  return http(url, { timeout: 30000 }).then(function(res) {
-    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
-      var apiError = res.json && res.json.error;
-      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
-    }
-    var out = {};
-    res.json.items.forEach(function(item) {
-      var sn = item.snippet || {};
-      out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
-        audio: swaps.isArtTrack({ channel: sn.channelTitle, description: sn.description }),
-        channel: swaps.topicChannel(sn.channelTitle, sn.description, sn.title), title: String(sn.title || "") };
-    });
-    return out;
-  });
-};
-
-// The YouTube Data API's search (100 units): videos for a song (with their
-// channel and the start of their description), or playlists. Only for songs
-// whose free search didn't answer (lib/swaps.js keeps it within
-// SWAP_API_UNITS a day).
-var htmlText = function(s) {
-  return String(s || "").replace(/&(#\d+|#x[0-9a-f]+|amp|lt|gt|quot|apos);/gi, function(m, e) {
-    var named = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" }[e.toLowerCase()];
-    if (named) return named;
-    var n = e.charAt(1).toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-    return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
-  });
-};
-var youtubeSearch = function(query, type) {
-  var url = new URL("https://www.googleapis.com/youtube/v3/search");
-  url.searchParams.set("part", "snippet");
-  url.searchParams.set("type", type || "video");
-  if (!type) url.searchParams.set("videoCategoryId", "10"); // Music
-  url.searchParams.set("maxResults", "25");
-  url.searchParams.set("q", query);
-  url.searchParams.set("fields", "items(id(videoId,playlistId),snippet(title,channelTitle,description))");
-  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-  return http(url, { timeout: 30000 }).then(function(res) {
-    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
-      var apiError = res.json && res.json.error;
-      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
-    }
-    return res.json.items.map(function(it) {
-      var sn = it.snippet || {};
-      var id = it.id || {};
-      if (type === "playlist") return { id: id.playlistId, title: htmlText(sn.title) };
-      var description = htmlText(sn.description);
-      return { cid: id.videoId, title: htmlText(sn.title), channel: swaps.topicChannel(htmlText(sn.channelTitle), description, htmlText(sn.title)), description: description };
-    }).filter(function(v) { return v.cid || v.id; });
-  });
-};
 
 // Other uploads of the same song the room has played: globalTracks links
 // every upload to its song (once the play history is published), and has
@@ -2328,79 +1825,6 @@ if (!(YTM_HOUR >= 0 && YTM_HOUR <= 23)) YTM_HOUR = 5;
 var YTM_DUPE_SECONDS = parseFloat(process.env.YTMUSIC_DUPE_SECONDS);
 if (!(YTM_DUPE_SECONDS >= 0 && YTM_DUPE_SECONDS <= 30)) YTM_DUPE_SECONDS = 3;
 
-var isoSeconds = function(d) {
-  var m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(String(d || ""));
-  if (!m) return 0;
-  return Number(m[1] || 0) * 86400 + Number(m[2] || 0) * 3600 + Number(m[3] || 0) * 60 + Number(m[4] || 0);
-};
-
-// What YouTube says about up to 50 videos (1 unit): {id: {problem (flag code,
-// 0 = fine), dur (s), title, channel}}. Ids it doesn't know are left out.
-var youtubeVideos = function(ids) {
-  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
-  url.searchParams.set("part", "snippet,contentDetails,status");
-  url.searchParams.set("id", ids.join(","));
-  url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(title,channelTitle,description,liveBroadcastContent),contentDetails(duration,regionRestriction,contentRating),status(embeddable,privacyStatus,uploadStatus))");
-  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-  return http(url, { timeout: 30000 }).then(function(res) {
-    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
-      var apiError = res.json && res.json.error;
-      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
-    }
-    var out = {};
-    res.json.items.forEach(function(item) {
-      var sn = item.snippet || {};
-      out[item.id] = { problem: checks.youtubeProblem(item), dur: isoSeconds(item.contentDetails && item.contentDetails.duration),
-        title: String(sn.title || ""), channel: swaps.topicChannel(sn.channelTitle, sn.description, sn.title) };
-    });
-    return out;
-  });
-};
-
-// Release information for Discover's new releases: each upload's description
-// ("Released on: …" on "Artist - Topic" uploads) and upload date (1 unit per 50).
-var youtubeSnippets = function(ids) {
-  var url = new URL("https://www.googleapis.com/youtube/v3/videos");
-  url.searchParams.set("part", "snippet");
-  url.searchParams.set("id", ids.join(","));
-  url.searchParams.set("maxResults", "50");
-  url.searchParams.set("fields", "items(id,snippet(description,publishedAt))");
-  url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-  return http(url, { timeout: 30000 }).then(function(res) {
-    if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
-      var apiError = res.json && res.json.error;
-      throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
-    }
-    var out = {};
-    res.json.items.forEach(function(item) { out[item.id] = item.snippet || {}; });
-    return out;
-  });
-};
-
-// The videos of a playlist from the YouTube Data API (1 unit per 50), for
-// when YouTube Music can't answer.
-var youtubePlaylistItems = function(playlistId) {
-  var ids = [];
-  var page = function(token, n) {
-    var url = new URL("https://www.googleapis.com/youtube/v3/playlistItems");
-    url.searchParams.set("part", "contentDetails");
-    url.searchParams.set("playlistId", playlistId);
-    url.searchParams.set("maxResults", "50");
-    url.searchParams.set("fields", "nextPageToken,items(contentDetails(videoId))");
-    url.searchParams.set("key", process.env.YOUTUBE_KEY || "");
-    if (token) url.searchParams.set("pageToken", token);
-    return http(url, { timeout: 30000 }).then(function(res) {
-      if (res.status !== 200 || !res.json || !Array.isArray(res.json.items)) {
-        var apiError = res.json && res.json.error;
-        throw new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
-      }
-      res.json.items.forEach(function(it) { if (it.contentDetails && it.contentDetails.videoId) ids.push(it.contentDetails.videoId); });
-      return res.json.nextPageToken && n < 200 ? page(res.json.nextPageToken, n + 1) : ids;
-    });
-  };
-  return page("", 1);
-};
 
 var ytmSyncInstance = null;
 var ytmSync = function() {
@@ -2728,227 +2152,16 @@ var pruneMentions = function() {
 };
 setInterval(pruneMentions, 6 * 60 * 60 * 1000);
 
-// ─── Push notifications ─────────────────────────────────────────────────────
-// @mentions reach people's phones (the site installed as an app) and
-// computers through Web Push, even with the room closed. The site saves each
-// device that turned it on under pushSubs/<uid>/<device>; the bot sends:
-//   - every mention filed in the inbox (above)
-//   - the bot's own @name messages ("are you there?" when you're on deck)
-//   - @everyone from mods and the bot, to devices that opted in to those
-// Nobody is pushed while they're looking at the room (online and not idle).
-// Keys: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY in .env, or (unset) a pair the
-// bot makes once and keeps in pushVapid (only bots can read it). The public
-// half is published as pushKey for the site. PUSH_NOTIFICATIONS=false: off.
-var webpush = require('./lib/webpush');
-var PUSH_FRESH_MS = 10 * 60 * 1000; // older messages (after a long disconnect) aren't pushed
-var PUSH_PER_MINUTE = 6; // per person
-var PUSH_MAX_DEVICES = 10; // per person
-var PUSH_EVERYONE_GAP = 10 * 60 * 1000; // between @everyone pushes
-var PUSH_STALE_MS = 60 * 24 * 60 * 60 * 1000; // devices not opened in 60 days are dropped
-var push = {
-  on: !/^(false|0|off|no)$/i.test(String(process.env.PUSH_NOTIFICATIONS || "").trim()),
-  vapid: null,
-  recent: {}, // uid -> send times in the last minute
-  everyoneAt: 0,
-  subject: function() {
-    var s = String(process.env.VAPID_SUBJECT || "").trim();
-    if (/^(mailto:|https:\/\/)/i.test(s)) return s;
-    try {
-      var site = new URL(process.env.SITE_URL);
-      if (site.protocol === "https:") return site.origin;
-    } catch (e) { /* no SITE_URL */ }
-    return "https://github.com/indiediscotheque/firetable-hostbot";
-  },
-  init: function() {
-    if (!push.on) return console.log("push: off (PUSH_NOTIFICATIONS=false)");
-    var db = firebase.database();
-    var envPub = String(process.env.VAPID_PUBLIC_KEY || "").trim();
-    var envPriv = String(process.env.VAPID_PRIVATE_KEY || "").trim();
-    var made = false;
-    var keys = envPub && envPriv
-      ? Promise.resolve({ publicKey: envPub, privateKey: envPriv })
-      : db.ref("pushVapid").transaction(function(cur) {
-        if (cur && cur.publicKey && cur.privateKey) return; // keep the saved pair
-        return webpush.generateVAPIDKeys();
-      }).then(function(result) {
-        made = result.committed;
-        return result.snapshot.val();
-      });
-    return keys.then(function(k) {
-      var vapid = { publicKey: k.publicKey, privateKey: k.privateKey, subject: push.subject() };
-      vapid.key = webpush.vapidKey(vapid.publicKey, vapid.privateKey);
-      push.vapid = vapid;
-      return db.ref("pushKey").once("value").then(function(snap) {
-        if (snap.val() !== vapid.publicKey) return db.ref("pushKey").set(vapid.publicKey);
-      }).then(function() {
-        console.log("push: on (" + (envPub ? "keys from .env" : made ? "new keys saved in the database" : "keys from the database") + ", subject " + vapid.subject + ")");
-        push.prune();
-      });
-    }).catch(function(err) {
-      push.vapid = null;
-      if (/permission/i.test(err.code || err.message)) {
-        console.log("push: the database rules don't allow push notifications yet (publish firebase-rules.json); they're off until then.");
-      } else {
-        console.log("push: off (" + err.message + ")");
-      }
-    });
-  },
-  // looking at the room right now (on any device)
-  watching: function(uid) {
-    var u = users[uid];
-    return !!(u && u.status && u.idle && u.idle.isIdle === false);
-  },
-  allowed: function(uid) {
-    var now = Date.now();
-    var times = (push.recent[uid] || []).filter(function(t) { return now - t < 60000; });
-    if (times.length >= PUSH_PER_MINUTE) return false;
-    times.push(now);
-    push.recent[uid] = times;
-    return true;
-  },
-  // unread mentions, for the number on the app icon
-  unread: function(uid) {
-    return firebase.database().ref("mentions/" + uid).orderByChild("time").limitToLast(50).once("value").then(function(snap) {
-      var n = 0;
-      snap.forEach(function(m) {
-        if (m.val() && !m.val().read) n++;
-      });
-      return n;
-    }).catch(function() { return null; });
-  },
-  // Send one message to every device a person signed up. filter(sub) picks
-  // devices; opts: ttl, urgency, topic, force (even while they're watching),
-  // badge (add the unread count). Resolves with how many devices got it.
-  toUser: function(uid, message, opts) {
-    opts = opts || {};
-    if (!push.vapid || !uid || uid === botid) return Promise.resolve(0);
-    if (!opts.force && push.watching(uid)) return Promise.resolve(0);
-    if (!push.allowed(uid)) {
-      console.log("push: " + uid + " was sent " + PUSH_PER_MINUTE + " in the last minute; skipped one");
-      return Promise.resolve(0);
-    }
-    var db = firebase.database();
-    return db.ref("pushSubs/" + uid).once("value").then(function(snap) {
-      var subs = [];
-      snap.forEach(function(s) {
-        var v = s.val();
-        if (!v || !v.endpoint || (opts.filter && !opts.filter(v))) return;
-        // made with keys the bot no longer uses: the site re-subscribes it next visit
-        if (v.key && v.key !== push.vapid.publicKey) return;
-        subs.push({ id: s.key, sub: v });
-      });
-      // the 10 devices used most recently (each one is a request)
-      subs = subs.sort(function(a, b) { return (b.sub.seen || 0) - (a.sub.seen || 0); }).slice(0, PUSH_MAX_DEVICES);
-      if (!subs.length) return 0;
-      return (opts.badge ? push.unread(uid) : Promise.resolve(null)).then(function(badge) {
-        var payload = Object.assign({}, message);
-        if (badge !== null) payload.badge = badge;
-        return Promise.all(subs.map(function(item) {
-          return webpush.send(item.sub, payload, push.vapid, { ttl: opts.ttl, urgency: opts.urgency || "high", topic: opts.topic }).then(function(res) {
-            if (res.ok) return 1;
-            if (res.gone) {
-              db.ref("pushSubs/" + uid + "/" + item.id).remove().catch(function() {});
-              console.log("push: removed a device of " + uid + " that unsubscribed (HTTP " + res.status + ")");
-            } else {
-              console.log("push: " + new URL(item.sub.endpoint).hostname + " answered HTTP " + res.status + " for " + uid + (res.body ? ": " + res.body.replace(/\s+/g, " ") : ""));
-            }
-            return 0;
-          }, function(err) {
-            console.log("push: couldn't send to a device of " + uid + ": " + err.message);
-            return 0;
-          });
-        }));
-      }).then(function(sent) {
-        var n = sent.reduce(function(a, b) { return a + b; }, 0);
-        if (n) console.log("push: " + (message.kind || "message") + " for " + ((users[uid] && users[uid].username) || uid) + " to " + n + " device(s)");
-        return n;
-      });
-    }).catch(function(err) {
-      console.log("push: couldn't read " + uid + "'s devices: " + err.message);
-      return 0;
-    });
-  },
-  text: function(txt) {
-    txt = String(txt || "").replace(/\s+/g, " ").trim();
-    return txt.length > 200 ? txt.slice(0, 199) + "…" : txt;
-  },
-  fresh: function(chatData) {
-    return typeof chatData.time !== "number" || serverNow() - chatData.time < PUSH_FRESH_MS;
-  },
-  // a mention just filed in someone's inbox
-  mention: function(target, chatID, chatData, fromName) {
-    if (!push.fresh(chatData)) return;
-    push.toUser(target, {
-      kind: "mention", id: chatID, title: fromName, body: push.text(chatData.txt), from: fromName,
-      fromId: chatData.id, time: chatData.time || Date.now(), tag: "m-" + chatID, url: "./#mentions"
-    }, { badge: true, ttl: 24 * 60 * 60 });
-  },
-  // the bot's own @name messages and @everyone (inbox mentions go through mention())
-  chat: function(chatID, chatData, fromName) {
-    if (!push.vapid || chatData.botCmd || !chatData.id || !push.fresh(chatData)) return;
-    var txt = String(chatData.txt || "");
-    var sender = users[chatData.id] || {};
-    var fromBot = chatData.id === botid;
-    var base = { id: chatID, title: fromName, body: push.text(txt), from: fromName, fromId: chatData.id, time: chatData.time || Date.now() };
-    if (fromBot) {
-      var re = /@([A-Za-z0-9_]{1,22})(?![A-Za-z0-9_])/g, m, seen = {};
-      while ((m = re.exec(txt))) {
-        var name = m[1].toLowerCase();
-        if (name === "everyone" || seen[name]) continue;
-        seen[name] = true;
-        var target = uidLookup(name);
-        if (!target || target === botid) continue;
-        // "are you there?" goes out once and stops mattering when they're removed
-        var awayCheck = /are you there\?/i.test(txt);
-        push.toUser(target, Object.assign({}, base, { kind: "bot", tag: awayCheck ? "away" : "bot-" + chatID, url: "./" }),
-          awayCheck ? { ttl: 4 * 60, topic: "away" } : { ttl: 60 * 60 });
-      }
-    }
-    if ((fromBot || sender.mod || sender.supermod) && /@everyone(?![A-Za-z0-9_])/i.test(txt)) {
-      var now = Date.now();
-      if (now - push.everyoneAt < PUSH_EVERYONE_GAP) return console.log("push: @everyone sent less than 10 minutes ago; not pushed");
-      push.everyoneAt = now;
-      var db = firebase.database();
-      shallowKeys("pushSubs").then(function(uids) {
-        uids.forEach(function(uid) {
-          if (uid === chatData.id || uid === botid) return;
-          var blocked = fromBot ? Promise.resolve(false) : Promise.all([
-            db.ref("blocks/" + uid + "/" + chatData.id).once("value"),
-            db.ref("blocks/" + chatData.id + "/" + uid).once("value")
-          ]).then(function(b) { return !!(b[0].val() || b[1].val()); });
-          blocked.then(function(isBlocked) {
-            if (isBlocked) return;
-            push.toUser(uid, Object.assign({}, base, { kind: "@everyone", title: fromName + " → everyone", tag: "everyone", url: "./" }),
-              { ttl: 60 * 60, urgency: "normal", topic: "everyone", filter: function(sub) { return sub.everyone === true; } });
-          }).catch(function() {});
-        });
-      }).catch(function(err) {
-        console.log("push: couldn't read the devices for @everyone: " + err.message);
-      });
-    }
-  },
-  // devices not opened in 60 days, or saved in a shape the bot can't use
-  prune: function() {
-    if (!push.vapid) return;
-    var cutoff = serverNow() - PUSH_STALE_MS;
-    firebase.database().ref("pushSubs").once("value").then(function(snap) {
-      var updates = {};
-      snap.forEach(function(person) {
-        person.forEach(function(dev) {
-          var v = dev.val() || {};
-          if (!(v.seen > cutoff) || !webpush.isPushEndpoint(v.endpoint)) updates[person.key + "/" + dev.key] = null;
-        });
-      });
-      var n = Object.keys(updates).length;
-      if (n) {
-        console.log("push: dropping " + n + " device(s) not seen in 60 days");
-        return firebase.database().ref("pushSubs").update(updates);
-      }
-    }).catch(function(err) {
-      console.log("push: prune error: " + err.message);
-    });
-  }
-};
+// ─── Push notifications: @mentions to phones and computers (lib/push.js) ────
+var push = require("./lib/push").createPush({
+  db: function() { return firebase.database(); },
+  env: process.env,
+  users: function() { return users; },
+  botid: function() { return botid; },
+  serverNow: serverNow,
+  uidLookup: function(name) { return uidLookup(name); },
+  shallowKeys: function(path) { return shallowKeys(path); }
+});
 setInterval(push.prune, 6 * 60 * 60 * 1000);
 
 // One chat message: a command, a 🔥/🌧 or a theme vote. An error in a command
@@ -2979,545 +2192,91 @@ var chatCounts = function(chatID, feedKey, chatData) {
   return true;
 };
 
-var handleChat = function(chatID, feedKey) {
-    lookupChatData(chatID, function(chatData) {
-      if (!chatData || typeof chatData.txt !== "string") return; // already pruned
-      var sender = users[chatData.id] || {};
-      var senderIsMod = !!(sender.mod || sender.supermod);
-      var senderIsSupermod = !!sender.supermod;
-      var namebo = sender.username || chatData.id;
-      console.log(namebo + ": " + chatData.txt);
-      if (!chatCounts(chatID, feedKey, chatData)) {
-        console.log("ignored a repeated chat message (" + chatID + ")");
-        return;
-      }
-      fileMentions(chatID, chatData, namebo);
-      push.chat(chatID, chatData, namebo);
-      if (typeof chatData.time === "number" && serverNow() - chatData.time > CHAT_MAX_AGE) {
-        console.log("ignored a chat message from " + Math.round((serverNow() - chatData.time) / 1000) + " seconds ago");
-        return;
-      }
-      var matches = chatData.txt.match(/^(?:[!])(\w+)\s*(.*)/i);
-      if (matches && botid !== chatData.id && started) {
-        var command = matches[1].toLowerCase();
-        var args = matches[2];
-        if (command == "addme") {
-          var check = addCheck(chatData.id);
-          if (!check) {
-            var pson = {
-              name: namebo,
-              id: chatData.id,
-              plays: 0
-            };
-
-            if (table.length >= 4) {
-              // table full. time to be on the waitlist now k
-              queue.push(pson);
-              talk(namebo + " added to waitlist. Length is now " + queue.length);
-              updateWaitlist();
-              updateLimit();
-            } else {
-              //table has room. add to table directly
-              if (table.length == 0) {
-                table.push(pson);
-                playDex = 0;
-                startSong();
-              } else {
-                seatDJ(pson);
-                updateThings();
-              }
-            }
-          } else {
-            if (check == 1) {
-              talk("You are already in the waitlist.");
-            } else if (check == 2) {
-              talk("You are already on deck.");
-            }
-          }
-        } else if (command == "removeme") {
-          var removed = removeMe(chatData.id);
-          if (!removed) talk(namebo + ", you aren't even DJing...");
-        } else if (command == "removemeafter" || command == "removeafter" || command == "gottacatchmybus" ||
-                   command == "dontremovemeafter" || command == "dontremoveafter" || command == "dontremoveme" || command == "dontremove") {
-          // "take the bus": step down after your next play. Mods can also set
-          // it for someone of lower rank: !removeafter <name> (#121).
-          var busOn = command.indexOf("dont") !== 0;
-          var busTarget = busTargetFor(chatData.id, namebo, args);
-          if (busTarget.error) {
-            talk(busTarget.error);
-          } else {
-            setBus(busTarget, busOn, chatData.id);
-          }
-        } else if (command == "skip") {
-          if (senderIsMod || (theDJ && chatData.id == theDJ.id)) {
-            if (songLoading) {
-              // the next song is already on its way: one skip per song (said
-              // once, so a few quick skips don't fill the chat)
-              console.log("skip ignored: the next song is still loading");
-              if (skipNoticeFor !== startSeq) {
-                skipNoticeFor = startSeq;
-                talk("Hang on, " + namebo + ", the next song is already loading.");
-              }
-            } else {
-              nextSong();
-            }
-          }
-        } else if (command == "theme") {
-          if (theme) {
-            talk("The current theme is: " + theme);
-          } else {
-            talk("There is no theme at the moment. `!suggest` one if you'd like.")
-          }
-        } else if (command == "suggest") {
-          // Each vote pings @everyone, so: a real theme, one vote at a time,
-          // and one suggestion per person every 15 minutes (mods excepted)
-          var idea = String(args || "").replace(/\s+/g, " ").trim();
-          var waitMs = (themevote.lastBy[chatData.id] || 0) + THEME_SUGGEST_COOLDOWN - Date.now();
-          if (themevote.active) {
-            talk("We are already voting for " + themevote.params.votingfor + ". Let's wait for that to finish first.");
-          } else if (!idea) {
-            talk("Suggest a theme like `!suggest 90s one-hit wonders`.");
-          } else if (idea.length > THEME_MAX_LENGTH) {
-            talk("Keep the theme under " + THEME_MAX_LENGTH + " characters, " + namebo + ".");
-          } else if (waitMs > 0 && !senderIsMod) {
-            talk(namebo + ", you can suggest another theme in " + Math.ceil(waitMs / 60000) + " minute(s).");
-          } else {
-            themevote.lastBy[chatData.id] = Date.now();
-            themevote.go(idea, namebo);
-          }
-        } else if (command == "settheme") {
-          if (senderIsSupermod) {
-            if (args == "none") {
-              setTheme(null);
-              talk("There is no theme.");
-            } else {
-              setTheme(args);
-              talk("Theme has been set to: " + args);
-            }
-          } else {
-            talk("i will absolutely not do that " + namebo);
-          }
-        } else if (command == "lights" || command == "lightson" || command == "lightsoff") {
-          if (senderIsSupermod) {
-            lightsCommand(command, namebo);
-          } else {
-            talk("i will absolutely not do that " + namebo);
-          }
-        } else if (command == "printcard") {
-          if (senderIsSupermod) {
-            printCard();
-          } else {
-            talk("i will absolutely not do that " + namebo);
-          }
-        } else if (command == "giftcard") {
-          if (chatData.card && theDJ) {
-            var ccref = firebase.database().ref("cards/" + chatData.card + "/owner");
-            ccref.set(theDJ.id);
-            notify(theDJ.id, ":white_check_mark: " + namebo + " gave you a card! It's in your card case.", { card: chatData.card, kind: "card", name: theDJ.name });
-            if (chatData.id !== theDJ.id) notify(chatData.id, ":white_check_mark: Card sent to " + theDJ.name + ".", { kind: "card" });
-            if (chatData.id !== theDJ.id) cardGiftedThisSong = true;
-          }
-        } else if (command == "grab") {
-          // the GRAB button names its card; typed, "!grab" takes whichever is up
-          giveCard(chatData.id, namebo, chatData.botCmd ? (args || "").trim().slice(0, 64) : "");
-        } else if (command == "upbot") {
-          // Stay on the decks (even alone with a crowd) until the next
-          // autopilot trigger.
-          if (senderIsMod) {
-            var namebo2 = autoDJ.botName();
-            var botCheck = addCheck(botid);
-            var seat = autoDJ.botSeat();
-            autoDJ.override("up");
-            if (seat && seat.removeAfter) {
-              seat.removeAfter = false;
-              if (theDJ && theDJ.id == botid) theDJ.removeAfter = false;
-              talk("OK! I'll stay on the decks.");
-              updateTable();
-            } else if (!botCheck) {
-              var botSeat = {
-                name: namebo2,
-                id: botid,
-                plays: 0
-              };
-              if (table.length >= 4) {
-                // table full. time to be on the waitlist now k
-                queue.push(botSeat);
-                talk(namebo2 + " (that's me) added to waitlist. Length is now " + queue.length);
-                updateWaitlist();
-                updateLimit();
-              } else {
-                //table has room. add to table directly
-                talk("OK! I will DJ.");
-                if (table.length == 0) {
-                  table.push(botSeat);
-                  playDex = 0;
-                  startSong();
-                } else {
-                  seatDJ(botSeat);
-                  updateThings();
-                }
-              }
-            } else if (botCheck == 1) {
-              talk("I am already in the waitlist.");
-            } else {
-              talk("I am already on deck.");
-            }
-          }
-        } else if (command == "downbot") {
-          // Leave now and stay off the decks until the next autopilot trigger.
-          if (senderIsMod) {
-            autoDJ.override("down");
-            removeMe(botid);
-            talk("OK! I will not DJ.");
-          }
-        } else if (command == "pushtest") {
-          // a test notification to your own devices (the site's settings
-          // send it hidden, as a bot command; typed in chat, the bot answers)
-          var quiet = !!chatData.botCmd;
-          if (!push.vapid) {
-            if (!quiet) talk(namebo + ", push notifications aren't set up on the bot.");
-          } else {
-            push.toUser(chatData.id, {
-              kind: "test", title: "Push notifications are on", body: "You'll get @mentions here when you're away from the room.",
-              tag: "test", url: "./", time: serverNow()
-            }, { force: true, ttl: 5 * 60 }).then(function(n) {
-              if (!quiet) talk(n ? namebo + ", sent a test notification to " + n + " device" + (n == 1 ? "" : "s") + "." :
-                namebo + ", none of your devices get push notifications yet: turn them on in Settings.");
-            });
-          }
-        } else if (command == "autodj") {
-          if ((args || "").trim().toLowerCase() == "auto" && (senderIsMod)) {
-            autoDJ.override("auto");
-            talk("OK! Back on autopilot.");
-            autoDJ.check();
-          } else {
-            talk(autoDJ.status());
-          }
-        } else if (command == "screen" || command == "screendown") {
-          if (senderIsMod) {
-            talk("activating the screen.");
-            firebase.database().ref("thescreen").set(true);
-          }
-        } else if (command == "killscreen" || command == "screenup") {
-          if (senderIsMod) {
-            talk("ok.");
-            firebase.database().ref("thescreen").set(false);
-          }
-
-        } else if (command == "flag") {
-          if (senderIsMod) {
-            // do the flag thing
-            var code = 0;
-            if (args == "broken" || args == "8") {
-              code = 8;
-            } else if (args == "bitrate" || args == "quality" || args == "incomplete" || args == "9") {
-              code = 9;
-            } else if (args == "offtheme" || args == "10") {
-              code = 10;
-            }
-
-            if (song && song.cid && currentListRef()) {
-              if (code) {
-                var flag = {
-                  date: Date.now(),
-                  code: code
-                };
-                queueRef.orderByChild('cid').equalTo(song.cid).once("value")
-                  .then(function(snapshot) {
-                    var data = snapshot.val();
-                    if (data) {
-                      for (var key in data) {
-                        if (data[key].type == song.type) {
-                          queueRef.child(key + "/flagged").set(flag);
-                        }
-                      }
-                    }
-                    talk(":triangular_flag_on_post: FLAGGED (CODE " + code + ")");
-                  });
-              } else {
-                talk("Please specify a valid flag reason (ex: !flag broken, !flag offtheme, !flag quality)");
-              }
-            } else {
-              talk("I just reloaded... I don't remember where in the DJ's lists I got this from.");
-            }
-          }
-        } else if (command == "flagplay") {
-          // Flag a track from Recent: !flagplay <songHistory id> <reason>.
-          // Marks it in every list of the DJ who played it.
-          if (senderIsMod) {
-            var fp = (args || "").trim().split(/\s+/);
-            var fpCode = flagCodeFor(fp[1]);
-            if (!fp[0] || !fpCode) {
-              talk("Use !flagplay <play> <broken|quality|offtheme>");
-            } else {
-              firebase.database().ref("songHistory/" + fp[0]).once("value").then(function(snap) {
-                var play = snap.val();
-                if (!play || !play.djid || !play.cid) return talk("I can't find that play anymore.");
-                return flagTrackForDJ(play.djid, play.cid, play.type, { date: Date.now(), code: fpCode }).then(function(n) {
-                  talk(n ? ":triangular_flag_on_post: FLAGGED " + play.artist + " - " + play.title + " (CODE " + fpCode + ")"
-                         : "That track isn't in " + play.dj + "'s playlists anymore.");
-                });
-              }).catch(function(err) {
-                console.log("flagplay error:", err);
-              });
-            }
-          }
-        } else if (command == "ytmtest") {
-          // !ytmtest Artist - Title (mods): what YouTube Music answers this
-          // server, to tell a missing song from a catalog that isn't answering
-          if (!senderIsMod) {
-            talk("Only mods can run !ytmtest, " + namebo + ".");
-          } else if (!(args || "").trim()) {
-            talk("Use !ytmtest Artist - Title");
-          } else {
-            var ytmName2 = String(args).trim().slice(0, 200);
-            var ytmQuery = swaps.queryFor(ytmName2) || ytmName2;
-            var webAnswer = ytmusic.webSearch(ytmQuery).catch(function() { return null; });
-            ytmusic.diagnose(ytmQuery).then(function(d) {
-              return webAnswer.then(function(w) { return Object.assign({ web: w }, d); });
-            }).then(function(d) {
-              var best = swaps.rankMatches(ytmName2, d.songs)[0];
-              var k = d.kinds;
-              var line = ":mag: YouTube Music for \"" + ytmQuery + "\" from my server: Songs search " +
-                (d.catalog ? d.catalog + (d.catalog === 1 ? " result" : " results") + " (" + d.catalogSongs + " songs)" : "NO RESULTS (the song catalog isn't answering me)") +
-                "; full search " + k.songs + " songs, " + k.videos + " artist videos, " + k.uploads + " fan uploads" + (k.other ? ", " + k.other + " other" : "") +
-                ". " + (best ? "Best match: " + best.title + " · " + best.artist + (best.dur ? " (" + Math.floor(best.dur / 60) + ":" + String(best.dur % 60).padStart(2, "0") + ")" : "") + " youtu.be/" + best.cid
-                  : d.songs.length ? "None of the " + d.songs.length + " songs is the same recording." : "No songs to match.") +
-                " YouTube search: " + (d.web ? d.web.length + " videos, " + d.web.filter(swaps.isArtTrack).length + " audio tracks" : "no answer") + ".";
-              talk(fitChat(line));
-            }, function(err) {
-              talk("YouTube Music didn't answer: " + (err && err.message));
-            });
-          }
-        } else if (command == "swaps" || command == "swapscan") {
-          if (!swapsOn) {
-            talk("Swap suggestions are off (SWAP_SUGGESTIONS=false).");
-          } else if (command == "swapscan" && senderIsMod) {
-            // !swapscan: people seen since their last scan (like the nightly run);
-            // !swapscan all: everyone
-            var fullScan = args == "all";
-            if (swapper().state.running) {
-              talk("Already looking for swaps; !swaps says how it went once it's done.");
-            } else {
-              talk(":mag: Looking through " + (fullScan ? "everyone's" : "recently active people's") + " playlists for broken tracks with a YouTube Music copy. !swaps says how it went.");
-              swapper().run({ reason: "!swapscan", full: fullScan, paid: true });
-            }
-          } else if (swapper().state.running) {
-            talk("Looking for swaps right now (started " + Math.round((Date.now() - swapper().state.startedAt) / 60000) + " min ago).");
-          } else {
-            var lastRun = swapper().state.last;
-            var st = swapper().state;
-            // what still waits, and when the next catch-up pass is, first (chat cuts long lines)
-            var backlog = st.nextAt ? "next pass in " + Math.max(1, Math.round((st.nextAt - Date.now()) / 60000)) + " min" +
-              (st.backlog && st.backlog.tracks ? " (" + st.backlog.tracks + " waiting)" : "") + "; " : "";
-            talk(fitChat("Swaps (nightly at " + SWAP_HOUR + ":00, " + st.today.searches + " searches today): " + backlog +
-              (lastRun ? swaps.summary(lastRun) : "no run yet; mods can start one with !swapscan.")));
-          }
-        } else if (command == "ytmusic" || command == "ytsync") {
-          var ytmName = process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC";
-          if (!ytmOn) {
-            talk("The " + ytmName + " playlist sync is off (YTMUSIC_SYNC=false).");
-          } else if (ytmSync().state.running) {
-            talk("Syncing " + ytmName + " right now: " + (ytmSync().state.step || "starting") + " (started " +
-              Math.round((Date.now() - ytmSync().state.startedAt) / 60000) + " min ago).");
-          } else if (command == "ytsync" && senderIsMod) {
-            talk(":arrows_counterclockwise: Syncing my " + ytmName + " playlist with the Indie Discotheque year playlists. !ytmusic says how it went.");
-            ytmRun({ reason: "!ytsync" });
-          } else if (command == "ytsync") {
-            talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");
-          } else {
-            var ytmLast = ytmSync().state.last;
-            talk(fitChat(ytmName + " (daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.brief(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
-          }
-        } else if (command == "social") {
-          if (!socialTrigger) {
-            talk("Social posting isn't started from here: the bot needs SOCIAL_GITHUB_TOKEN first (see the README).");
-          } else if (args && args.trim() == "now" && senderIsMod) {
-            socialTrigger.dispatch().then(function(ok) {
-              talk(ok ? ":mega: Social posting started: anything due goes out in a few minutes." : "Couldn't start social posting: " + socialTrigger.status().lastError);
-            });
-          } else {
-            var soc = socialTrigger.status();
-            talk(fitChat("Social posting runs every hour at :" + String(soc.minute).padStart(2, "0") + ". " +
-              (soc.lastError ? "The last start failed: " + soc.lastError : soc.lastOk ? "Last started " + Math.max(1, Math.round((Date.now() - soc.lastOk) / 60000)) + " min ago." : "Not started yet since I came online.") +
-              (senderIsMod ? " !social now starts it now." : "")));
-          }
-        } else if (command == "genrelists") {
-          if (!genrePlaylistsOn) {
-            talk("Genre playlists on YouTube Music are off: the bot needs the room's YouTube account connected first (see the README).");
-          } else if (genrePlaylistsRunning) {
-            talk("Updating the genre playlists on YouTube Music right now. !genrelists says how it went.");
-          } else if (args == "run" && senderIsMod) {
-            talk(":arrows_counterclockwise: Updating the genre playlists on YouTube Music. !genrelists says how it went.");
-            genrePlaylists();
-          } else {
-            firebase.database().ref("discoverCache/ytPlaylistsRun").once("value").then(function(snap) {
-              var r = snap.val();
-              talk(fitChat("Genre playlists on YouTube Music (daily at " + YTM_PLAYLIST_HOUR + ":00): " + (r
-                ? r.done + " in step, " + r.created + " made, " + r.added + " songs added, " + r.removed + " taken out" + (r.stopped ? "; stopped: " + r.stopped : "") + "."
-                : "no run yet; mods can start one with !genrelists run.")));
-            }, function() { talk("I couldn't read the last run."); });
-          }
-        } else if (command == "bpm") {
-          if (!song || !song.cid) {
-            talk("Nothing's playing.");
-          } else if (!args) {
-            talk(song.bpm ? "This track is about " + song.bpm + " BPM" + (song.bpmSrc === "manual" ? " (set by hand)." : ".") : "I don't know this one's tempo. The DJ or a mod can set it with `!bpm 128`.");
-          } else {
-            var u = users[chatData.id] || {};
-            var newBpm = Math.round(Number(String(args).trim()) * 10) / 10;
-            if (!(chatData.id === song.djid || u.mod || u.supermod)) {
-              talk("Only the DJ or a mod can set the tempo.");
-            } else if (!(newBpm >= BPM_MIN && newBpm <= BPM_MAX)) {
-              talk("Give me a number between " + BPM_MIN + " and " + BPM_MAX + ", like `!bpm 128`.");
-            } else {
-              firebase.database().ref("bpm/" + bpmKey(song.type, song.cid)).set({ bpm: newBpm, src: "manual", by: chatData.id, at: Date.now() });
-              setSongBpm(song.started, newBpm, "manual");
-              talk("Got it: " + newBpm + " BPM.");
-            }
-          }
-        } else if (command == "fixtags") {
-          if (!senderIsMod) {
-            talk("Only mods can fix tags, " + namebo + ". Ask a mod to fix this one.");
-          } else if (!song || !song.cid) {
-            talk("Nothing's playing.");
-          } else if (args) {
-            // split on the FIRST " - " only, so "Song - Live" titles stay whole
-            var sep = args.indexOf(' - ');
-            if (sep < 1 || !args.slice(sep + 3).trim()) {
-              //bad format
-              talk("what");
-            } else {
-              var newartist = args.slice(0, sep).trim().replace(/&amp;/g, '&');
-              var newtitle = args.slice(sep + 3).trim().replace(/&amp;/g, '&');
-              gts.fixTags(song, currentListRef(), newartist, newtitle, namebo);
-              talk("ok. updating tags to artist: `" + newartist + "` and title: `" + newtitle + "`. thank you.")
-            }
-
-          } else {
-            talk("update current tags with `!fixtags artist - title` and refer to Rohn Standard Notation if unsure. thanks!");
-          }
-        } else if (command == "plays" || command == "firstplay") {
-          playsReply();
-        } else if (command == "review") {
-          if (!senderIsMod) talk("Only mods can sort out tags, " + namebo + ".");
-          else tagReview.next();
-        } else if (command == "same" || command == "different") {
-          if (!senderIsMod) talk("Only mods can sort out tags, " + namebo + ".");
-          else tagReview.answer(args, command == "same" ? "merge" : "separate", namebo);
-        } else if (command == "lastblipped"){
-          if (args){
-            var prsn = uidLookup(args);
-            if (prsn){
-              if (lastBlipped[prsn]){
-                talk("this person last blipped " + Math.round((Date.now() - lastBlipped[prsn]) / 60000) + " minutes ago. or i just rebooted.");
-              } else {
-                talk("i am confused thank you");
-              }
-            }
-          }
-        } else if (command == "remove") {
-          if (senderIsMod) {
-            var prsnToRemove = uidLookup(args);
-            if (prsnToRemove && prsnToRemove != chatData.id && busRank(users[prsnToRemove]) > busRank(sender)) {
-              // a mod can't take a supermod off the decks
-              talk("You can't remove " + ((users[prsnToRemove] && users[prsnToRemove].username) || args) + ", " + namebo + ".");
-            } else if (prsnToRemove) {
-              if (prsnToRemove == botid) autoDJ.override("down");
-              if (!removeMe(prsnToRemove)) talk("Can not remove " + args + " because they are not on the table or in the waitlist. Thanks.");
-            } else {
-              talk("who is that");
-            }
-          }
-        } else if (command == "add") {
-          if (senderIsMod) {
-            var prsnToAdd = uidLookup(args);
-            if (prsnToAdd == botid) autoDJ.override("up");
-            if (prsnToAdd) {
-              var addState = addCheck(prsnToAdd, true);
-              if (!addState) {
-                var addSeat = {
-                  name: users[prsnToAdd].username,
-                  id: prsnToAdd,
-                  plays: 0
-                };
-
-                if (table.length >= 4) {
-                  // table full. time to be on the waitlist now k
-                  queue.push(addSeat);
-                  talk(users[prsnToAdd].username + " added to waitlist. Length is now " + queue.length);
-                  updateWaitlist();
-                  updateLimit();
-                } else {
-                  //table has room. add to table directly
-                  if (table.length == 0) {
-                    table.push(addSeat);
-                    playDex = 0;
-                    startSong();
-                  } else {
-                    seatDJ(addSeat);
-                    updateThings();
-                  }
-                }
-              } else {
-                if (addState == 1) {
-                  talk(users[prsnToAdd].username + " is already in the waitlist.");
-                } else if (addState == 2) {
-                  talk(users[prsnToAdd].username + " is already on deck.");
-                } else if (addState == 3) {
-                  talk(users[prsnToAdd].username + " is almost for sure not here.");
-                }
-              }
-
-            } else {
-              talk("who is that");
-            }
-          }
-        } else if (command == "become") {
-          talk("i do not remember how to do that.")
-        } else if (command == "wait") {
-          talk("wait");
-        } else if (command == "hot") {
-          if (!reactionForOtherSong(chatData)) firelevel.hot(chatData.id, namebo);
-        } else if (command == "storm") {
-          if (!reactionForOtherSong(chatData)) firelevel.storm(chatData.id, namebo);
-        } else if (command == "link") {
-          if (song) {
-            if (song.url) {
-              talk(song.url);
-            } else {
-              talk("Nothing is playing...");
-            }
-          }
-        } else if (command == "dance") {
-          if (cardGiftedThisSong) {
-            if (!robotsDancing) {
-              writeRoomState({ dance: true });
-              robotsDancing = true;
-              talk(":artificial_satellite: D.A.N.C.E satellite: `GLOBAL DANCE SEQUENCE NO. 1 HAS BEEN INITIATED.`");
-            } else {
-              talk(":artificial_satellite: D.A.N.C.E satellite: `already broadcasting dance signal thanks`");
-            }
-          } else {
-            talk(":red_circle::satellite: unable to communicate with the D.A.N.C.E. satellite... if you gift the DJ a h0t new card, i'm sure they'll help boost your signal");
-          }
-        }
-      } else if (reactionForOtherSong(chatData)) {
-        // a 🔥/🌧 sent for the song before (it arrived after the song changed)
-      } else if (chatData.txt == "🔥" || chatData.txt == ":fire:") {
-        firelevel.hot(chatData.id, namebo);
-      } else if (chatData.txt == "🌧" || chatData.txt == ":cloud_with_rain:") {
-        firelevel.storm(chatData.id, namebo);
-      } else if (chatData.txt == "1" && themevote.active) {
-        themevote.params.votes[chatData.id] = 1;
-      }
-
-    });
+// ─── Chat commands (lib/commands.js) ────────────────────────────────────────
+// What the commands read and change: always the room as it is now.
+var room = {
+  get talk() { return talk; },
+  get song() { return song; },
+  get theDJ() { return theDJ; },
+  get users() { return users; },
+  get table() { return table; },
+  get autoDJ() { return autoDJ; },
+  get themevote() { return themevote; },
+  get botid() { return botid; },
+  get swapper() { return swapper; },
+  get queue() { return queue; },
+  get firebase() { return firebase; },
+  get fitChat() { return fitChat; },
+  get ytmSync() { return ytmSync; },
+  get swaps() { return swaps; },
+  get socialTrigger() { return socialTrigger; },
+  get firelevel() { return firelevel; },
+  get updateWaitlist() { return updateWaitlist; },
+  get updateThings() { return updateThings; },
+  get updateLimit() { return updateLimit; },
+  get uidLookup() { return uidLookup; },
+  get startSong() { return startSong; },
+  get serverNow() { return serverNow; },
+  get seatDJ() { return seatDJ; },
+  get removeMe() { return removeMe; },
+  get reactionForOtherSong() { return reactionForOtherSong; },
+  get push() { return push; },
+  get playDex() { return playDex; },
+  set playDex(v) { playDex = v; },
+  get addCheck() { return addCheck; },
+  get ytmusic() { return ytmusic; },
+  get theme() { return theme; },
+  get tagReview() { return tagReview; },
+  get startSeq() { return startSeq; },
+  get skipNoticeFor() { return skipNoticeFor; },
+  set skipNoticeFor(v) { skipNoticeFor = v; },
+  get setTheme() { return setTheme; },
+  get robotsDancing() { return robotsDancing; },
+  set robotsDancing(v) { robotsDancing = v; },
+  get queueRef() { return queueRef; },
+  get notify() { return notify; },
+  get lastBlipped() { return lastBlipped; },
+  get currentListRef() { return currentListRef; },
+  get cardGiftedThisSong() { return cardGiftedThisSong; },
+  set cardGiftedThisSong(v) { cardGiftedThisSong = v; },
+  get busRank() { return busRank; },
+  get THEME_MAX_LENGTH() { return THEME_MAX_LENGTH; },
+  get BPM_MIN() { return BPM_MIN; },
+  get BPM_MAX() { return BPM_MAX; },
+  get ytmsync() { return ytmsync; },
+  get ytmRun() { return ytmRun; },
+  get ytmOn() { return ytmOn; },
+  get writeRoomState() { return writeRoomState; },
+  get updateTable() { return updateTable; },
+  get swapsOn() { return swapsOn; },
+  get started() { return started; },
+  get songLoading() { return songLoading; },
+  get setSongBpm() { return setSongBpm; },
+  get setBus() { return setBus; },
+  get printCard() { return printCard; },
+  get playsReply() { return playsReply; },
+  get nextSong() { return nextSong; },
+  get lookupChatData() { return lookupChatData; },
+  get lightsCommand() { return lightsCommand; },
+  get gts() { return gts; },
+  get giveCard() { return giveCard; },
+  get genrePlaylistsRunning() { return genrePlaylistsRunning; },
+  get genrePlaylistsOn() { return genrePlaylistsOn; },
+  get genrePlaylists() { return genrePlaylists; },
+  get flagTrackForDJ() { return flagTrackForDJ; },
+  get flagCodeFor() { return flagCodeFor; },
+  get fileMentions() { return fileMentions; },
+  get chatCounts() { return chatCounts; },
+  get busTargetFor() { return busTargetFor; },
+  get bpmKey() { return bpmKey; },
+  get YTM_PLAYLIST_HOUR() { return YTM_PLAYLIST_HOUR; },
+  get YTM_HOUR() { return YTM_HOUR; },
+  get THEME_SUGGEST_COOLDOWN() { return THEME_SUGGEST_COOLDOWN; },
+  get SWAP_HOUR() { return SWAP_HOUR; },
+  get CHAT_MAX_AGE() { return CHAT_MAX_AGE; }
 };
+var handleChat = require("./lib/commands").createCommands(room).handleChat;
 
-// Messages already in the feed when the bot starts were handled by the bot
-// that was running then, so they're skipped: a restart never re-runs a !skip.
-// New ones wait (in order) until the bot has loaded the users and the decks.
 var chatReady = false;
 var chatWaiting = [];
 var CHAT_WAITING_MAX = 200;
@@ -3530,7 +2289,7 @@ var markChatReady = function() {
   waiting.forEach(function(item) { handleChat(item.chatID, item.feedKey); });
   console.log("Listening now.");
   stagePub.start();
-  spreadTags.start();
+  tagSystem.start();
   grabSummaries.start();
   songImports.start();
   claimLowercaseNames();
@@ -3617,537 +2376,19 @@ var tagReview = {
   }
 };
 
-// GLOBAL TAG SYSTEM
-// globalTracks/<type><cid> keeps each upload's tags. Once the play history has
-// been published (tools/history: globalSongsMeta/ready), every upload is also
-// linked to its track in globalSongs, which every copy, spelling and upload of
-// a recording shares: the room's own play count, the true first play (back to
-// ADAM and Last.fm), and every version of the song in globalWorks. Until then
-// the bot works as before (per-upload first plays, Last.fm counts).
-// Each call works on the song (and the DJ list) it was started for: the
-// lookups below answer later, when another song may be playing, and their
-// answers must not land on that one.
-var songIndex = { ready: false };
-firebase.database().ref("globalSongsMeta/ready").on("value", function(snap) {
-  songIndex.ready = snap.val() === true;
-}, function(err) {
-  console.log("couldn't read globalSongsMeta (deploy firebase-rules.json):", err && err.message);
+// ─── The global tag system and spreading tag fixes (lib/gts.js) ─────────────
+var tagSystem = require("./lib/gts").createGts({
+  db: function() { return firebase.database(); },
+  song: function() { return song; },
+  botid: function() { return botid; },
+  serverNow: serverNow,
+  currentListRef: function() { return currentListRef(); },
+  lastfm: lastfm,
+  discoverDo: function(name, fn) { return discoverDo(name, fn); },
+  notify: function(uid, txt, opts) { return notify(uid, txt, opts); },
+  talk: function(txt) { return talk(txt); }
 });
-
-var gts = {
-  np: function(s, listRef) {
-    if (!s || !s.cid) return;
-    var upKey = s.type + "" + s.cid;
-    var globalpeek = firebase.database().ref("globalTracks/" + upKey);
-    globalpeek.once("value")
-      .then(function(snapshot) {
-        var thing = snapshot.val();
-        var now = Date.now();
-        var dj = s.djname || null;
-        var upload;
-        // played before: it has a play date (an upload a mod tagged in
-        // Discover before anyone played it has its tags and nothing else)
-        var played = !!(thing && thing.artist && (thing.first_play_date || thing.last_play_date));
-        var preTagged = !played && !!(thing && thing.artist);
-        if (played) {
-          // played before: use its saved tags, then update the last play
-          // (just those fields: a mod's tag fix at the same moment stays)
-          var lastPlay = { last_play_date: now, last_play_dj: dj };
-          // first played as "Release" (YouTube's stand-in channel for a new
-          // release): the artist its description names, now it's known
-          if (swaps.isStandIn(thing.artist) && s.artist && s.artist !== "Unknown" && !swaps.isStandIn(s.artist)) {
-            lastPlay.artist = s.artist;
-            thing = Object.assign({}, thing, { artist: s.artist });
-          }
-          upload = globalpeek.update(lastPlay).then(function() { return thing; });
-        } else {
-          // first play of this upload (or one the history linked but never
-          // played): under the tags a mod gave it in Discover, if they did
-          var firstPlay = {
-            artist: preTagged ? thing.artist : s.artist, title: preTagged ? String(thing.title || "") : s.title, type: s.type,
-            first_play_date: now, first_play_dj: dj, last_play_date: now, last_play_dj: dj
-          };
-          thing = Object.assign({}, thing || {}, firstPlay);
-          upload = globalpeek.update(firstPlay).then(function() { return thing; });
-        }
-        return upload.then(function(up) {
-          // a first play has no earlier play to show
-          if (!songIndex.ready) return gts.reportNp(s, listRef, played ? up : { artist: up.artist, title: up.title, type: up.type });
-          return gts.countPlay(s, upKey, up).then(function(track) {
-            var fixed = {};
-            if (preTagged) {
-              // a mod's own tags: they stand
-            } else if (!played && gts.knownSpelling(track)) {
-              // an upload new to the room, of a track the history already
-              // has: it's written the track's way (a mod's fix, or the
-              // history's best spelling), not the way this upload came in
-              if (track.artist !== up.artist) fixed.artist = track.artist;
-              if (track.title !== up.title) fixed.title = track.title;
-            } else {
-              // the history writes this track with accents the upload's tags
-              // lost (the old Last.fm bug): use them, and keep them
-              if (track.artist && tags.accentsRestored(up.artist, track.artist)) fixed.artist = track.artist;
-              if (track.title && tags.accentsRestored(up.title, track.title)) fixed.title = track.title;
-            }
-            if (fixed.artist || fixed.title) {
-              up = Object.assign({}, up, fixed);
-              globalpeek.update(fixed).catch(function(err) { console.log("track spelling error:", err && err.message); });
-              var respelled = {};
-              respelled[upKey] = { artist: up.artist, title: up.title };
-              discoverDo("retag", function(d) { return d.retag(respelled); });
-            }
-            gts.reportNp(s, listRef, up, track);
-          }, function(err) {
-            console.log("song index error:", err && err.message);
-            gts.reportNp(s, listRef, up);
-          });
-        });
-      })
-      .catch(function(err) {
-        console.log("global tags error:", err && err.message);
-      });
-  },
-  // Does the history have its own spelling of this track (countPlay's result)?
-  // A track this play made has only the upload's own tags.
-  knownSpelling: function(track) {
-    return !!(track && track.known && track.artist && track.title && track.artist !== "Unknown" &&
-      !placeholderTags.is(track.artist, track.title));
-  },
-  // The track this upload is (linking it the first time, by its tags), with
-  // this play counted. Resolves with {id, plays, first..., prev..., work,
-  // known: the track was in the history before this play}.
-  countPlay: function(s, upKey, up) {
-    var db = firebase.database();
-    var dj = s.djname || null;
-    var artist = up.title && up.artist && up.artist !== "Unknown" ? up.artist : s.artist;
-    var title = up.title && up.artist && up.artist !== "Unknown" ? up.title : s.title;
-    return gts.linkTrack(upKey, up, artist, title).then(function(link) {
-      var prev = null;
-      var existed = false;
-      var counted = db.ref("globalSongs/" + link.id).transaction(function(cur) {
-        existed = !!(cur && cur.artist);
-        cur = cur || { artist: artist, title: title, work: link.work, plays: 0 };
-        prev = { plays: cur.plays || 0, date: cur.last_play_date || null, dj: cur.last_play_dj || null };
-        cur.plays = (cur.plays || 0) + 1;
-        if (!cur.first_play_date) {
-          cur.first_play_date = Date.now();
-          cur.first_play_dj = dj;
-        }
-        cur.last_play_date = Date.now();
-        cur.last_play_dj = dj;
-        if (!cur.work && link.work) cur.work = link.work;
-        return cur;
-      });
-      return counted.then(function(res) {
-        var t = res.snapshot.val() || {};
-        var workId = t.work || link.work;
-        s.songId = link.id;
-        var track = {
-          id: link.id, plays: prev ? prev.plays : (t.plays || 1) - 1, artist: t.artist, title: t.title, known: existed,
-          first_play_date: t.first_play_date, first_play_dj: t.first_play_dj,
-          prev_play_date: prev && prev.date, prev_play_dj: prev && prev.dj
-        };
-        if (!workId) return track;
-        return db.ref("globalWorks/" + workId).transaction(function(w) {
-          w = w || { artist: artist, title: title, plays: 0, versions: 1 };
-          w.plays = (w.plays || 0) + 1;
-          if (!w.first_play_date) {
-            w.first_play_date = t.first_play_date;
-            w.first_play_dj = t.first_play_dj || null;
-          }
-          return w;
-        }).then(function(wr) {
-          var w = wr.snapshot.val() || {};
-          if ((w.versions || 1) > 1) track.work_plays = (w.plays || 1) - 1;
-          return track;
-        }, function() { return track; });
-      });
-    });
-  },
-  linkTrack: function(upKey, up, artist, title) {
-    var db = firebase.database();
-    if (up && up.song) {
-      return db.ref("globalSongs/" + up.song + "/work").once("value").then(function(w) { return { id: up.song, work: w.val() }; });
-    }
-    var p = tags.parse(artist, title);
-    var keys = tags.keysOf(p);
-    // too vague to match ("Unknown - Intro"), or a placeholder that isn't a
-    // song ("Unavailable - Unavailable", tools/history/placeholder-tags.csv):
-    // this upload is its own track, so they never pile up into one
-    var vague = p.weak || placeholderTags.is(artist, title);
-    var keyHash = vague ? null : tags.hash(keys.track);
-    var workHash = vague ? null : tags.hash(keys.song);
-    var found = keyHash ? db.ref("globalSongKeys/" + keyHash).once("value").then(function(snap) { return snap.val(); }) : Promise.resolve(null);
-    return found.then(function(id) {
-      if (id) {
-        return db.ref("globalSongs/" + id + "/work").once("value").then(function(w) { return { id: id, work: w.val(), known: true }; });
-      }
-      id = "t" + tags.hash(vague ? "upload:" + upKey : keys.track);
-      var work = workHash ? db.ref("globalWorkKeys/" + workHash).once("value").then(function(snap) { return snap.val() || "s" + workHash; }) : Promise.resolve("s" + tags.hash("track:" + id));
-      return work.then(function(workId) {
-        var updates = {};
-        if (keyHash) updates["globalSongKeys/" + keyHash] = id;
-        if (workHash) updates["globalWorkKeys/" + workHash] = workId;
-        return db.ref().update(updates).then(function() { return { id: id, work: workId }; });
-      });
-    }).then(function(link) {
-      return db.ref("globalTracks/" + upKey + "/song").set(link.id).then(function() { return link; });
-    });
-  },
-  fixTags: function(s, listRef, fixedartist, fixedtitle, by) {
-    if (!s || !s.cid) return;
-    var upKey = s.type + "" + s.cid;
-    var globalpeek = firebase.database().ref("globalTracks/" + upKey);
-    globalpeek.once("value")
-      .then(function(snapshot) {
-        var thing = snapshot.val();
-        // every fix is kept: the history toolkit trusts these most, and
-        // spreadTags passes it on to the other copies and the artist's songs
-        var logRef = firebase.database().ref("tagLog").push();
-        spreadTags.own[logRef.key] = true;
-        logRef.set({
-          k: upKey, a: fixedartist, t: fixedtitle, by: by || null, at: Date.now(),
-          fa: (thing && thing.artist) || s.artist || null, ft: (thing && thing.title) || s.title || null
-        }).catch(function(err) { console.log("tag log error:", err && err.message); });
-        if (thing && thing.artist) {
-          thing.artist = fixedartist;
-          thing.title = fixedtitle;
-          return globalpeek.update({ artist: fixedartist, title: fixedtitle }).then(function() {
-            gts.reportNp(s, listRef, thing, gts.lastTrack(s));
-            return Promise.resolve(gts.learnSpelling(thing.song || s.songId, fixedartist, fixedtitle, upKey)).then(function(link) {
-              if (link && link.id) s.songId = link.id; // this play goes in the log under its own track
-            });
-          });
-        }
-        var fresh = {
-          artist: fixedartist,
-          title: fixedtitle,
-          last_play_date: Date.now(),
-          first_play_date: Date.now(),
-          last_play_dj: s.djname || null,
-          first_play_dj: s.djname || null,
-          type: s.type
-        };
-        return globalpeek.update(fresh).then(function() {
-          gts.reportNp(s, listRef, fresh, gts.lastTrack(s));
-          return gts.learnSpelling(s.songId, fixedartist, fixedtitle, upKey);
-        });
-      })
-      .catch(function(err) {
-        console.log("fix tags error:", err && err.message);
-      });
-  },
-  // A mod's fix is how the track is written from now on, and the fixed
-  // spelling finds this track next time it turns up on another upload. A fix
-  // that names another version ("Kites" -> "Kites (Limousines Remix)") says
-  // this upload was filed under the wrong track: it moves to that version's
-  // track, and the other uploads keep theirs.
-  /**
-   * A mod's spelling for a track goes on its song (or links the upload to its own track).
-   * @returns {Promise<{id: string, work?: string}|void>} the track it's linked to now, when that changed
-   */
-  learnSpelling: function(trackId, artist, title, upKey) {
-    if (!songIndex.ready || !trackId) return;
-    var db = firebase.database();
-    var p = tags.parse(artist, title);
-    /** @returns {Promise<any>} */
-    var rename = function() {
-      var updates = {};
-      updates["globalSongs/" + trackId + "/artist"] = artist;
-      updates["globalSongs/" + trackId + "/title"] = title;
-      if (!p.weak && !placeholderTags.is(artist, title)) updates["globalSongKeys/" + tags.hash(tags.keysOf(p).track)] = trackId;
-      return db.ref().update(updates);
-    };
-    if (!upKey || p.weak) return rename();
-    return db.ref("globalSongs/" + trackId).once("value").then(function(snap) {
-      var t = snap.val();
-      if (!t || tags.sameVersion(tags.keysOf(tags.parse(t.artist || "", t.title || "")).version, tags.keysOf(p).version)) return rename();
-      // the track is this upload alone: it was this version all along
-      return db.ref("globalTracks").orderByChild("song").equalTo(trackId).limitToFirst(2).once("value").then(function(ups) {
-        var others = 0;
-        ups.forEach(function(c) { if (c.key !== upKey) others++; });
-        if (!others) return rename();
-        return gts.linkTrack(upKey, null, artist, title).then(function(link) {
-          // a track new to the history is written the way the mod wrote it
-          return db.ref("globalSongs/" + link.id).transaction(function(cur) {
-            return cur || { artist: artist, title: title, work: link.work || null, plays: 0 };
-          }).then(function() { return link; });
-        });
-      });
-    }).catch(function(err) { console.log("learn spelling error:", err && err.message); });
-  },
-  lastTrack: function(s) {
-    return s && s.track || null;
-  },
-  // Put the saved tags (adm) on song s, tell the room, and rename the track in
-  // the DJ's list (listRef) to match. track: the play history for it (counts
-  // and the true first play), when the history has been published.
-  reportNp: function(s, listRef, adm, track) {
-    if (!adm) return;
-    // no title, or an "Unknown" artist: keep what the bot worked out
-    if (adm.title && adm.artist && adm.artist !== "Unknown") {
-      s.artist = adm.artist;
-      s.title = adm.title;
-    }
-    if (track) s.track = track;
-
-    var tagFixData = {
-      adamData: {
-        artist: s.artist,
-        track_name: s.title
-      },
-      cid: s.cid
-    };
-    // with the history: the track's first play and the play before this one
-    // (nothing for its very first play); without: this upload's
-    var first = track ? (track.plays > 0 ? track : {}) : adm;
-    var lastDate = track ? track.prev_play_date : adm.last_play_date;
-    var lastDj = track ? track.prev_play_dj : adm.last_play_dj;
-    if (lastDate) {
-      tagFixData.adamData.last_play = new Date(lastDate).toISOString();
-      if (lastDj) tagFixData.adamData.last_play_dj = lastDj;
-    }
-    if (first.first_play_date) {
-      tagFixData.adamData.first_play = new Date(first.first_play_date).toISOString();
-      if (first.first_play_dj) tagFixData.adamData.first_play_dj = first.first_play_dj;
-    }
-    if (track && track.work_plays > (track.plays || 0)) tagFixData.adamData.all_versions_playcount = track.work_plays;
-
-    // the room's own count when the history is published, else Last.fm's
-    var counted = track ? Promise.resolve(track.plays) : lastfm.playcount(adm.artist, adm.title);
-    counted.then(function(playcount) {
-      if (playcount) {
-        tagFixData.adamData.playcount = playcount;
-        s.playcount = playcount;
-      }
-      // the room only hears about the song still playing
-      if (s !== song) return;
-      return firebase.database().ref("tagUpdate").set(tagFixData);
-    }).catch(function(err) {
-      console.log("tag update error:", err && err.message);
-    });
-
-    // update the DJ's list with the corrected tags
-    if (listRef) listRef.orderByChild('cid').equalTo(s.cid).once("value")
-      .then(function(snapshot) {
-        var data = snapshot.val();
-        var fixedName = s.artist + " - " + s.title;
-        for (var key in data) {
-          // unchanged names aren't rewritten: the DJ's site would download it again
-          if (data[key] && data[key].type == s.type && data[key].name !== fixedName) {
-            listRef.child(key + "/name").set(fixedName);
-          }
-        }
-      })
-      .catch(function(err) {
-        console.log("playlist tag update error:", err && err.message);
-      });
-  }
-};
-
-// A mod's tag fix (tagLog: the site's tag editor, or !fixtags) goes on every
-// copy of those tags and, when an artist was respelled ("POOLSIDE" ->
-// "Poolside"), on all their songs (lib/retag.js). The library is read once
-// and kept a few minutes, so a mod tidying up a run of songs reads it once,
-// then let go. A fix that can't spread (another song or version: most of
-// them) doesn't read it at all.
-var spreadTags = {
-  own: {}, // tagLog keys !fixtags wrote: it has linked those itself
-  cache: null,
-  cacheAt: 0,
-  CACHE_MS: 5 * 60 * 1000,
-  dropTimer: null,
-  /** @type {Promise<any>} */
-  queue: Promise.resolve(),
-  started: false,
-  start: function() {
-    if (spreadTags.started) return;
-    spreadTags.started = true;
-    firebase.database().ref("tagLog").orderByChild("at").startAt(serverNow()).on("child_added", function(snap) {
-      var e = snap.val();
-      var key = snap.key;
-      // one at a time, in order: each works on the library as the last left it
-      spreadTags.queue = spreadTags.queue.then(function() { return spreadTags.run(key, e); }).catch(function(err) {
-        console.log("tag spread error:", err && err.message);
-      });
-    }, function(err) {
-      console.log("couldn't follow tagLog (deploy firebase-rules.json):", err && err.message);
-    });
-  },
-  // the library as last read, while it's fresh
-  cached: function() {
-    return spreadTags.cache && Date.now() - spreadTags.cacheAt < spreadTags.CACHE_MS ? spreadTags.cache : null;
-  },
-  library: function() {
-    if (spreadTags.cached()) return Promise.resolve(spreadTags.cache);
-    var db = firebase.database();
-    var read = function(path) { return db.ref(path).once("value").then(function(snap) { return snap.val() || {}; }); };
-    return Promise.all([read("globalTracks"), read("globalSongs"), read("globalWorks")]).then(function(v) {
-      spreadTags.cache = { tracks: v[0], songs: v[1], works: v[2] };
-      spreadTags.cacheAt = Date.now();
-      // let go of it once it's stale, so the whole library isn't held for good
-      clearTimeout(spreadTags.dropTimer);
-      spreadTags.dropTimer = setTimeout(function() {
-        spreadTags.cache = null;
-        spreadTags.dropTimer = null;
-      }, spreadTags.CACHE_MS);
-      if (spreadTags.dropTimer.unref) spreadTags.dropTimer.unref();
-      return spreadTags.cache;
-    });
-  },
-  run: function(key, e) {
-    if (!e || typeof e.k !== "string") return;
-    var db = firebase.database();
-    var mine = spreadTags.own[key];
-    delete spreadTags.own[key];
-    var fromSite = !mine && e.by && e.by !== botid;
-    if (!retag.spreads(e, { isPlaceholder: placeholderTags.is })) {
-      // nothing else to fix: just this upload's track and Discover's rows
-      var lib = spreadTags.cached();
-      var up = lib ? lib.tracks[e.k] || (lib.tracks[e.k] = {}) : null;
-      if (up) {
-        up.artist = e.a;
-        up.title = e.t;
-      }
-      // its track, from the library if it's held, else just that one field
-      var songOf = !fromSite ? Promise.resolve(null) : up ? Promise.resolve(up.song) :
-        db.ref("globalTracks/" + e.k + "/song").once("value").then(function(snap) { return snap.val(); });
-      return songOf.then(function(songId) {
-        var linked = songId ? Promise.resolve(gts.learnSpelling(songId, e.a, e.t, e.k)) : Promise.resolve();
-        var changes = {};
-        changes[e.k] = { artist: e.a, title: e.t };
-        discoverDo("retag", function(d) { return d.retag(changes); });
-        return linked;
-      });
-    }
-    return Promise.all([spreadTags.library(), db.ref("songHistory").once("value")]).then(function(v) {
-      var lib = v[0];
-      var up = lib.tracks[e.k] || (lib.tracks[e.k] = {});
-      // the fixed upload as it is now (the cache may be from before the fix)
-      up.artist = e.a;
-      up.title = e.t;
-      var result = retag.plan(e, { tracks: lib.tracks, songs: lib.songs, works: lib.works, history: v[1].val() || {} }, { isPlaceholder: placeholderTags.is });
-      // the site's fix renames the upload's track in the play history, as !fixtags does
-      var linked = fromSite && up.song ? Promise.resolve(gts.learnSpelling(up.song, e.a, e.t, e.k)) : Promise.resolve();
-      // Discover's published rows (charts, new releases, theme nights) follow
-      var changes = {};
-      changes[e.k] = { artist: e.a, title: e.t };
-      if (result) Object.assign(changes, result.renamed);
-      discoverDo("retag", function(d) { return d.retag(changes); });
-      if (!result) return linked;
-      var paths = Object.keys(result.updates);
-      var batches = [];
-      for (var i = 0; i < paths.length; i += 500) {
-        var part = {};
-        paths.slice(i, i + 500).forEach(function(p) { part[p] = result.updates[p]; });
-        batches.push(part);
-      }
-      return linked.then(function() {
-        return batches.reduce(function(chain, part) {
-          return chain.then(function() { return db.ref().update(part); });
-        }, Promise.resolve());
-      }).then(function() {
-        // keep the cached library as it now is
-        paths.forEach(function(p) {
-          var bits = p.split("/");
-          var node = { globalTracks: lib.tracks, globalSongs: lib.songs, globalWorks: lib.works }[bits[0]];
-          if (node && node[bits[1]]) node[bits[1]][bits[2]] = result.updates[p];
-        });
-        console.log("tags: " + e.fa + " - " + e.ft + " -> " + e.a + " - " + e.t + ": " + paths.length + " writes (" + result.copies.length + " copies, " + result.artistCount + " by the artist)");
-        // the song on the decks was one of them: the room sees its new tags
-        var playing = song && song.cid ? song.type + "" + song.cid : null;
-        if (playing && playing !== e.k && result.renamed[playing]) {
-          var r = result.renamed[playing];
-          gts.reportNp(song, currentListRef(), Object.assign({}, lib.tracks[playing], r), gts.lastTrack(song));
-        }
-        var txt = retag.summary(result, e);
-        if (txt && fromSite) notify(e.by, txt, { kind: "track" });
-        else if (txt) talk(txt);
-      });
-    });
-  }
-};
-
-var LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
-var lastfm = {
-  sk: process.env.LASTFM_SESSIONKEY,
-  // Scrobbling needs the API key and its shared secret (.env LASTFM_SECRET)
-  key: process.env.LASTFM_SECRET ? process.env.LASTFM_APIKEY : null,
-  secret: process.env.LASTFM_SECRET,
-  playing: null, // {song, start (unix seconds)} for the song on the decks
-
-  // A song went on the decks: tell last.fm it's playing now.
-  started: function(s) {
-    lastfm.playing = { song: s, start: Math.floor(Date.now() / 1000) };
-    if (!lastfm.key) return;
-    lastfm.call({
-      method: "track.updateNowPlaying",
-      artist: s.artist,
-      track: s.title,
-      duration: s.duration
-    });
-  },
-  // The song ended or was skipped: scrobble it if it played long enough by
-  // last.fm's rule (lib/checks.js scrobbles).
-  ended: function(ranToEnd) {
-    var p = lastfm.playing;
-    lastfm.playing = null;
-    if (!p || !lastfm.key) return;
-    var played = Math.floor(Date.now() / 1000) - p.start;
-    if (!checks.scrobbles(p.song.duration, played, ranToEnd)) return;
-    lastfm.call({
-      method: "track.scrobble",
-      artist: p.song.artist, // tags fixed while it played are on this object
-      track: p.song.title,
-      timestamp: p.start,
-      duration: p.song.duration
-    });
-  },
-  // A signed write call (POST). Last.fm's refusals are logged, never thrown.
-  call: function(params) {
-    params.api_key = lastfm.key;
-    params.sk = lastfm.sk;
-    Object.keys(params).forEach(function(k) {
-      if (params[k] === undefined || params[k] === null) delete params[k];
-    });
-    params.api_sig = lastfm.getApiSignature(params);
-    params.format = "json"; // never signed
-    return http(LASTFM_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(params).toString()
-    }).then(function(res) {
-      if (res.status !== 200 || (res.json && res.json.error)) {
-        console.log("last.fm " + params.method + " refused: " + ((res.json && res.json.message) || "HTTP " + res.status));
-      }
-    }, function(err) {
-      console.log("last.fm " + params.method + " failed:", err.message);
-    });
-  },
-  // How often the room's last.fm account has played a track (false if unknown).
-  playcount: function(artist, title) {
-    if (!process.env.LASTFM_APIKEY || !process.env.LASTFM_USERNAME) return Promise.resolve(false);
-    var url = new URL(LASTFM_API);
-    url.searchParams.set("method", "track.getInfo");
-    url.searchParams.set("track", title);
-    url.searchParams.set("artist", artist);
-    url.searchParams.set("username", process.env.LASTFM_USERNAME);
-    url.searchParams.set("api_key", process.env.LASTFM_APIKEY);
-    url.searchParams.set("format", "json");
-    return http(url).then(function(res) {
-      var n = res.status === 200 && res.json && res.json.track && parseInt(res.json.track.userplaycount, 10);
-      return n > 0 ? n : false;
-    }, function() {
-      return false;
-    });
-  },
-  // Last.fm's api_sig: the params sorted by name, name+value joined, then the
-  // secret, MD5'd (UTF-8)
-  getApiSignature: function(params) {
-    var raw = Object.keys(params).sort().map(function(k) { return k + params[k]; }).join("");
-    return text.md5(raw + lastfm.secret);
-  }
-};
+var gts = tagSystem.gts;
 
 console.log("soundcloud: " + (scOfficial ? "official API (SOUNDCLOUD_CLIENT_ID / SOUNDCLOUD_CLIENT_SECRET)" : "web API with SOUNDCLOUD_KEY"));
 if (process.env.LASTFM_APIKEY && !process.env.LASTFM_SECRET) {
