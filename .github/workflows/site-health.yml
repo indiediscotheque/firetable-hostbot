@@ -1,0 +1,52 @@
+# Site health: what visitors' browsers reported last week (the site's
+# js/telemetry.js): errors in the site's scripts, with where they are in the
+# source, and how fast visits felt (Web Vitals on phones and computers). The
+# report is on the run's summary page. The run fails, so GitHub emails, when
+# the site needs a look: an error in a script that's still live, or a vital
+# rated poor over 20 or more visits (tools/site-health.js).
+# Every Monday, and by hand: Actions → Site health → Run workflow.
+# Needs the repository secrets the Play history workflow has (FIREBASE_KEY,
+# FIREBASE_DB, FIRETABLE_USER, FIRETABLE_PASS: it reads as the bot). The
+# site's address (for its source maps) is www.indiediscotheque.com unless the
+# repository variable SITE_URL says otherwise.
+
+name: Site health
+
+on:
+  schedule:
+    - cron: "41 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days to look back (reports are kept 14)"
+        type: number
+        default: 7
+
+concurrency:
+  group: site-health
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+      FIREBASE_DB: ${{ secrets.FIREBASE_DB }}
+      FIRETABLE_USER: ${{ secrets.FIRETABLE_USER }}
+      FIRETABLE_PASS: ${{ secrets.FIRETABLE_PASS }}
+      SITE_URL: ${{ vars.SITE_URL || 'https://www.indiediscotheque.com/' }}
+      DAYS: ${{ inputs.days || 7 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: tools
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Report
+        run: node tools/site-health.js --days "$DAYS"
