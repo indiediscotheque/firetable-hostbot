@@ -2192,545 +2192,91 @@ var chatCounts = function(chatID, feedKey, chatData) {
   return true;
 };
 
-var handleChat = function(chatID, feedKey) {
-    lookupChatData(chatID, function(chatData) {
-      if (!chatData || typeof chatData.txt !== "string") return; // already pruned
-      var sender = users[chatData.id] || {};
-      var senderIsMod = !!(sender.mod || sender.supermod);
-      var senderIsSupermod = !!sender.supermod;
-      var namebo = sender.username || chatData.id;
-      console.log(namebo + ": " + chatData.txt);
-      if (!chatCounts(chatID, feedKey, chatData)) {
-        console.log("ignored a repeated chat message (" + chatID + ")");
-        return;
-      }
-      fileMentions(chatID, chatData, namebo);
-      push.chat(chatID, chatData, namebo);
-      if (typeof chatData.time === "number" && serverNow() - chatData.time > CHAT_MAX_AGE) {
-        console.log("ignored a chat message from " + Math.round((serverNow() - chatData.time) / 1000) + " seconds ago");
-        return;
-      }
-      var matches = chatData.txt.match(/^(?:[!])(\w+)\s*(.*)/i);
-      if (matches && botid !== chatData.id && started) {
-        var command = matches[1].toLowerCase();
-        var args = matches[2];
-        if (command == "addme") {
-          var check = addCheck(chatData.id);
-          if (!check) {
-            var pson = {
-              name: namebo,
-              id: chatData.id,
-              plays: 0
-            };
-
-            if (table.length >= 4) {
-              // table full. time to be on the waitlist now k
-              queue.push(pson);
-              talk(namebo + " added to waitlist. Length is now " + queue.length);
-              updateWaitlist();
-              updateLimit();
-            } else {
-              //table has room. add to table directly
-              if (table.length == 0) {
-                table.push(pson);
-                playDex = 0;
-                startSong();
-              } else {
-                seatDJ(pson);
-                updateThings();
-              }
-            }
-          } else {
-            if (check == 1) {
-              talk("You are already in the waitlist.");
-            } else if (check == 2) {
-              talk("You are already on deck.");
-            }
-          }
-        } else if (command == "removeme") {
-          var removed = removeMe(chatData.id);
-          if (!removed) talk(namebo + ", you aren't even DJing...");
-        } else if (command == "removemeafter" || command == "removeafter" || command == "gottacatchmybus" ||
-                   command == "dontremovemeafter" || command == "dontremoveafter" || command == "dontremoveme" || command == "dontremove") {
-          // "take the bus": step down after your next play. Mods can also set
-          // it for someone of lower rank: !removeafter <name> (#121).
-          var busOn = command.indexOf("dont") !== 0;
-          var busTarget = busTargetFor(chatData.id, namebo, args);
-          if (busTarget.error) {
-            talk(busTarget.error);
-          } else {
-            setBus(busTarget, busOn, chatData.id);
-          }
-        } else if (command == "skip") {
-          if (senderIsMod || (theDJ && chatData.id == theDJ.id)) {
-            if (songLoading) {
-              // the next song is already on its way: one skip per song (said
-              // once, so a few quick skips don't fill the chat)
-              console.log("skip ignored: the next song is still loading");
-              if (skipNoticeFor !== startSeq) {
-                skipNoticeFor = startSeq;
-                talk("Hang on, " + namebo + ", the next song is already loading.");
-              }
-            } else {
-              nextSong();
-            }
-          }
-        } else if (command == "theme") {
-          if (theme) {
-            talk("The current theme is: " + theme);
-          } else {
-            talk("There is no theme at the moment. `!suggest` one if you'd like.")
-          }
-        } else if (command == "suggest") {
-          // Each vote pings @everyone, so: a real theme, one vote at a time,
-          // and one suggestion per person every 15 minutes (mods excepted)
-          var idea = String(args || "").replace(/\s+/g, " ").trim();
-          var waitMs = (themevote.lastBy[chatData.id] || 0) + THEME_SUGGEST_COOLDOWN - Date.now();
-          if (themevote.active) {
-            talk("We are already voting for " + themevote.params.votingfor + ". Let's wait for that to finish first.");
-          } else if (!idea) {
-            talk("Suggest a theme like `!suggest 90s one-hit wonders`.");
-          } else if (idea.length > THEME_MAX_LENGTH) {
-            talk("Keep the theme under " + THEME_MAX_LENGTH + " characters, " + namebo + ".");
-          } else if (waitMs > 0 && !senderIsMod) {
-            talk(namebo + ", you can suggest another theme in " + Math.ceil(waitMs / 60000) + " minute(s).");
-          } else {
-            themevote.lastBy[chatData.id] = Date.now();
-            themevote.go(idea, namebo);
-          }
-        } else if (command == "settheme") {
-          if (senderIsSupermod) {
-            if (args == "none") {
-              setTheme(null);
-              talk("There is no theme.");
-            } else {
-              setTheme(args);
-              talk("Theme has been set to: " + args);
-            }
-          } else {
-            talk("i will absolutely not do that " + namebo);
-          }
-        } else if (command == "lights" || command == "lightson" || command == "lightsoff") {
-          if (senderIsSupermod) {
-            lightsCommand(command, namebo);
-          } else {
-            talk("i will absolutely not do that " + namebo);
-          }
-        } else if (command == "printcard") {
-          if (senderIsSupermod) {
-            printCard();
-          } else {
-            talk("i will absolutely not do that " + namebo);
-          }
-        } else if (command == "giftcard") {
-          if (chatData.card && theDJ) {
-            var ccref = firebase.database().ref("cards/" + chatData.card + "/owner");
-            ccref.set(theDJ.id);
-            notify(theDJ.id, ":white_check_mark: " + namebo + " gave you a card! It's in your card case.", { card: chatData.card, kind: "card", name: theDJ.name });
-            if (chatData.id !== theDJ.id) notify(chatData.id, ":white_check_mark: Card sent to " + theDJ.name + ".", { kind: "card" });
-            if (chatData.id !== theDJ.id) cardGiftedThisSong = true;
-          }
-        } else if (command == "grab") {
-          // the GRAB button names its card; typed, "!grab" takes whichever is up
-          giveCard(chatData.id, namebo, chatData.botCmd ? (args || "").trim().slice(0, 64) : "");
-        } else if (command == "upbot") {
-          // Stay on the decks (even alone with a crowd) until the next
-          // autopilot trigger.
-          if (senderIsMod) {
-            var namebo2 = autoDJ.botName();
-            var botCheck = addCheck(botid);
-            var seat = autoDJ.botSeat();
-            autoDJ.override("up");
-            if (seat && seat.removeAfter) {
-              seat.removeAfter = false;
-              if (theDJ && theDJ.id == botid) theDJ.removeAfter = false;
-              talk("OK! I'll stay on the decks.");
-              updateTable();
-            } else if (!botCheck) {
-              var botSeat = {
-                name: namebo2,
-                id: botid,
-                plays: 0
-              };
-              if (table.length >= 4) {
-                // table full. time to be on the waitlist now k
-                queue.push(botSeat);
-                talk(namebo2 + " (that's me) added to waitlist. Length is now " + queue.length);
-                updateWaitlist();
-                updateLimit();
-              } else {
-                //table has room. add to table directly
-                talk("OK! I will DJ.");
-                if (table.length == 0) {
-                  table.push(botSeat);
-                  playDex = 0;
-                  startSong();
-                } else {
-                  seatDJ(botSeat);
-                  updateThings();
-                }
-              }
-            } else if (botCheck == 1) {
-              talk("I am already in the waitlist.");
-            } else {
-              talk("I am already on deck.");
-            }
-          }
-        } else if (command == "downbot") {
-          // Leave now and stay off the decks until the next autopilot trigger.
-          if (senderIsMod) {
-            autoDJ.override("down");
-            removeMe(botid);
-            talk("OK! I will not DJ.");
-          }
-        } else if (command == "pushtest") {
-          // a test notification to your own devices (the site's settings
-          // send it hidden, as a bot command; typed in chat, the bot answers)
-          var quiet = !!chatData.botCmd;
-          if (!push.vapid) {
-            if (!quiet) talk(namebo + ", push notifications aren't set up on the bot.");
-          } else {
-            push.toUser(chatData.id, {
-              kind: "test", title: "Push notifications are on", body: "You'll get @mentions here when you're away from the room.",
-              tag: "test", url: "./", time: serverNow()
-            }, { force: true, ttl: 5 * 60 }).then(function(n) {
-              if (!quiet) talk(n ? namebo + ", sent a test notification to " + n + " device" + (n == 1 ? "" : "s") + "." :
-                namebo + ", none of your devices get push notifications yet: turn them on in Settings.");
-            });
-          }
-        } else if (command == "autodj") {
-          if ((args || "").trim().toLowerCase() == "auto" && (senderIsMod)) {
-            autoDJ.override("auto");
-            talk("OK! Back on autopilot.");
-            autoDJ.check();
-          } else {
-            talk(autoDJ.status());
-          }
-        } else if (command == "screen" || command == "screendown") {
-          if (senderIsMod) {
-            talk("activating the screen.");
-            firebase.database().ref("thescreen").set(true);
-          }
-        } else if (command == "killscreen" || command == "screenup") {
-          if (senderIsMod) {
-            talk("ok.");
-            firebase.database().ref("thescreen").set(false);
-          }
-
-        } else if (command == "flag") {
-          if (senderIsMod) {
-            // do the flag thing
-            var code = 0;
-            if (args == "broken" || args == "8") {
-              code = 8;
-            } else if (args == "bitrate" || args == "quality" || args == "incomplete" || args == "9") {
-              code = 9;
-            } else if (args == "offtheme" || args == "10") {
-              code = 10;
-            }
-
-            if (song && song.cid && currentListRef()) {
-              if (code) {
-                var flag = {
-                  date: Date.now(),
-                  code: code
-                };
-                queueRef.orderByChild('cid').equalTo(song.cid).once("value")
-                  .then(function(snapshot) {
-                    var data = snapshot.val();
-                    if (data) {
-                      for (var key in data) {
-                        if (data[key].type == song.type) {
-                          queueRef.child(key + "/flagged").set(flag);
-                        }
-                      }
-                    }
-                    talk(":triangular_flag_on_post: FLAGGED (CODE " + code + ")");
-                  });
-              } else {
-                talk("Please specify a valid flag reason (ex: !flag broken, !flag offtheme, !flag quality)");
-              }
-            } else {
-              talk("I just reloaded... I don't remember where in the DJ's lists I got this from.");
-            }
-          }
-        } else if (command == "flagplay") {
-          // Flag a track from Recent: !flagplay <songHistory id> <reason>.
-          // Marks it in every list of the DJ who played it.
-          if (senderIsMod) {
-            var fp = (args || "").trim().split(/\s+/);
-            var fpCode = flagCodeFor(fp[1]);
-            if (!fp[0] || !fpCode) {
-              talk("Use !flagplay <play> <broken|quality|offtheme>");
-            } else {
-              firebase.database().ref("songHistory/" + fp[0]).once("value").then(function(snap) {
-                var play = snap.val();
-                if (!play || !play.djid || !play.cid) return talk("I can't find that play anymore.");
-                return flagTrackForDJ(play.djid, play.cid, play.type, { date: Date.now(), code: fpCode }).then(function(n) {
-                  talk(n ? ":triangular_flag_on_post: FLAGGED " + play.artist + " - " + play.title + " (CODE " + fpCode + ")"
-                         : "That track isn't in " + play.dj + "'s playlists anymore.");
-                });
-              }).catch(function(err) {
-                console.log("flagplay error:", err);
-              });
-            }
-          }
-        } else if (command == "ytmtest") {
-          // !ytmtest Artist - Title (mods): what YouTube Music answers this
-          // server, to tell a missing song from a catalog that isn't answering
-          if (!senderIsMod) {
-            talk("Only mods can run !ytmtest, " + namebo + ".");
-          } else if (!(args || "").trim()) {
-            talk("Use !ytmtest Artist - Title");
-          } else {
-            var ytmName2 = String(args).trim().slice(0, 200);
-            var ytmQuery = swaps.queryFor(ytmName2) || ytmName2;
-            var webAnswer = ytmusic.webSearch(ytmQuery).catch(function() { return null; });
-            ytmusic.diagnose(ytmQuery).then(function(d) {
-              return webAnswer.then(function(w) { return Object.assign({ web: w }, d); });
-            }).then(function(d) {
-              var best = swaps.rankMatches(ytmName2, d.songs)[0];
-              var k = d.kinds;
-              var line = ":mag: YouTube Music for \"" + ytmQuery + "\" from my server: Songs search " +
-                (d.catalog ? d.catalog + (d.catalog === 1 ? " result" : " results") + " (" + d.catalogSongs + " songs)" : "NO RESULTS (the song catalog isn't answering me)") +
-                "; full search " + k.songs + " songs, " + k.videos + " artist videos, " + k.uploads + " fan uploads" + (k.other ? ", " + k.other + " other" : "") +
-                ". " + (best ? "Best match: " + best.title + " · " + best.artist + (best.dur ? " (" + Math.floor(best.dur / 60) + ":" + String(best.dur % 60).padStart(2, "0") + ")" : "") + " youtu.be/" + best.cid
-                  : d.songs.length ? "None of the " + d.songs.length + " songs is the same recording." : "No songs to match.") +
-                " YouTube search: " + (d.web ? d.web.length + " videos, " + d.web.filter(swaps.isArtTrack).length + " audio tracks" : "no answer") + ".";
-              talk(fitChat(line));
-            }, function(err) {
-              talk("YouTube Music didn't answer: " + (err && err.message));
-            });
-          }
-        } else if (command == "swaps" || command == "swapscan") {
-          if (!swapsOn) {
-            talk("Swap suggestions are off (SWAP_SUGGESTIONS=false).");
-          } else if (command == "swapscan" && senderIsMod) {
-            // !swapscan: people seen since their last scan (like the nightly run);
-            // !swapscan all: everyone
-            var fullScan = args == "all";
-            if (swapper().state.running) {
-              talk("Already looking for swaps; !swaps says how it went once it's done.");
-            } else {
-              talk(":mag: Looking through " + (fullScan ? "everyone's" : "recently active people's") + " playlists for broken tracks with a YouTube Music copy. !swaps says how it went.");
-              swapper().run({ reason: "!swapscan", full: fullScan, paid: true });
-            }
-          } else if (swapper().state.running) {
-            talk("Looking for swaps right now (started " + Math.round((Date.now() - swapper().state.startedAt) / 60000) + " min ago).");
-          } else {
-            var lastRun = swapper().state.last;
-            var st = swapper().state;
-            // what still waits, and when the next catch-up pass is, first (chat cuts long lines)
-            var backlog = st.nextAt ? "next pass in " + Math.max(1, Math.round((st.nextAt - Date.now()) / 60000)) + " min" +
-              (st.backlog && st.backlog.tracks ? " (" + st.backlog.tracks + " waiting)" : "") + "; " : "";
-            talk(fitChat("Swaps (nightly at " + SWAP_HOUR + ":00, " + st.today.searches + " searches today): " + backlog +
-              (lastRun ? swaps.summary(lastRun) : "no run yet; mods can start one with !swapscan.")));
-          }
-        } else if (command == "ytmusic" || command == "ytsync") {
-          var ytmName = process.env.YTMUSIC_PLAYLIST || "YOUTUBE MUSIC";
-          if (!ytmOn) {
-            talk("The " + ytmName + " playlist sync is off (YTMUSIC_SYNC=false).");
-          } else if (ytmSync().state.running) {
-            talk("Syncing " + ytmName + " right now: " + (ytmSync().state.step || "starting") + " (started " +
-              Math.round((Date.now() - ytmSync().state.startedAt) / 60000) + " min ago).");
-          } else if (command == "ytsync" && senderIsMod) {
-            talk(":arrows_counterclockwise: Syncing my " + ytmName + " playlist with the Indie Discotheque year playlists. !ytmusic says how it went.");
-            ytmRun({ reason: "!ytsync" });
-          } else if (command == "ytsync") {
-            talk("Only mods can start a sync, " + namebo + ". !ytmusic says how the last one went.");
-          } else {
-            var ytmLast = ytmSync().state.last;
-            talk(fitChat(ytmName + " (daily at " + YTM_HOUR + ":00): " + (ytmLast ? ytmsync.brief(ytmLast) : "no sync since I started; mods can start one with !ytsync.")));
-          }
-        } else if (command == "social") {
-          if (!socialTrigger) {
-            talk("Social posting isn't started from here: the bot needs SOCIAL_GITHUB_TOKEN first (see the README).");
-          } else if (args && args.trim() == "now" && senderIsMod) {
-            socialTrigger.dispatch().then(function(ok) {
-              talk(ok ? ":mega: Social posting started: anything due goes out in a few minutes." : "Couldn't start social posting: " + socialTrigger.status().lastError);
-            });
-          } else {
-            var soc = socialTrigger.status();
-            talk(fitChat("Social posting runs every hour at :" + String(soc.minute).padStart(2, "0") + ". " +
-              (soc.lastError ? "The last start failed: " + soc.lastError : soc.lastOk ? "Last started " + Math.max(1, Math.round((Date.now() - soc.lastOk) / 60000)) + " min ago." : "Not started yet since I came online.") +
-              (senderIsMod ? " !social now starts it now." : "")));
-          }
-        } else if (command == "genrelists") {
-          if (!genrePlaylistsOn) {
-            talk("Genre playlists on YouTube Music are off: the bot needs the room's YouTube account connected first (see the README).");
-          } else if (genrePlaylistsRunning) {
-            talk("Updating the genre playlists on YouTube Music right now. !genrelists says how it went.");
-          } else if (args == "run" && senderIsMod) {
-            talk(":arrows_counterclockwise: Updating the genre playlists on YouTube Music. !genrelists says how it went.");
-            genrePlaylists();
-          } else {
-            firebase.database().ref("discoverCache/ytPlaylistsRun").once("value").then(function(snap) {
-              var r = snap.val();
-              talk(fitChat("Genre playlists on YouTube Music (daily at " + YTM_PLAYLIST_HOUR + ":00): " + (r
-                ? r.done + " in step, " + r.created + " made, " + r.added + " songs added, " + r.removed + " taken out" + (r.stopped ? "; stopped: " + r.stopped : "") + "."
-                : "no run yet; mods can start one with !genrelists run.")));
-            }, function() { talk("I couldn't read the last run."); });
-          }
-        } else if (command == "bpm") {
-          if (!song || !song.cid) {
-            talk("Nothing's playing.");
-          } else if (!args) {
-            talk(song.bpm ? "This track is about " + song.bpm + " BPM" + (song.bpmSrc === "manual" ? " (set by hand)." : ".") : "I don't know this one's tempo. The DJ or a mod can set it with `!bpm 128`.");
-          } else {
-            var u = users[chatData.id] || {};
-            var newBpm = Math.round(Number(String(args).trim()) * 10) / 10;
-            if (!(chatData.id === song.djid || u.mod || u.supermod)) {
-              talk("Only the DJ or a mod can set the tempo.");
-            } else if (!(newBpm >= BPM_MIN && newBpm <= BPM_MAX)) {
-              talk("Give me a number between " + BPM_MIN + " and " + BPM_MAX + ", like `!bpm 128`.");
-            } else {
-              firebase.database().ref("bpm/" + bpmKey(song.type, song.cid)).set({ bpm: newBpm, src: "manual", by: chatData.id, at: Date.now() });
-              setSongBpm(song.started, newBpm, "manual");
-              talk("Got it: " + newBpm + " BPM.");
-            }
-          }
-        } else if (command == "fixtags") {
-          if (!senderIsMod) {
-            talk("Only mods can fix tags, " + namebo + ". Ask a mod to fix this one.");
-          } else if (!song || !song.cid) {
-            talk("Nothing's playing.");
-          } else if (args) {
-            // split on the FIRST " - " only, so "Song - Live" titles stay whole
-            var sep = args.indexOf(' - ');
-            if (sep < 1 || !args.slice(sep + 3).trim()) {
-              //bad format
-              talk("what");
-            } else {
-              var newartist = args.slice(0, sep).trim().replace(/&amp;/g, '&');
-              var newtitle = args.slice(sep + 3).trim().replace(/&amp;/g, '&');
-              gts.fixTags(song, currentListRef(), newartist, newtitle, namebo);
-              talk("ok. updating tags to artist: `" + newartist + "` and title: `" + newtitle + "`. thank you.")
-            }
-
-          } else {
-            talk("update current tags with `!fixtags artist - title` and refer to Rohn Standard Notation if unsure. thanks!");
-          }
-        } else if (command == "plays" || command == "firstplay") {
-          playsReply();
-        } else if (command == "review") {
-          if (!senderIsMod) talk("Only mods can sort out tags, " + namebo + ".");
-          else tagReview.next();
-        } else if (command == "same" || command == "different") {
-          if (!senderIsMod) talk("Only mods can sort out tags, " + namebo + ".");
-          else tagReview.answer(args, command == "same" ? "merge" : "separate", namebo);
-        } else if (command == "lastblipped"){
-          if (args){
-            var prsn = uidLookup(args);
-            if (prsn){
-              if (lastBlipped[prsn]){
-                talk("this person last blipped " + Math.round((Date.now() - lastBlipped[prsn]) / 60000) + " minutes ago. or i just rebooted.");
-              } else {
-                talk("i am confused thank you");
-              }
-            }
-          }
-        } else if (command == "remove") {
-          if (senderIsMod) {
-            var prsnToRemove = uidLookup(args);
-            if (prsnToRemove && prsnToRemove != chatData.id && busRank(users[prsnToRemove]) > busRank(sender)) {
-              // a mod can't take a supermod off the decks
-              talk("You can't remove " + ((users[prsnToRemove] && users[prsnToRemove].username) || args) + ", " + namebo + ".");
-            } else if (prsnToRemove) {
-              if (prsnToRemove == botid) autoDJ.override("down");
-              if (!removeMe(prsnToRemove)) talk("Can not remove " + args + " because they are not on the table or in the waitlist. Thanks.");
-            } else {
-              talk("who is that");
-            }
-          }
-        } else if (command == "add") {
-          if (senderIsMod) {
-            var prsnToAdd = uidLookup(args);
-            if (prsnToAdd == botid) autoDJ.override("up");
-            if (prsnToAdd) {
-              var addState = addCheck(prsnToAdd, true);
-              if (!addState) {
-                var addSeat = {
-                  name: users[prsnToAdd].username,
-                  id: prsnToAdd,
-                  plays: 0
-                };
-
-                if (table.length >= 4) {
-                  // table full. time to be on the waitlist now k
-                  queue.push(addSeat);
-                  talk(users[prsnToAdd].username + " added to waitlist. Length is now " + queue.length);
-                  updateWaitlist();
-                  updateLimit();
-                } else {
-                  //table has room. add to table directly
-                  if (table.length == 0) {
-                    table.push(addSeat);
-                    playDex = 0;
-                    startSong();
-                  } else {
-                    seatDJ(addSeat);
-                    updateThings();
-                  }
-                }
-              } else {
-                if (addState == 1) {
-                  talk(users[prsnToAdd].username + " is already in the waitlist.");
-                } else if (addState == 2) {
-                  talk(users[prsnToAdd].username + " is already on deck.");
-                } else if (addState == 3) {
-                  talk(users[prsnToAdd].username + " is almost for sure not here.");
-                }
-              }
-
-            } else {
-              talk("who is that");
-            }
-          }
-        } else if (command == "become") {
-          talk("i do not remember how to do that.")
-        } else if (command == "wait") {
-          talk("wait");
-        } else if (command == "hot") {
-          if (!reactionForOtherSong(chatData)) firelevel.hot(chatData.id, namebo);
-        } else if (command == "storm") {
-          if (!reactionForOtherSong(chatData)) firelevel.storm(chatData.id, namebo);
-        } else if (command == "link") {
-          if (song) {
-            if (song.url) {
-              talk(song.url);
-            } else {
-              talk("Nothing is playing...");
-            }
-          }
-        } else if (command == "dance") {
-          if (cardGiftedThisSong) {
-            if (!robotsDancing) {
-              writeRoomState({ dance: true });
-              robotsDancing = true;
-              talk(":artificial_satellite: D.A.N.C.E satellite: `GLOBAL DANCE SEQUENCE NO. 1 HAS BEEN INITIATED.`");
-            } else {
-              talk(":artificial_satellite: D.A.N.C.E satellite: `already broadcasting dance signal thanks`");
-            }
-          } else {
-            talk(":red_circle::satellite: unable to communicate with the D.A.N.C.E. satellite... if you gift the DJ a h0t new card, i'm sure they'll help boost your signal");
-          }
-        }
-      } else if (reactionForOtherSong(chatData)) {
-        // a 🔥/🌧 sent for the song before (it arrived after the song changed)
-      } else if (chatData.txt == "🔥" || chatData.txt == ":fire:") {
-        firelevel.hot(chatData.id, namebo);
-      } else if (chatData.txt == "🌧" || chatData.txt == ":cloud_with_rain:") {
-        firelevel.storm(chatData.id, namebo);
-      } else if (chatData.txt == "1" && themevote.active) {
-        themevote.params.votes[chatData.id] = 1;
-      }
-
-    });
+// ─── Chat commands (lib/commands.js) ────────────────────────────────────────
+// What the commands read and change: always the room as it is now.
+var room = {
+  get talk() { return talk; },
+  get song() { return song; },
+  get theDJ() { return theDJ; },
+  get users() { return users; },
+  get table() { return table; },
+  get autoDJ() { return autoDJ; },
+  get themevote() { return themevote; },
+  get botid() { return botid; },
+  get swapper() { return swapper; },
+  get queue() { return queue; },
+  get firebase() { return firebase; },
+  get fitChat() { return fitChat; },
+  get ytmSync() { return ytmSync; },
+  get swaps() { return swaps; },
+  get socialTrigger() { return socialTrigger; },
+  get firelevel() { return firelevel; },
+  get updateWaitlist() { return updateWaitlist; },
+  get updateThings() { return updateThings; },
+  get updateLimit() { return updateLimit; },
+  get uidLookup() { return uidLookup; },
+  get startSong() { return startSong; },
+  get serverNow() { return serverNow; },
+  get seatDJ() { return seatDJ; },
+  get removeMe() { return removeMe; },
+  get reactionForOtherSong() { return reactionForOtherSong; },
+  get push() { return push; },
+  get playDex() { return playDex; },
+  set playDex(v) { playDex = v; },
+  get addCheck() { return addCheck; },
+  get ytmusic() { return ytmusic; },
+  get theme() { return theme; },
+  get tagReview() { return tagReview; },
+  get startSeq() { return startSeq; },
+  get skipNoticeFor() { return skipNoticeFor; },
+  set skipNoticeFor(v) { skipNoticeFor = v; },
+  get setTheme() { return setTheme; },
+  get robotsDancing() { return robotsDancing; },
+  set robotsDancing(v) { robotsDancing = v; },
+  get queueRef() { return queueRef; },
+  get notify() { return notify; },
+  get lastBlipped() { return lastBlipped; },
+  get currentListRef() { return currentListRef; },
+  get cardGiftedThisSong() { return cardGiftedThisSong; },
+  set cardGiftedThisSong(v) { cardGiftedThisSong = v; },
+  get busRank() { return busRank; },
+  get THEME_MAX_LENGTH() { return THEME_MAX_LENGTH; },
+  get BPM_MIN() { return BPM_MIN; },
+  get BPM_MAX() { return BPM_MAX; },
+  get ytmsync() { return ytmsync; },
+  get ytmRun() { return ytmRun; },
+  get ytmOn() { return ytmOn; },
+  get writeRoomState() { return writeRoomState; },
+  get updateTable() { return updateTable; },
+  get swapsOn() { return swapsOn; },
+  get started() { return started; },
+  get songLoading() { return songLoading; },
+  get setSongBpm() { return setSongBpm; },
+  get setBus() { return setBus; },
+  get printCard() { return printCard; },
+  get playsReply() { return playsReply; },
+  get nextSong() { return nextSong; },
+  get lookupChatData() { return lookupChatData; },
+  get lightsCommand() { return lightsCommand; },
+  get gts() { return gts; },
+  get giveCard() { return giveCard; },
+  get genrePlaylistsRunning() { return genrePlaylistsRunning; },
+  get genrePlaylistsOn() { return genrePlaylistsOn; },
+  get genrePlaylists() { return genrePlaylists; },
+  get flagTrackForDJ() { return flagTrackForDJ; },
+  get flagCodeFor() { return flagCodeFor; },
+  get fileMentions() { return fileMentions; },
+  get chatCounts() { return chatCounts; },
+  get busTargetFor() { return busTargetFor; },
+  get bpmKey() { return bpmKey; },
+  get YTM_PLAYLIST_HOUR() { return YTM_PLAYLIST_HOUR; },
+  get YTM_HOUR() { return YTM_HOUR; },
+  get THEME_SUGGEST_COOLDOWN() { return THEME_SUGGEST_COOLDOWN; },
+  get SWAP_HOUR() { return SWAP_HOUR; },
+  get CHAT_MAX_AGE() { return CHAT_MAX_AGE; }
 };
+var handleChat = require("./lib/commands").createCommands(room).handleChat;
 
-// Messages already in the feed when the bot starts were handled by the bot
-// that was running then, so they're skipped: a restart never re-runs a !skip.
-// New ones wait (in order) until the bot has loaded the users and the decks.
 var chatReady = false;
 var chatWaiting = [];
 var CHAT_WAITING_MAX = 200;
