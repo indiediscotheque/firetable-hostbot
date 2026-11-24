@@ -74,6 +74,7 @@ function readAxis(dir) {
  */
 function readStories(dir) {
   var f = [dir ? path.join(dir, "genre-stories.md") : null, path.join(__dirname, "genre-stories.md")].filter(function(x) { return x && fs.existsSync(x); })[0];
+  /** @type {Object<string, string[]>} */
   var out = {};
   if (!f) return out;
   var name = null;
@@ -157,7 +158,7 @@ function buildLibrary(db, opts) {
   var uidByName = new Map();
   var hiddenUid = new Set();
   Object.keys(users).forEach(function(uid) {
-    var u = users[uid] || {};
+    var u = users[uid] || { username: null, publicName: null };
     if (typeof u.username === "string" && u.username) uidByName.set(u.username.toLowerCase(), uid);
     if (u.publicName === false) hiddenUid.add(uid);
   });
@@ -369,6 +370,7 @@ function buildLibrary(db, opts) {
       tasted += n;
     });
     var tasteList = Array.from(taste.entries()).sort(function(a, b) { return b[1] - a[1]; });
+    /** @type {Array<{g: string, slug?: string, pct: number}>} */
     var tasteOut = tasteList.slice(0, 5).map(function(e) { return { g: e[0], slug: genres.slug(e[0]), pct: Math.round((e[1] / tasted) * 100) }; });
     var shown = tasteOut.reduce(function(s, x) { return s + x.pct; }, 0);
     if (tasted && shown < 100 && tasteList.length > 5) tasteOut.push({ g: "Other", pct: 100 - shown });
@@ -727,9 +729,9 @@ function writeFoundVia(dir, report) {
 async function publishLibrary(db, env, opts, log) {
   opts = opts || {};
   var c = opts.client || (opts.write ? require("./firebase").client(env) : null);
-  var users = {};
-  var bpm = {};
-  var cards = {};
+  var users = /** @type {Object<string, {username, publicName}>} */ ({});
+  var bpm = /** @type {Object<string, {bpm}|number>} */ ({});
+  var cards = /** @type {Object<string, {owner}>} */ ({});
   if (c) {
     log("library: reading users, tempos and cards...");
     users = (await c.get("users")) || {};

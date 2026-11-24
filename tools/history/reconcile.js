@@ -96,6 +96,7 @@ function shiftedToUtc(ms, zone) {
 function toUtc(ms, kind, zones) {
   return kind === 2 ? shiftedToUtc(ms, zones[2]) : kind ? naiveToUtc(ms, zones[1]) : ms;
 }
+/** @type {Array<string|number>} */
 var ZONES = ["UTC", "America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Berlin"];
 for (var off = -12; off <= 14; off++) if (off) ZONES.push(off);
 
@@ -130,8 +131,8 @@ function readAliasCsv(file) {
 // ------------------------------------------------------------- reconcile
 
 /**
- * @param {DatabaseSync} db
- * @param {{dir: string, window?: number, adamTz?: string|number, log: Function}} opts
+ * @param {Object} db
+ * @param {{dir: string, window?: number, adamTz?: string|number, accentMin?: number|string, log: Function}} opts
  */
 function reconcile(db, opts) {
   var log = opts.log || function() {};
@@ -603,7 +604,7 @@ function reconcile(db, opts) {
     var scores = ZONES.map(function(z) {
       var hits = 0;
       sample.forEach(function(s) { if (nearest(precise.get(s[0]), kind === 2 ? shiftedToUtc(s[1], z) : naiveToUtc(s[1], z)) <= 5 * MIN) hits++; });
-      return [z, hits];
+      return /** @type {[string|number, number]} */ ([z, hits]);
     }).sort(function(a, b) { return b[1] - a[1]; });
     zones[kind] = scores[0][1] >= 20 ? scores[0][0] : 0;
     tzReport[kind] = { sample: sample.length, best: scores.slice(0, 3), chosen: zones[kind] };
@@ -771,7 +772,7 @@ function reconcile(db, opts) {
   // capitals and punctuation either way.
   bestArtistName.forEach(function(cur, c) {
     var keys = [c].concat((keysOfArtist.get(c) || []).filter(function(k) { return k !== c; }));
-    var pick = null; // what the logs suggest, for the report and check-artists
+    var pick = /** @type {{word: string, n: number, trusted: boolean, score: number}|null} */ (null); // what the logs suggest, for the report and check-artists
     keys.forEach(function(k) {
       var p = accents.pick("artist", k, cur.name);
       if (p && (!pick || p.n > pick.n)) pick = p;
@@ -805,7 +806,7 @@ function reconcile(db, opts) {
   });
   // YouTube Music's most used spelling of an artist, from any of their keys
   function ytmRef(keys) {
-    var best = null;
+    var best = /** @type {{name: string, n: number}|null} */ (null);
     keys.forEach(function(k) {
       (ytmNames.get(k) || new Map()).forEach(function(n, name) { if (!best || n > best.n) best = { name: name, n: n }; });
     });
@@ -921,7 +922,7 @@ function reconcile(db, opts) {
     var restoredWords = [];
     title = title.split(WORD_SPLIT).map(function(tok) {
       if (!/[\p{L}]/u.test(tok) || tok.length < 3) return tok;
-      var best = null;
+      var best = /** @type {any} */ (null);
       chosen.keys.artist.split("+").forEach(function(ak) {
         var p = accents.pick("word:" + ak, null, tok);
         if (p && (!best || p.n > best.n)) best = p;
@@ -1267,6 +1268,7 @@ function accentBook(min) {
       var prefix = scope + "|" + (key == null ? "" : key + "|");
       var m = book.get(prefix + baseOf(plain)) || book.get(prefix + "~" + tags.squash(plain));
       if (!m) return null;
+      /** @type {{word: string, n: number, trusted: boolean, score: number}|null} */
       var best = null;
       m.forEach(function(v, word) {
         if (nonAsciiCount(word) <= nonAsciiCount(plain)) return;

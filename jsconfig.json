@@ -1,0 +1,34 @@
+{
+  "//": "Type checking (no build: the code runs as written). The types come from the JSDoc comments; tsc checks the code against them. Run: cd test && npm run typecheck",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "skipLibCheck": true,
+    "typeRoots": [
+      "test/node_modules/@types"
+    ],
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "events": [
+        "./test/node_modules/@types/node/events.d.ts"
+      ],
+      "punycode": [
+        "./test/node_modules/@types/node/punycode.d.ts"
+      ],
+      "string_decoder": [
+        "./test/node_modules/@types/node/string_decoder.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "app.js",
+    "lib/**/*.js",
+    "tools/**/*.js"
+  ]
+}

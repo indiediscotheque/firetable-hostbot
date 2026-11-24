@@ -57,7 +57,7 @@ var server = http.createServer(function(req, res) {
 
 var redirect;
 server.listen(0, "127.0.0.1", function() {
-  redirect = "http://127.0.0.1:" + server.address().port;
+  redirect = "http://127.0.0.1:" + /** @type {import("net").AddressInfo} */ (server.address()).port;
   var auth = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
     client_id: clientId, redirect_uri: redirect, response_type: "code",
     scope: "https://www.googleapis.com/auth/youtube", access_type: "offline", prompt: "consent"

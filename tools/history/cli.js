@@ -261,18 +261,18 @@ async function main() {
         db.prepare("SELECT id track_id FROM tracks WHERE keys LIKE ? LIMIT 1").get('%"' + k.track.replace(/[%_]/g, "") + '"%') ||
         db.prepare("SELECT track_id FROM variants WHERE song_key = ? LIMIT 1").get(k.song);
       if (!v) { log("  not in the history (run reconcile?)"); break; }
-      var t = db.prepare("SELECT * FROM tracks WHERE id = ?").get(v.track_id);
+      var t = /** @type {any} */ (db.prepare("SELECT * FROM tracks WHERE id = ?").get(v.track_id));
       var iso = function(ms) { return ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "?"; };
       log("track " + t.id + ": " + t.artist + " - " + t.title);
       log("  " + t.plays + " plays (" + t.scrobbles + " on Last.fm), " + t.djs + " DJs, " + t.uploads + " uploads, " + t.spellings + " spellings");
       log("  first: " + iso(t.first_play_at) + " by " + (t.first_play_dj || "unknown") + (t.first_dj && t.first_dj !== t.first_play_dj ? " (first known DJ: " + t.first_dj + ", " + iso(t.first_dj_at) + ")" : ""));
       log("  last:  " + iso(t.last_play_at) + " by " + (t.last_play_dj || "unknown"));
-      var gRow = db.prepare("SELECT name FROM sqlite_master WHERE name = 'track_genres'").get() && db.prepare("SELECT genres, why FROM track_genres WHERE track_id = ?").get(t.id);
+      var gRow = /** @type {any} */ (db.prepare("SELECT name FROM sqlite_master WHERE name = 'track_genres'").get() && db.prepare("SELECT genres, why FROM track_genres WHERE track_id = ?").get(t.id));
       if (gRow && JSON.parse(gRow.genres).length) log("  genres: " + JSON.parse(gRow.genres).join(", ") + "  (" + gRow.why + ")");
       db.prepare("SELECT artist, title, seen, scrobbles, sources FROM variants WHERE track_id = ? ORDER BY seen DESC LIMIT 25").all(t.id).forEach(function(r) {
         log("    " + String(r.seen).padStart(6) + "×  " + r.artist + " - " + r.title + "  [" + r.sources + "]");
       });
-      var s = db.prepare("SELECT * FROM songs WHERE id = ?").get(t.song_id);
+      var s = /** @type {any} */ (db.prepare("SELECT * FROM songs WHERE id = ?").get(t.song_id));
       if (s && s.versions > 1) {
         log("  all " + s.versions + " versions: " + s.plays + " plays");
         db.prepare("SELECT artist, title, plays FROM tracks WHERE song_id = ? ORDER BY plays DESC").all(s.id).forEach(function(r) { log("    " + String(r.plays).padStart(6) + "  " + r.artist + " - " + r.title); });
@@ -280,7 +280,7 @@ async function main() {
       break;
     }
     case "status": {
-      var rows = db.prepare("SELECT source, count(*) n, sum(role='play') plays, min(at) f, max(at) l FROM obs GROUP BY source ORDER BY source").all();
+      var rows = /** @type {Array<any>} */ (db.prepare("SELECT source, count(*) n, sum(role='play') plays, min(at) f, max(at) l FROM obs GROUP BY source ORDER BY source").all());
       if (!rows.length) log("nothing imported yet in " + dir);
       rows.forEach(function(r) {
         log(r.source.padEnd(22) + String(r.n).padStart(10) + " rows" + String(r.plays || 0).padStart(10) + " plays   " +

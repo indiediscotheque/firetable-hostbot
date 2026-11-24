@@ -49,12 +49,12 @@ async function importAdam(db, file, kind, log) {
   var w = store.obsWriter(db);
   var djName = db.prepare("INSERT INTO dj_names (source, id, name) VALUES ('adam', ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name");
   var cols = null;
-  var map = null;
+  var map = /** @type {any} */ (null);
   var skipped = 0;
   db.exec("BEGIN");
   var result = await csv.readCsv(file, function(raw, n) {
     if (!cols) {
-      cols = {};
+      cols = /** @type {Object<string, string>} */ ({});
       Object.keys(raw).forEach(function(k) { cols[h(k)] = k; });
       map = adamColumns(Object.keys(cols), kind);
       log("  " + file + ": " + map.kind + " sheet (" + Object.keys(cols).join(", ") + ")");
@@ -276,6 +276,7 @@ function first(v, names) {
   return null;
 }
 // a time: ms or seconds since 1970, or text (with a zone, or local "2018-09-22 9:06:57")
+/** @returns {{at: number, naive: boolean|number}|null} naive: local time (true), or a kind of shifted time (2) */
 function timeOf(x) {
   if (x == null || x === "") return null;
   if (typeof x === "number" || /^\d{9,13}$/.test(String(x))) {
@@ -664,9 +665,7 @@ async function lastfmCall(params, apiKey) {
       if (j && j.error) {
         // 29 rate limit, 8/16 temporary, 11 offline: wait and try again
         if ([8, 11, 16, 29].indexOf(j.error) !== -1 && attempt < 8) { await fb.sleep(2000 * Math.pow(2, Math.min(attempt, 5))); continue; }
-        var err = new Error("Last.fm error " + j.error + ": " + j.message);
-        err.code = j.error;
-        throw err;
+        throw Object.assign(new Error("Last.fm error " + j.error + ": " + j.message), { code: j.error });
       }
       if (!res.ok || !j) throw new Error("Last.fm answered " + res.status);
       return j;
@@ -736,7 +735,7 @@ async function importLastfmCsv(db, file, user, log) {
   var w = store.obsWriter(db);
   var res = await csv.readCsv(file, function(raw, n) {
     if (!cols) {
-      cols = {};
+      cols = /** @type {Object<string, string>} */ ({});
       Object.keys(raw).forEach(function(k) { cols[h(k)] = k; });
       var c = Object.keys(cols);
       cols.$artist = pick(c, ["artist", "artist_name", "artist_text"]) || Object.keys(raw)[0];
