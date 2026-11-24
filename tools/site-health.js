@@ -163,7 +163,7 @@ function top(counts, n) {
 
 /**
  * The report and whether the site needs a look.
- * @param {{errors: Object, vitals: Object, days: number, live: function(group): Promise<{where: string, live: boolean}>}} d
+ * @param {{errors: Object, vitals: Object, days: number, live: function(Object): Promise<{where: string, live: boolean}>}} d
  */
 async function report(d) {
   var lines = [];

@@ -326,9 +326,7 @@ async function publish(db, env, opts, log) {
     return counts;
   }
   if (problems.length && !opts.force) {
-    var err = new Error("not published: " + problems.join("; ") + ". Look at the reports; publish --write --force sends it anyway.");
-    err.checks = problems;
-    throw err;
+    throw Object.assign(new Error("not published: " + problems.join("; ") + ". Look at the reports; publish --write --force sends it anyway."), { checks: problems });
   }
 
   // every upload tag this run changes, as it was: kept in the room's database

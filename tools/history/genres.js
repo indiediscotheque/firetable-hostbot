@@ -201,7 +201,7 @@ function assignGenres(db, dir, log) {
   var rows = [];
   var withGenres = 0;
   playedTracks(db).forEach(function(t) {
-    var score = new Map();
+    var score = /** @type {Map<any, any> & {fallback: Map<any, any>}} */ (new Map());
     score.fallback = new Map();
     var why = new Map();
     (lfmTrack.get(t.id) || { tags: [] }).tags.forEach(function(x) { add(score, why, x[0], 3 * x[1] / 100, "lastfm track"); });

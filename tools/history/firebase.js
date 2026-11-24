@@ -49,16 +49,12 @@ function client(env) {
         });
         if (res.status === 401 || res.status === 403) {
           var t = await res.text();
-          var err = new Error("permission denied for " + path + " (" + t.slice(0, 120) + ")");
-          err.denied = true;
-          throw err;
+          throw Object.assign(new Error("permission denied for " + path + " (" + t.slice(0, 120) + ")"), { denied: true });
         }
         if (res.status >= 500 || res.status === 429) throw new Error("database answered " + res.status);
         if (!res.ok) {
           // a request the database won't take (bad data): asking again won't help
-          var bad = new Error("database answered " + res.status + ": " + (await res.text()).slice(0, 200));
-          bad.refused = true;
-          throw bad;
+          throw Object.assign(new Error("database answered " + res.status + ": " + (await res.text()).slice(0, 200)), { refused: true });
         }
         return await res.json();
       } catch (e) {

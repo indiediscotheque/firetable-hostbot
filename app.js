@@ -106,7 +106,7 @@ var siteSeasonsRead = false;
 
 function fetchSiteFile(path) {
   var url = new URL(path, process.env.SITE_URL.trim().replace(/\/?$/, "/"));
-  url.searchParams.set("t", Date.now()); // skip any cached copy
+  url.searchParams.set("t", String(Date.now())); // skip any cached copy
   return fetch(url, { signal: AbortSignal.timeout(15000) }).then(function(res) {
     if (!res.ok) throw new Error(path + " answered HTTP " + res.status);
     return res.text();
@@ -171,7 +171,7 @@ function readPlainData(source, filename) {
     }
     var expr = stmt.type === "ExpressionStatement" && stmt.expression;
     if (!expr || expr.type !== "AssignmentExpression" || expr.operator !== "=") return;
-    var left = expr.left;
+    var left = /** @type {any} */ (expr.left); // acorn's node: an Identifier or a MemberExpression here
     if (left.type === "Identifier") return set(left.name, expr.right);
     if (left.type !== "MemberExpression" || left.computed || left.object.type !== "Identifier") return;
     if (left.object.name === "window") return set(left.property.name, expr.right);
@@ -469,7 +469,9 @@ var uidLookup = function(name) {
   name = String(name || "").trim().replace(/^@/, "");
   if (!name) return false;
   var lower = name.toLowerCase();
+  /** @type {string|false} */
   var exact = false;
+  /** @type {string|false} */
   var anyCase = false;
   for (var key in users) {
     if (!users.hasOwnProperty(key) || !users[key] || typeof users[key].username !== "string") continue;
@@ -528,6 +530,8 @@ setInterval(claimLowercaseNames, 6 * 60 * 60 * 1000);
 
 // opts.grab: a card id, so the site shows a GRAB button for it (#247); until
 // the database rules allow that, opts.plain is said instead.
+// What the log has said once already (the rules not published yet, ...)
+var warnedOnce = {};
 var talk = function(txt, card, opts) {
   txt = fitChat(txt);
   var namebo2 = botid;
@@ -554,8 +558,8 @@ var talk = function(txt, card, opts) {
   firebase.database().ref().update(updates).catch(function(err) {
     if (!/permission/i.test(err.code || err.message)) throw err;
     if (chooto.grab) {
-      if (!talk.grabWarned) {
-        talk.grabWarned = true;
+      if (!warnedOnce.grab) {
+        warnedOnce.grab = true;
         console.log("cards: the database rules don't allow GRAB buttons yet (publish firebase-rules.json); asking for !grab in chat until then.");
       }
       return talk(opts.plain || txt, card);
@@ -595,8 +599,8 @@ var notify = function(uid, txt, opts) {
     }, { ttl: opts.ttl || 60 * 60, topic: opts.topic });
   }, function(err) {
     if (!/permission/i.test(err.code || err.message)) return console.log("couldn't send a notice:", err.message);
-    if (!notify.warned) {
-      notify.warned = true;
+    if (!warnedOnce.notices) {
+      warnedOnce.notices = true;
       console.log("notices: the database rules don't allow them yet (publish firebase-rules.json); pinging in chat until then.");
     }
     var name = (users[uid] && users[uid].username) || opts.name;
@@ -909,8 +913,7 @@ var youtubeVideo = function(id, cb) {
   http(url).then(function(res) {
     if (res.status === 200 && res.json && Array.isArray(res.json.items)) return cb(null, res.json);
     var apiError = res.json && res.json.error;
-    var err = new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status);
-    err.code = (apiError && apiError.code) || res.status;
+    var err = Object.assign(new Error((apiError && apiError.message) || "YouTube answered HTTP " + res.status), { code: (apiError && apiError.code) || res.status });
     cb(err, null);
   }, function(err) {
     cb(err, null);
@@ -985,9 +988,7 @@ var soundcloudSearch = function(query) {
     });
   };
   var failed = function(res) {
-    var err = new Error("SoundCloud answered HTTP " + res.status);
-    err.status = res.status;
-    throw err;
+    throw Object.assign(new Error("SoundCloud answered HTTP " + res.status), { status: res.status });
   };
   if (!scOfficial) {
     return http("https://api-v2.soundcloud.com/search/tracks?q=" + encodeURIComponent(query) + "&limit=20&client_id=" +
@@ -2264,10 +2265,8 @@ var flaggedTracks = function(ref) {
     url.searchParams.set("auth", token);
     return http(url, { timeout: 30000 });
   }).then(function(res) {
-    if (res.status === 400 && /index not defined/i.test(res.body)) {
-      var err = new Error("no index on flagged/date");
-      err.noIndex = true;
-      throw err;
+    if (res.status === 400 && /index not defined/i.test(String(res.body))) {
+      throw Object.assign(new Error("no index on flagged/date"), { noIndex: true });
     }
     if (res.status !== 200) return sdk();
     var data = res.json && typeof res.json === "object" ? res.json : {};
@@ -3208,7 +3207,7 @@ var handleChat = function(chatID, feedKey) {
         } else if (command == "flag") {
           if (senderIsMod) {
             // do the flag thing
-            var code = false;
+            var code = 0;
             if (args == "broken" || args == "8") {
               code = 8;
             } else if (args == "bitrate" || args == "quality" || args == "incomplete" || args == "9") {
@@ -3275,7 +3274,7 @@ var handleChat = function(chatID, feedKey) {
             var ytmQuery = swaps.queryFor(ytmName2) || ytmName2;
             var webAnswer = ytmusic.webSearch(ytmQuery).catch(function() { return null; });
             ytmusic.diagnose(ytmQuery).then(function(d) {
-              return webAnswer.then(function(w) { d.web = w; return d; });
+              return webAnswer.then(function(w) { return Object.assign({ web: w }, d); });
             }).then(function(d) {
               var best = swaps.rankMatches(ytmName2, d.songs)[0];
               var k = d.kinds;
@@ -3843,10 +3842,15 @@ var gts = {
   // that names another version ("Kites" -> "Kites (Limousines Remix)") says
   // this upload was filed under the wrong track: it moves to that version's
   // track, and the other uploads keep theirs.
+  /**
+   * A mod's spelling for a track goes on its song (or links the upload to its own track).
+   * @returns {Promise<{id: string, work?: string}|void>} the track it's linked to now, when that changed
+   */
   learnSpelling: function(trackId, artist, title, upKey) {
     if (!songIndex.ready || !trackId) return;
     var db = firebase.database();
     var p = tags.parse(artist, title);
+    /** @returns {Promise<any>} */
     var rename = function() {
       var updates = {};
       updates["globalSongs/" + trackId + "/artist"] = artist;
@@ -3953,6 +3957,7 @@ var spreadTags = {
   cacheAt: 0,
   CACHE_MS: 5 * 60 * 1000,
   dropTimer: null,
+  /** @type {Promise<any>} */
   queue: Promise.resolve(),
   started: false,
   start: function() {

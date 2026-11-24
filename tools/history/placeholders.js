@@ -153,7 +153,7 @@ function nameFromUpload(text, uploader) {
 
 /**
  * What to do with each upload that carries a placeholder.
- * @param {DatabaseSync} db - the history (obs)
+ * @param {Object} db - the history (obs)
  * @param {ReturnType<typeof load>} ph
  * @param {{toUtc?: function(number, number): number}} [opts] - ADAM's local
  *   times as UTC (the clock the last reconcile found), so its plays can be
@@ -243,8 +243,8 @@ function plan(db, ph, opts) {
 
   out.forEach(function(p, up) {
     var fix = ph.fixes.get(up);
-    var best = null;     // the best name to give it
-    var hint = null;     // the best anything, vague ones too, as a suggestion
+    var best = /** @type {any} */ (null); // the best name to give it
+    var hint = /** @type {any} */ (null);     // the best anything, vague ones too, as a suggestion
     // the room's logs, then YouTube Music / SoundCloud's song data, then the
     // upload's own page, which outweighs one scrobble but not two
     var score = function(v) { return v.room * 10 + v.platform * 5 + v.title_only * 4 + v.lastfm * 3 + tags.quality(v.artist, v.title || "") * 0.01; };
