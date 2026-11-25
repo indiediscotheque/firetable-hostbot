@@ -1500,18 +1500,48 @@ function busRoom(opts = {}) {
 }
 
 test("bus: amounts and names in either order, and the words that cancel", () => {
-  const { parseMinutes: min, parseSongs: songs, splitArgs: split } = busLib;
+  const { parseMinutes: min, parseSongs: songs, parseWhen: when, parseIn: inn, splitArgs: split } = busLib;
   assert.deepEqual(["30", "45m", "45 min", "1h", "1h30", "1h 30m", "1:30", "1.5h", "2 hours"].map(min), [30, 45, 45, 60, 90, 90, 90, 90, 120]);
   assert.ok([" ", "bea", "m", "h", "soon"].every((t) => isNaN(min(t))));
   assert.deepEqual(["3", "3 songs", "one", "a song", "12 plays"].map(songs), [3, 3, 1, 1, 12]);
-  assert.deepEqual(split("3 Bea", songs), { off: false, amount: 3, name: "Bea" });
-  assert.deepEqual(split("Bea 3", songs), { off: false, amount: 3, name: "Bea" });
-  assert.deepEqual(split("@Bea Smith", songs), { off: false, amount: NaN, name: "@Bea Smith" });
-  assert.deepEqual(split("1h 30m Bea", min), { off: false, amount: 90, name: "Bea" });
-  assert.deepEqual(split("off", songs), { off: true, amount: 0, name: "" });
-  assert.deepEqual(split("Bea never", min), { off: true, amount: 0, name: "Bea" });
-  assert.deepEqual(split("0", songs), { off: true, amount: 0, name: "" });
-  assert.deepEqual(split("", songs), { off: false, amount: NaN, name: "" });
+  assert.deepEqual(["3", "3 songs", "45m", "1h30", "1:30", "bea", "m", "dj2"].map(when),
+    [{ songs: 3 }, { songs: 3 }, { minutes: 45 }, { minutes: 90 }, { minutes: 90 }, null, null, null], "a plain number is songs, a unit makes it a time");
+  assert.deepEqual(["45", "1h", "bea"].map(inn), [{ minutes: 45 }, { minutes: 60 }, null], "!leavein: a plain number is minutes");
+  assert.deepEqual(split("3 Bea", when), { off: false, amount: { songs: 3 }, name: "Bea" });
+  assert.deepEqual(split("Bea 3", when), { off: false, amount: { songs: 3 }, name: "Bea" });
+  assert.deepEqual(split("@Bea Smith", when), { off: false, amount: null, name: "@Bea Smith" });
+  assert.deepEqual(split("1h 30m Bea", inn), { off: false, amount: { minutes: 90 }, name: "Bea" });
+  assert.deepEqual(split("Bea 30 min", when), { off: false, amount: { minutes: 30 }, name: "Bea" });
+  assert.deepEqual(split("off", when), { off: true, amount: null, name: "" });
+  assert.deepEqual(split("Bea never", inn), { off: true, amount: null, name: "Bea" });
+  assert.deepEqual(split("0", when), { off: true, amount: null, name: "" });
+  assert.deepEqual(split("0m Bea", when), { off: true, amount: { minutes: 0 }, name: "Bea" });
+  assert.deepEqual(split("", when), { off: false, amount: null, name: "" });
+});
+
+test("bus: the original commands take a count or a time too; none is 1, as before", () => {
+  for (const cmd of ["removeafter", "removemeafter", "gottacatchmybus", "lastsong", "leaveafter", "stepdownafter"]) {
+    const r = busRoom({ playing: "u2" });
+    say(r, "u1", "!" + cmd);
+    assert.deepEqual([r.table[0].removeAfter, r.table[0].busSongs, r.said], [true, undefined, ["Ann, I'll remove you after your next song."]], "!" + cmd);
+    say(r, "u1", "!" + cmd + " 3");
+    assert.deepEqual([r.table[0].removeAfter, r.table[0].busSongs], [false, 3], "!" + cmd + " 3");
+    say(r, "u1", "!" + cmd + " 20m");
+    assert.ok(r.table[0].busAt > 0 && !r.table[0].busSongs, "!" + cmd + " 20m");
+  }
+  const r = busRoom();
+  say(r, "mod", "!removeafter Bea 2");
+  assert.equal(r.table[1].busSongs, 2, "a mod's !removeafter name n");
+  say(r, "mod", "!removeafter Bea");
+  assert.deepEqual([r.table[1].removeAfter, r.table[1].busSongs], [true, undefined], "a mod's !removeafter name: as before");
+  say(r, "u1", "!removeafter 13h");
+  assert.match(r.said.at(-1), /Up to 12 hours/);
+  for (const cmd of ["dontremoveme", "dontremove", "dontremovemeafter", "dontremoveafter", "stay"]) {
+    const s = busRoom();
+    say(s, "u1", "!leaveafter 4");
+    say(s, "u1", "!" + cmd);
+    assert.deepEqual([s.table[0].removeAfter, s.table[0].busSongs], [false, undefined], "!" + cmd + " cancels a countdown");
+  }
 });
 
 test("bus: !leaveafter 3 counts down the songs, the one playing now included, then steps you down", () => {
