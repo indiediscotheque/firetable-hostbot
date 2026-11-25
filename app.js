@@ -588,9 +588,9 @@ var moveToBottom = function(listRef, key, entry) {
 var flagAndRetry = function(listRef, key, track, code, message) {
   // keep everything saved with the track (artwork, page URL)
   var djid = theDJ.id;
-  moveToBottom(listRef, key, Object.assign({}, track, {
+  moveToBottom(listRef, key, bus.endOfSet(theDJ, Object.assign({}, track, { // a set's last track: the next one ends it
     flagged: { date: Date.now(), code: code }
-  })).then(function(newKey) {
+  }), false)).then(function(newKey) {
     // the bot's YOUTUBE MUSIC playlist: put a YouTube Music copy in its place
     // now. Anyone else's list: look for one to suggest (one search, no quota)
     if (ytmOn && djid === botid && ytmSync().isList(listRef)) setTimeout(function() { ytmSync().track(listRef, newKey); }, 5000);
@@ -698,7 +698,7 @@ var beginSong = function(seq, listRef, key, track, songInfo) {
     if (!songBack.img && songInfo.image !== "img/idlogo.png") songBack.img = songInfo.image;
     if (!songBack.url && songInfo.url) songBack.url = songInfo.url;
   }
-  moveToBottom(listRef, key, songBack).then(function() {
+  moveToBottom(listRef, key, bus.endOfSet(theDJ, songBack, true)).then(function() { // the last of a set: step down after it
     if (seq === startSeq) gts.np(songInfo, listRef); // global tags, for the song still playing
   }, function() {});
   // move forward at the end of the song
