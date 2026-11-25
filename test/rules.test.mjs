@@ -317,6 +317,13 @@ await expect("DENIED", "a vital out of range", anon.ref("clientVitals").push(vit
 await expect("DENIED", "a negative vital", anon.ref("clientVitals").push(vitRep({ inp: -1 })));
 await expect("DENIED", "an extra field in a vitals report", anon.ref("clientVitals").push(vitRep({ uid: "eve" })));
 
+console.log("-- played lately (playedRecently, lib/repeats.js)");
+const lately = { w: 1, u: 2, n: "art song", dj: "dj1" };
+await expect("ALLOWED", "bot saves a play", db("bot").ref("playedRecently/1abc").set(lately));
+await expect("ALLOWED", "anyone, signed in or not, reads them", env.unauthenticatedContext().database().ref("playedRecently").once("value"));
+await expect("DENIED", "someone else adds one", eve.ref("playedRecently/1xyz").set(lately));
+await expect("DENIED", "someone else clears them", eve.ref("playedRecently").remove());
+
 console.log("-- heartbeat (botSeen)");
 await expect("ALLOWED", "bot writes its heartbeat (server time)", db("bot").ref("botSeen").set(TS));
 await expect("ALLOWED", "anyone, signed in or not, reads it", env.unauthenticatedContext().database().ref("botSeen").once("value"));

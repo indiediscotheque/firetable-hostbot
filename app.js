@@ -160,6 +160,9 @@ var loadRoom = function() {
   return Promise.all(["table", "waitlist", "playdex", "songToPlay"].map(function(path) {
     return db.ref(path).once("value");
   })).then(function(snaps) {
+    // what was played lately, before the first track is picked
+    return repeats.load(snaps[3].val()).then(function() { return snaps; });
+  }).then(function(snaps) {
     table = Object.values(snaps[0].val() || {});
     queue = Object.values(snaps[1].val() || {});
     playDex = snaps[2].val() || 0;
@@ -685,6 +688,7 @@ var beginSong = function(seq, listRef, key, track, songInfo) {
   applyArtworkColors(seq, songInfo.image);
   song = songInfo;
   firebase.database().ref("songToPlay").set(songInfo);
+  repeats.played(songInfo); // passed over in everyone's lists for the next few hours
   lastfm.started(songInfo);
   // keep everything saved with the track, and remember SoundCloud artwork /
   // page URL learned just now
@@ -835,40 +839,18 @@ var currentListRef = function() {
   return queueRef;
 };
 
-// The first track in a list that isn't flagged, in play order (key order).
-// One indexed query on flagged/date: unflagged tracks sort first there, in
-// key order, so it costs the same however many flagged tracks sit at the top
-// of the list (DJs keep thousands there). Very old flags without a date look
-// unflagged to the index, so the answer is checked here; if every track it
-// returns is flagged anyway, the list is read in growing pages instead.
-var TRACK_PAGE = 20;
-var firstUnflagged = function(snap) {
-  var found = null;
-  snap.forEach(function(child) {
-    var track = child.val();
-    if (!found && track && !track.flagged) found = { key: child.key, track: track };
-  });
-  return found;
+// A number from the environment (unset or not a number: the fallback)
+var envNumber = function(name, fallback) {
+  var n = Number(process.env[name]);
+  return process.env[name] && n >= 0 ? n : fallback;
 };
-var firstPlayableByPage = function(listRef, after, size) {
-  size = size || TRACK_PAGE;
-  var query = listRef.orderByKey();
-  if (after) query = query.startAfter(after);
-  return query.limitToFirst(size).once("value").then(function(snap) {
-    var found = firstUnflagged(snap);
-    var last = null;
-    snap.forEach(function(child) { last = child.key; });
-    if (found || snap.numChildren() < size) return found;
-    return firstPlayableByPage(listRef, last, Math.min(size * 4, 2000));
-  });
-};
-var firstPlayable = function(listRef) {
-  return listRef.orderByChild("flagged/date").endAt(null).limitToFirst(TRACK_PAGE).once("value").then(function(snap) {
-    var found = firstUnflagged(snap);
-    if (found || snap.numChildren() < TRACK_PAGE) return found;
-    return firstPlayableByPage(listRef);
-  });
-};
+
+// The track a DJ's list plays next: neither flagged nor played in the last
+// REPEAT_HOURS (lib/repeats.js; the site warns on those rows).
+var repeats = require("./lib/repeats").createRepeats({
+  db: function() { return firebase.database(); }, now: serverNow, hours: envNumber("REPEAT_HOURS", 4)
+});
+var repeatMessages = !/^(false|0|off|no)$/i.test(String(process.env.REPEAT_MESSAGES || "").trim());
 
 var startSong = function(noPrevPlay) {
   var seq = ++startSeq;
@@ -958,8 +940,10 @@ var startSong = function(noPrevPlay) {
   queueRef = djListRef(theDJ.id);
 
   var listRef = queueRef; // this DJ's list, even if queueRef moves on meanwhile
-  firstPlayable(listRef).then(function(found) {
+  repeats.firstPlayable(listRef).then(function(found) {
     if (seq !== startSeq) return; // skipped or restarted meanwhile
+    var skippedNote = repeatMessages && found && theDJ.id !== botid && repeats.notice(theDJ.id, found);
+    if (skippedNote) notify(theDJ.id, skippedNote, { kind: "track", name: theDJ.name, ttl: 60 * 60 });
     var data = {};
     var goodTrack = null;
     if (found) {
@@ -1678,7 +1662,7 @@ var SWAP_MAX_SEARCHES = parseInt(process.env.SWAP_MAX_SEARCHES, 10) || 600;
 // with lists not looked through for SWAP_RESCAN_HOURS (20) gets a pass in a
 // few minutes. SWAP_CATCHUP=false: the nightly run only.
 var SWAP_CATCHUP = process.env.SWAP_CATCHUP !== "false";
-// (the numbers are read with envNumber, further down, when the swapper starts)
+// (the numbers are read with envNumber when the swapper starts)
 // songs a run looks up on artist and album pages and in Apple's catalog
 // (each a few requests, so capped apart)
 var SWAP_MAX_DEEP = parseInt(process.env.SWAP_MAX_DEEP, 10) || 300;
@@ -2378,10 +2362,6 @@ setInterval(pruneChat, 5 * 60000);
 //   AWAY_LOST_HOURS offline do you get the same question and bus.
 // Coming back online at any point cancels it all, and takes you off a bus
 // this put you on (not one you caught yourself).
-var envNumber = function(name, fallback) {
-  var n = Number(process.env[name]);
-  return process.env[name] && n >= 0 ? n : fallback;
-};
 var AWAY_CLOSED_MS = envNumber("AWAY_CLOSED_MIN", 5) * 60000;
 var AWAY_ANSWER_MS = envNumber("AWAY_ANSWER_MIN", 5) * 60000;
 var AWAY_LOST_MS = envNumber("AWAY_LOST_HOURS", 3) * 3600000;

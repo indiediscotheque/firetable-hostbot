@@ -88,6 +88,7 @@ export function fakeDb(data) {
   let pushes = 0;
   const ref = (p = "") => Object.assign(query(p), {
     set: async (v) => { writes.push(p); put(p, v); notify(); },
+    remove: async () => { writes.push(p); put(p, null); notify(); },
     update: async (u) => { for (const [k, v] of Object.entries(u)) { writes.push((p ? p + "/" : "") + k); put(p + "/" + k, v); } notify(); },
     push: async (v) => {
       const key = "k" + String(++pushes).padStart(6, "0");

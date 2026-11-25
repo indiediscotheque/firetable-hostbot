@@ -41,6 +41,7 @@ Needs Node.js 22 or newer (`node -v`); on an older one the bot stops at startup 
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional, leave unset: the bot makes its own push keys. Set them only to bring keys from elsewhere |
 | `SOCIAL_GITHUB_TOKEN` | optional: starts the site's social posting every hour (see [social posting](#social-posting)). `SOCIAL_MINUTE` the minute past each hour (default `17`); `SOCIAL_POSTING=false` turns it off |
 | `AWAY_CLOSED_MIN` / `AWAY_ANSWER_MIN` / `AWAY_LOST_HOURS` | optional: when DJs who left are asked and put on the bus (default `5` / `5` / `3`, see [away DJs](#away-djs)) |
+| `REPEAT_HOURS` / `REPEAT_MESSAGES` | optional: how long a song played in the room is skipped in everyone's lists (default `4` hours; `0` turns it off), and `false` to stop telling a DJ when one of theirs was skipped (see [no repeats](#no-repeats)) |
 
 ## hosting (free, always on)
 The bot is a long-running process with no web server, so it needs a host that never sleeps. Oracle Cloud's Always Free tier works and costs nothing.
@@ -229,6 +230,12 @@ The site's **Turntable theme** (an easter egg in Live) keeps each member's Turnt
    ```
    The log says `soundcloud: official API` at startup. The bot gets an OAuth token and reuses it until it expires (SoundCloud limits how often new ones can be made). Tracks the official API marks as blocked are flagged as unavailable.
 4. Keep `SOUNDCLOUD_KEY` in `.env`: removing the two new lines and restarting goes straight back to today's setup.
+
+## no repeats
+A song the room played in the last 4 hours (`REPEAT_HOURS`) doesn't play again yet: when a DJ's turn comes, the bot plays the first track in their list that's neither flagged nor played lately, and leaves the skipped ones where they are, so they come up again once their hours are over. Another upload of the same song counts too (the same Artist - Title once "(Official Video)"-style junk, "feat." credits, punctuation, accents and case are set aside), but a remix is a different track. If every song in a list was played lately, the first plays anyway, so the decks never go quiet.
+- The DJ gets a quiet notice the first time a song of theirs is skipped ("Skipped … the room heard it 1 hr 12 min ago … Playing … instead"), not every turn. `REPEAT_MESSAGES=false` turns it off.
+- The plays are kept in `playedRecently/<type><cid>` (`w` when, `u` until, `n` the song's key, `dj`), a few dozen at a time. The site reads it to mark those rows in your playlist ("Played 1h ago") and to move its Next tag to the song that will really play. After a restart the bot reads it back, with the latest Recent plays.
+- Needs the latest `firebase-rules.json` published (`playedRecently`). Until then songs are still skipped, but the site can't show which.
 
 ## tracks that can't play here
 Before a track plays, the bot checks it with the same rules (and flag codes) as the site's playlist checker (`lib/checks.js`). It flags the track, moves it to the bottom of the DJ's list and plays their next one when it is:
