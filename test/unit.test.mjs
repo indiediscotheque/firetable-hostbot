@@ -1624,3 +1624,24 @@ test("bus: mods can do it for someone of lower rank, who hears it privately", ()
   say(bot, "mod", "!leaveafter 2 jarvis");
   assert.ok(bot.calls.includes("override down"), "sending the bot home overrides the autopilot");
 });
+
+test("bus: a track marked as the end of a set puts its DJ on the bus when it starts, and loses the mark", () => {
+  const r = busRoom();
+  r.table[0].busSongs = 4;
+  const track = { type: 1, cid: "abc", name: "A - B", busStop: true };
+  const saved = r.bus.endOfSet(r.table[0], track, true);
+  assert.deepEqual(saved, { type: 1, cid: "abc", name: "A - B" }, "saved at the bottom without the mark");
+  assert.equal(track.busStop, true, "the original isn't changed");
+  assert.deepEqual([r.table[0].removeAfter, r.table[0].busSongs], [true, undefined], "this song ends the set, whatever else was set");
+  assert.deepEqual(r.said, [":bus: Last song of Ann's set: they'll step down after it."]);
+  assert.ok(r.calls.includes("table"));
+  const broken = busRoom();
+  broken.bus.endOfSet(broken.table[0], { cid: "x", busStop: true, flagged: { code: 2 } }, false);
+  assert.equal(broken.table[0].removeAfter, true);
+  assert.equal(broken.said[0], ":bus: Ann's last song can't play, so the next one ends their set: they'll step down after it.");
+  const plain = busRoom();
+  const t = { cid: "y" };
+  assert.equal(plain.bus.endOfSet(plain.table[0], t, true), t, "an ordinary track: nothing to do");
+  assert.deepEqual([plain.said, plain.table[0].removeAfter], [[], undefined]);
+});
+

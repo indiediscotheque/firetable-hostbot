@@ -348,6 +348,35 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async set_ends_on_a_marked_track() {
+    // dj1 marked a track in their DJ playlist as their set's last: when it
+    // starts they're on the bus (and the mark is gone); after it they're off.
+    // dj2's marked track is broken: the one played in its place ends the set.
+    await put("/", base(Object.assign(nowPlaying("dj1", "cur1"), {
+      queues: { dj1: { k1: Object.assign(yt("yt1"), { busStop: true }), k2: yt("yt2") }, dj2: { s1: Object.assign(yt("dead1"), { busStop: true }), s2: yt("yt3"), s3: yt("yt4") } }
+    })));
+    const p = startBot("set_end");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    await say("boss", "!skip"); // dj2: dead1 is broken, yt3 plays and ends their set
+    await sleep(4500);
+    let st = await get("/");
+    const at = (id) => (st.table || []).find((x) => x && x.id === id);
+    const marked = (list) => Object.values(list || {}).filter((t) => t.busStop).map((t) => t.cid);
+    check(st.songToPlay.cid === "yt3" && at("dj2") && at("dj2").removeAfter === true && marked(st.queues.dj2).length === 0 &&
+      said(st).some((t) => /dj2's last song can't play, so the next one ends their set/.test(t)), "a broken last track: the next one ends the set, the mark is gone");
+    await say("boss", "!skip"); // dj2 steps down; dj1 plays yt1, their set's last
+    await sleep(2500);
+    st = await get("/");
+    check(!at("dj2") && st.songToPlay.cid === "yt1" && at("dj1").removeAfter === true && marked(st.queues.dj1).length === 0 &&
+      said(st).some((t) => /Last song of dj1's set: they'll step down after it/.test(t)), "dj2 is off; dj1's marked track starts: on the bus, mark gone");
+    await say("boss", "!skip");
+    await sleep(2500);
+    st = await get("/");
+    check(!at("dj1"), "after it, dj1 is off the decks");
+    await healthy(p);
+    return p;
+  },
   async song_tempo() {
     // an old lookup found nothing; the new one searches plainly, skips the
     // karaoke cover and the version with no tempo, and finds the radio edit's
