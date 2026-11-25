@@ -134,12 +134,6 @@ Electronic is the wide open space between pop and the club: music made mostly on
 
 A synth instrumental can sit here next to a vocal track or something built entirely from samples. Hard to place? It lands here.
 
-## Ambient
-
-Brian Eno gave ambient its name in 1978 with "Music for Airports", and its best description too: music that is "as ignorable as it is interesting".
-
-There's rarely a beat and often no tune to speak of, only slow-changing tones and texture, a sea of sound. Listen closely or let it drift. Either way works.
-
 ## Deep House
 
 Deep house begins in Chicago in the mid 80s, when Larry Heard, recording as Mr. Fingers, put jazz chords and a soft bass line over a house beat on "Can You Feel It".
