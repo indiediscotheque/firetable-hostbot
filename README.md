@@ -153,7 +153,10 @@ YouTube is checked with one direct call to the YouTube Data API (`videos.list`, 
 
 ## commands added recently
 - `!remove name` (mods): takes someone off the decks or the waitlist; a mod can't remove a supermod.
-- `!removeafter` / `!dontremoveme`: step down after your next song, or cancel it. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
+- `!removeafter` / `!dontremoveme`: step down after your next song (or the one you're playing), or cancel it (`!stay` works too). `!lastsong` is the same as `!removeafter`. Mods can add a name (`!removeafter name`, `!dontremove name`) to do it for someone of lower rank.
+- `!leaveafter 3`: step down after that many songs, the one you're playing now included (`!leaveafter 1` or plain `!leaveafter` is `!removeafter`; up to 50; `!leaveafter off` cancels). The countdown is `busSongs` on your seat in `table/` or `waitlist/`; on your last song it turns into the plain bus (`removeAfter`), so the site's 🚏 shows it.
+- `!leavein 45` (or `45m`, `1h30`, `1:30`, `2 hours`, up to 12 hours): step down then. If you're playing when the time comes you finish the song; otherwise you're taken off the decks or out of the line right away. The time is `busAt` on your seat (server time), checked every 15 seconds and as soon as the bot starts, so it holds through a restart.
+- `!bus`: who's catching the bus and when (`!bus me`: just yours). Every bus command takes a name from mods, before or after the amount (`!leaveafter 2 name`, `!leavein name 30`), for someone of lower rank, who hears it privately. A new bus replaces the old one. (`lib/bus.js`)
 - `!fixtags artist - title` (mods): correct the playing song's tags (only the first " - " splits artist from title).
 - a mod's tag fix (`!fixtags` or the site's tag editor) goes on every other copy of the old tags, unless it named another version or another song; when it respells an artist (`POOLSIDE` → `Poolside`), every song naming them follows, featured artists and remixers too (`lib/retag.js`). The mod is told what else changed.
 - `!suggest <theme>`: start a theme vote (pings @everyone). One vote at a time, up to 80 characters, and one suggestion per person every 15 minutes (mods are exempt).
@@ -409,6 +412,7 @@ Chat messages are saved together with their chat feed entry in one write. Older 
 | module | what it does |
 |---|---|
 | `lib/commands.js` | the chat commands: who said what and what may run, then each command by name from its group in `lib/commands/`: `lineup.js` (the decks and the waitlist), `room.js` (theme, lights, screen, fires, dance), `cards.js`, `tracks.js` (flags, tempo, tags, plays) and `services.js` (the background jobs by hand) |
+| `lib/bus.js` | catching the bus: after the next song, after a number of songs (`!leaveafter`), or at a time (`!leavein`), and who may set it for whom |
 | `lib/gts.js` | the global tag system: each upload linked to its track, and mods' tag fixes spread |
 | `lib/push.js` | push notifications (Web Push, `lib/webpush.js`) |
 | `lib/media.js` | YouTube Data API and SoundCloud lookups |

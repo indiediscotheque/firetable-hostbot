@@ -732,6 +732,8 @@ var nextSong = function(noPrevPlay) {
   } else if (theDJ) {
     if (theDJ.removeAfter) removePerson(theDJ.id);
   }
+  // staying on: one song fewer on a !leaveafter countdown (not for a turn that played nothing)
+  if (theDJ && !theDJ.removeAfter && !noPrevPlay) bus.played(theDJ);
   startSong(noPrevPlay);
 };
 
@@ -2036,57 +2038,7 @@ if (socialTrigger) {
   console.log("social posting: starting " + socialTrigger.status().workflow + " in " + socialTrigger.status().repo + " every hour at :" + String(socialTrigger.status().minute).padStart(2, "0"));
 }
 
-// Who a bus command is for: the sender, or (mods) someone of lower rank.
-var busRank = function(u) {
-  if (!u) return 0;
-  if (u.supermod) return 2;
-  if (u.mod) return 1;
-  return 0; // members, and the room bot (mods may send it home too)
-};
-var busTargetFor = function(senderId, senderName, args) {
-  var name = (args || "").trim().replace(/^@/, "");
-  if (!name) return { id: senderId, name: senderName, self: true };
-  var sender = users[senderId] || {};
-  if (!sender.mod && !sender.supermod) return { error: "Only mods can do that for someone else, " + senderName + "." };
-  var id = uidLookup(name);
-  if (!id) return { error: "who is that" };
-  if (id == senderId) return { id: senderId, name: senderName, self: true };
-  if (busRank(users[id]) >= busRank(sender)) return { error: "You can't do that for " + name + "." };
-  return { id: id, name: (users[id] && users[id].username) || name, self: false };
-};
-var setBus = function(target, on, byId) {
-  var check = addCheck(target.id);
-  var who = target.self ? target.name + ", " : "";
-  if (!check) {
-    talk(target.self ? target.name + ", you aren't even DJing..." : target.name + " isn't DJing.");
-    return;
-  }
-  // A mod sending the bot home (or keeping it) overrides the autopilot.
-  if (target.id == botid) autoDJ.override(on ? "down" : "up");
-  var list = check == 1 ? queue : table;
-  for (var i = 0; i < list.length; i++) {
-    if (list[i].id == target.id) {
-      list[i].removeAfter = on;
-      break;
-    }
-  }
-  var isPlaying = check == 2 && theDJ && theDJ.id == target.id;
-  if (isPlaying) theDJ.removeAfter = on;
-  if (target.self) {
-    if (on) talk(isPlaying ? who + "I'll remove you at the end of this song." : who + "I'll remove you after your next song.");
-    else talk(isPlaying ? who + "I will NOT remove you after this song." : who + "I will NOT remove you after your next song.");
-  } else {
-    // the person hears it privately; the mod who asked gets a confirmation
-    var when = isPlaying ? "at the end of this song" : "after your next song";
-    if (on) notify(target.id, "A mod has set it so you'll step down " + when + ".", { kind: "bus", name: target.name });
-    else notify(target.id, "You're staying on after all.", { kind: "bus", name: target.name });
-    if (byId && byId !== target.id) {
-      notify(byId, on ? target.name + " will step down " + (isPlaying ? "at the end of this song." : "after their next song.")
-        : target.name + " is staying on.", { kind: "bus" });
-    }
-  }
-  if (check == 1) updateWaitlist(); else updateTable();
-};
+// The bus (!removeafter, !leaveafter 3, !leavein 45m): lib/bus.js, made with the room below.
 
 // @mention inbox (indiediscotheque/firetable-user#96): file every @name in a
 // chat message under mentions/<their uid>, so they see it even if they were
@@ -2219,6 +2171,7 @@ var room = {
   get serverNow() { return serverNow; },
   get seatDJ() { return seatDJ; },
   get removeMe() { return removeMe; },
+  get bus() { return bus; },
   get reactionForOtherSong() { return reactionForOtherSong; },
   get push() { return push; },
   get playDex() { return playDex; },
@@ -2239,7 +2192,6 @@ var room = {
   get currentListRef() { return currentListRef; },
   get cardGiftedThisSong() { return cardGiftedThisSong; },
   set cardGiftedThisSong(v) { cardGiftedThisSong = v; },
-  get busRank() { return busRank; },
   get THEME_MAX_LENGTH() { return THEME_MAX_LENGTH; },
   get BPM_MIN() { return BPM_MIN; },
   get BPM_MAX() { return BPM_MAX; },
@@ -2252,7 +2204,6 @@ var room = {
   get started() { return started; },
   get songLoading() { return songLoading; },
   get setSongBpm() { return setSongBpm; },
-  get setBus() { return setBus; },
   get printCard() { return printCard; },
   get playsReply() { return playsReply; },
   get nextSong() { return nextSong; },
@@ -2267,7 +2218,6 @@ var room = {
   get flagCodeFor() { return flagCodeFor; },
   get fileMentions() { return fileMentions; },
   get chatCounts() { return chatCounts; },
-  get busTargetFor() { return busTargetFor; },
   get bpmKey() { return bpmKey; },
   get YTM_PLAYLIST_HOUR() { return YTM_PLAYLIST_HOUR; },
   get YTM_HOUR() { return YTM_HOUR; },
@@ -2275,6 +2225,7 @@ var room = {
   get SWAP_HOUR() { return SWAP_HOUR; },
   get CHAT_MAX_AGE() { return CHAT_MAX_AGE; }
 };
+var bus = require("./lib/bus").createBus(room);
 var handleChat = require("./lib/commands").createCommands(room).handleChat;
 
 var chatReady = false;
@@ -2295,6 +2246,7 @@ var markChatReady = function() {
   claimLowercaseNames();
   pruneMentions();
   push.init();
+  bus.start();
 };
 
 var chatFeedRef = firebase.database().ref("chatFeed");

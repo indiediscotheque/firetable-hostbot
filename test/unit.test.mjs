@@ -1424,7 +1424,7 @@ const seat = (id) => ({ name: id, id, plays: 0 });
 test("commands: every one belongs to one group and is a function", () => {
   const names = commandGroups.flatMap((g) => Object.keys(g));
   assert.equal(new Set(names).size, names.length, "no command in two groups");
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 59);
   for (const g of commandGroups) for (const [name, fn] of Object.entries(g)) assert.equal(typeof fn, "function", "!" + name);
   for (const n of ["addme", "removeme", "skip", "theme", "suggest", "flag", "bpm", "fixtags", "grab", "dance", "ytsync", "swaps"]) assert.ok(names.includes(n), "!" + n);
 });
@@ -1477,4 +1477,120 @@ test("commands: unknown words and the bot's own messages do nothing", () => {
   const fromBot = fakeRoom([]);
   say(fromBot, "bot", "!addme");
   assert.deepEqual(fromBot.table, []);
+});
+
+// ─── The bus (lib/bus.js): after the next song, after n songs, in a while ──
+const busLib = require("../lib/bus.js");
+
+/** A room with the bus made from it, as app.js does; DJ "u1" (Ann) plays now unless `playing` says otherwise. */
+function busRoom(opts = {}) {
+  const notices = [];
+  let now = 1_000_000;
+  const table = opts.table || [seat("u1"), seat("u2")];
+  const r = fakeRoom(table, {
+    queue: opts.queue || [], theDJ: table.find((s) => s.id === (opts.playing === undefined ? "u1" : opts.playing)) || null,
+    users: { u1: { username: "Ann" }, u2: { username: "Bea" }, u3: { username: "Cy" }, mod: { username: "Mo", mod: true }, bot: { username: "jarvis" } },
+    uidLookup: (n) => ({ ann: "u1", bea: "u2", cy: "u3", mo: "mod", jarvis: "bot" })[String(n).toLowerCase()] || false,
+    notify: (id, txt) => notices.push(id + ": " + txt), notices,
+    updateTable: () => r.calls.push("table"), serverNow: () => now, tick: (ms) => { now += ms; },
+    removeMe: (id) => { r.calls.push("remove " + id); r.table = r.table.filter((s) => s.id !== id); r.queue = r.queue.filter((s) => s.id !== id); return true; }
+  });
+  r.bus = busLib.createBus(r);
+  return r;
+}
+
+test("bus: amounts and names in either order, and the words that cancel", () => {
+  const { parseMinutes: min, parseSongs: songs, splitArgs: split } = busLib;
+  assert.deepEqual(["30", "45m", "45 min", "1h", "1h30", "1h 30m", "1:30", "1.5h", "2 hours"].map(min), [30, 45, 45, 60, 90, 90, 90, 90, 120]);
+  assert.ok([" ", "bea", "m", "h", "soon"].every((t) => isNaN(min(t))));
+  assert.deepEqual(["3", "3 songs", "one", "a song", "12 plays"].map(songs), [3, 3, 1, 1, 12]);
+  assert.deepEqual(split("3 Bea", songs), { off: false, amount: 3, name: "Bea" });
+  assert.deepEqual(split("Bea 3", songs), { off: false, amount: 3, name: "Bea" });
+  assert.deepEqual(split("@Bea Smith", songs), { off: false, amount: NaN, name: "@Bea Smith" });
+  assert.deepEqual(split("1h 30m Bea", min), { off: false, amount: 90, name: "Bea" });
+  assert.deepEqual(split("off", songs), { off: true, amount: 0, name: "" });
+  assert.deepEqual(split("Bea never", min), { off: true, amount: 0, name: "Bea" });
+  assert.deepEqual(split("0", songs), { off: true, amount: 0, name: "" });
+  assert.deepEqual(split("", songs), { off: false, amount: NaN, name: "" });
+});
+
+test("bus: !leaveafter 3 counts down the songs, the one playing now included, then steps you down", () => {
+  const r = busRoom();
+  say(r, "u1", "!leaveafter 3");
+  assert.equal(r.table[0].busSongs, 3);
+  assert.equal(r.table[0].removeAfter, false);
+  assert.deepEqual(r.said, [":bus: Ann, I'll remove you after this song and 2 more."]);
+  r.bus.played(r.table[0]); // this song ended
+  assert.equal(r.table[0].busSongs, 2);
+  r.theDJ = r.table[1];
+  say(r, "u1", "!bus");
+  assert.equal(r.said.at(-1), ":bus: Catching the bus: Ann (after their next 2 songs).");
+  r.bus.played(r.table[0]);
+  assert.equal(r.table[0].busSongs, undefined, "down to the last one: the plain bus the site and nextSong() know");
+  assert.equal(r.table[0].removeAfter, true);
+  say(r, "u1", "!bus me");
+  assert.equal(r.said.at(-1), ":bus: Ann, you're stepping down after your next song.");
+  r.bus.played(r.table[0]);
+  assert.equal(r.table[0].removeAfter, true, "nextSong() takes them off now; played() leaves it alone");
+});
+
+test("bus: !leaveafter 1 (or no number) is !removeafter, off or !stay cancels any bus", () => {
+  const r = busRoom({ playing: "u2" });
+  say(r, "u1", "!leaveafter");
+  assert.equal(r.table[0].removeAfter, true);
+  assert.deepEqual(r.said, ["Ann, I'll remove you after your next song."]);
+  say(r, "u1", "!leaveafter 4");
+  assert.deepEqual([r.table[0].removeAfter, r.table[0].busSongs], [false, 4], "a new bus replaces the old one");
+  assert.equal(r.said.at(-1), ":bus: Ann, I'll remove you after your next 4 songs.");
+  say(r, "u1", "!stay");
+  assert.deepEqual([r.table[0].removeAfter, r.table[0].busSongs], [false, undefined]);
+  assert.equal(r.said.at(-1), "Ann, you're off the bus. Stay as long as you like!");
+  say(r, "u1", "!leavein 20");
+  say(r, "u1", "!leaveafter off");
+  assert.equal(r.table[0].busAt, undefined);
+  say(r, "u1", "!leaveafter 51");
+  assert.match(r.said.at(-1), /Up to 50/);
+  say(r, "u3", "!leaveafter 2");
+  assert.equal(r.said.at(-1), "Cy, you aren't even DJing...");
+});
+
+test("bus: !leavein steps you down when the time comes, finishing the song you're playing", () => {
+  const r = busRoom({ queue: [seat("u3")] });
+  say(r, "u1", "!leavein 1h30");
+  assert.equal(r.said.at(-1), ":bus: Ann, your bus leaves in 1 hour 30 minutes. If you're playing then, you'll finish your song.");
+  say(r, "u2", "!leavein 10m");
+  say(r, "u3", "!leavein 5");
+  say(r, "u2", "!leavein soon");
+  assert.match(r.said.at(-1), /How long, Bea\?/);
+  say(r, "u1", "!bus");
+  assert.equal(r.said.at(-1), ":bus: Catching the bus: Ann (in 1 hour 30 minutes), Bea (in 10 minutes), Cy (in 5 minutes).");
+  r.tick(5 * 60000);
+  r.bus.tick();
+  assert.deepEqual(r.queue, [], "in line: just steps out");
+  assert.equal(r.said.at(-1), ":bus: Cy's bus is here, so they're off the waitlist.");
+  r.tick(5 * 60000);
+  r.bus.tick();
+  assert.deepEqual(r.table.map((s) => s.id), ["u1"], "on deck but not playing: off now");
+  r.tick(80 * 60000);
+  r.bus.tick();
+  assert.deepEqual([r.table[0].busAt, r.table[0].removeAfter], [undefined, true], "playing: finishes the song");
+  assert.equal(r.said.at(-1), ":bus: Ann's bus is here: stepping down after this song.");
+  say(r, "u1", "!leavein 13h");
+  assert.match(r.said.at(-1), /Up to 12 hours/);
+});
+
+test("bus: mods can do it for someone of lower rank, who hears it privately", () => {
+  const r = busRoom();
+  say(r, "mod", "!leaveafter Bea 3");
+  assert.equal(r.table[1].busSongs, 3);
+  assert.deepEqual(r.notices, ["u2: A mod has set it so you'll step down after your next 3 songs.", "mod: Bea will step down after their next 3 songs."]);
+  say(r, "mod", "!leavein 45 bea");
+  assert.ok(r.table[1].busAt > 0 && !r.table[1].busSongs);
+  say(r, "mod", "!stay Bea");
+  assert.deepEqual(r.notices.slice(-2), ["u2: You're staying on after all.", "mod: Bea is staying on."]);
+  say(r, "u1", "!leaveafter 2 Bea");
+  assert.equal(r.said.at(-1), "Only mods can do that for someone else, Ann.");
+  const bot = busRoom({ table: [seat("u1"), seat("bot")] });
+  say(bot, "mod", "!leaveafter 2 jarvis");
+  assert.ok(bot.calls.includes("override down"), "sending the bot home overrides the autopilot");
 });
