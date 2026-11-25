@@ -1395,3 +1395,86 @@ test("lastfm: calls are signed the way Last.fm asks, and nothing is sent without
   assert.equal(lf.getApiSignature(params), createHash("md5").update(raw, "utf8").digest("hex"));
   assert.equal(createLastfm({ LASTFM_APIKEY: "key" }).key, null, "no secret: no scrobbling");
 });
+
+// ─── Chat commands (lib/commands.js and its groups) ─────────────────────────
+const { createCommands } = require("../lib/commands.js");
+const commandGroups = ["lineup", "room", "cards", "tracks", "services"].map((g) => require("../lib/commands/" + g + ".js"));
+
+/** A room as app.js hands it over, with the deck, the line and what was said. */
+function fakeRoom(table, extra) {
+  const said = [], calls = [];
+  const room = Object.assign({
+    said, calls, table, queue: [], playDex: 3, botid: "bot", started: true, CHAT_MAX_AGE: 120000,
+    users: { u1: { username: "Ann" }, mod: { username: "Mo", mod: true }, u2: { username: "Bea", status: true } },
+    serverNow: () => Date.now(), chatCounts: () => true, fileMentions() {}, push: { chat() {} },
+    talk: (t) => said.push(t), addCheck: () => 0, uidLookup: (n) => ({ bea: "u2", bot: "bot" })[String(n).toLowerCase()] || false,
+    updateWaitlist: () => calls.push("waitlist"), updateLimit: () => calls.push("limit"), startSong: () => calls.push("start"),
+    seatDJ: (s) => { room.table.push(s); calls.push("seat"); }, updateThings: () => calls.push("things"),
+    autoDJ: { botName: () => "jarvis", botSeat: () => null, override: (how) => calls.push("override " + how) },
+    reactionForOtherSong: () => false, themevote: { active: false }, firelevel: { hot: () => calls.push("hot"), storm: () => calls.push("storm") }
+  }, extra);
+  return room;
+}
+const say = (room, from, txt) => {
+  room.lookupChatData = (id, cb) => cb({ id: from, txt, time: Date.now() });
+  createCommands(room).handleChat("c" + Math.random(), "f");
+};
+const seat = (id) => ({ name: id, id, plays: 0 });
+
+test("commands: every one belongs to one group and is a function", () => {
+  const names = commandGroups.flatMap((g) => Object.keys(g));
+  assert.equal(new Set(names).size, names.length, "no command in two groups");
+  assert.equal(names.length, 52);
+  for (const g of commandGroups) for (const [name, fn] of Object.entries(g)) assert.equal(typeof fn, "function", "!" + name);
+  for (const n of ["addme", "removeme", "skip", "theme", "suggest", "flag", "bpm", "fixtags", "grab", "dance", "ytsync", "swaps"]) assert.ok(names.includes(n), "!" + n);
+});
+
+test("commands: !addme seats you when there's room and lines you up when there isn't", () => {
+  const empty = fakeRoom([]);
+  say(empty, "u1", "!AddMe"); // any case
+  assert.deepEqual(empty.table, [{ name: "Ann", id: "u1", plays: 0 }]);
+  assert.equal(empty.playDex, 0);
+  assert.deepEqual(empty.calls, ["start"]);
+  const some = fakeRoom([seat("a"), seat("b")]);
+  say(some, "u1", "!addme");
+  assert.deepEqual(some.calls, ["seat", "things"]);
+  const full = fakeRoom([seat("a"), seat("b"), seat("c"), seat("d")]);
+  say(full, "u1", "!addme");
+  assert.deepEqual(full.queue, [{ name: "Ann", id: "u1", plays: 0 }]);
+  assert.deepEqual(full.said, ["Ann added to waitlist. Length is now 1"]);
+  assert.deepEqual(full.calls, ["waitlist", "limit"]);
+  const already = fakeRoom([], { addCheck: () => 2 });
+  say(already, "u1", "!addme");
+  assert.deepEqual(already.said, ["You are already on deck."]);
+});
+
+test("commands: a mod's !upbot and !add use the same seating, in their own words", () => {
+  const up = fakeRoom([seat("a")]);
+  say(up, "mod", "!upbot");
+  assert.deepEqual(up.said, ["OK! I will DJ."]);
+  assert.deepEqual(up.calls, ["override up", "seat", "things"]);
+  assert.equal(up.table[1].name, "jarvis");
+  const upFull = fakeRoom([seat("a"), seat("b"), seat("c"), seat("d")]);
+  say(upFull, "mod", "!upbot");
+  assert.deepEqual(upFull.said, ["jarvis (that's me) added to waitlist. Length is now 1"]);
+  const add = fakeRoom([seat("a"), seat("b"), seat("c"), seat("d")]);
+  say(add, "mod", "!add Bea");
+  assert.deepEqual(add.said, ["Bea added to waitlist. Length is now 1"]);
+  const notMod = fakeRoom([]);
+  say(notMod, "u1", "!add Bea");
+  assert.deepEqual(notMod.table, [], "only mods add people");
+});
+
+test("commands: unknown words and the bot's own messages do nothing", () => {
+  for (const txt of ["!nope", "!constructor", "!__proto__", "!toString", "hello"]) {
+    const r = fakeRoom([]);
+    assert.doesNotThrow(() => say(r, "u1", txt), txt);
+    assert.deepEqual([r.said, r.calls], [[], []], txt);
+  }
+  const fire = fakeRoom([]);
+  say(fire, "u1", "🔥");
+  assert.deepEqual(fire.calls, ["hot"], "a 🔥 still counts");
+  const fromBot = fakeRoom([]);
+  say(fromBot, "bot", "!addme");
+  assert.deepEqual(fromBot.table, []);
+});

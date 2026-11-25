@@ -408,7 +408,7 @@ Chat messages are saved together with their chat feed entry in one write. Older 
 
 | module | what it does |
 |---|---|
-| `lib/commands.js` | the chat commands (`!addme`, `!skip`, `!theme`, `!flag`, `!bpm`, …) |
+| `lib/commands.js` | the chat commands: who said what and what may run, then each command by name from its group in `lib/commands/`: `lineup.js` (the decks and the waitlist), `room.js` (theme, lights, screen, fires, dance), `cards.js`, `tracks.js` (flags, tempo, tags, plays) and `services.js` (the background jobs by hand) |
 | `lib/gts.js` | the global tag system: each upload linked to its track, and mods' tag fixes spread |
 | `lib/push.js` | push notifications (Web Push, `lib/webpush.js`) |
 | `lib/media.js` | YouTube Data API and SoundCloud lookups |

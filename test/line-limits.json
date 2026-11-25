@@ -4,10 +4,6 @@
     "lines": 2113,
     "longFunctions": 2
   },
-  "lib/commands.js": {
-    "lines": 503,
-    "longFunctions": 3
-  },
   "lib/discover.js": {
     "lines": 718,
     "longFunctions": 1
