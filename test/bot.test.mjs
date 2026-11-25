@@ -310,7 +310,7 @@ const scenarios = {
     return p;
   },
   async bus_after_songs_and_in_a_while() {
-    // !leaveafter 2: this song and one more, then off; !bus lists it; a bus
+    // !removeafter 2: this song and one more, then off; !bus lists it; a bus
     // that came while the bot was down leaves as soon as it's back
     const seat = (id, extra) => Object.assign({ name: id, id, plays: 0 }, extra);
     await put("/", base(Object.assign(nowPlaying("dj1", "cur1"), {
@@ -325,13 +325,13 @@ const scenarios = {
     let st = await get("/");
     const at = (id) => (st.table || []).find((x) => x && x.id === id);
     check(!at("dj3") && said(st).some((t) => /dj3's bus is here\. Thanks for playing!/.test(t)), "a bus due while the bot was down: off the decks at once");
-    await say("dj1", "!leaveafter 2");
+    await say("dj1", "!removeafter 2"); // the original command, with a count
     await say("dj2", "!leavein 1h30");
     await sleep(1500);
     await say("dj2", "!bus");
     await sleep(1500);
     st = await get("/");
-    check(at("dj1") && at("dj1").busSongs === 2 && said(st).some((t) => /dj1, I'll remove you after this song and 1 more/.test(t)), "!leaveafter 2: saved on the seat, said in chat");
+    check(at("dj1") && at("dj1").busSongs === 2 && said(st).some((t) => /dj1, I'll remove you after this song and 1 more/.test(t)), "!removeafter 2: saved on the seat, said in chat");
     check(at("dj2") && at("dj2").busAt > Date.now() + 80 * 60000, "!leavein 1h30: the time is saved on the seat");
     check(said(st).some((t) => /Catching the bus: dj1 \(after this song and 1 more\), dj2 \(in 1 hour 3\d minutes\)/.test(t)), "!bus lists who's leaving and when");
     await say("boss", "!skip"); // dj1's first song ends: one to go
