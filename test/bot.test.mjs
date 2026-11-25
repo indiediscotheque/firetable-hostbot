@@ -1000,6 +1000,27 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async repeats() {
+    // the song that just ended (old), and another upload of a song played an
+    // hour ago, are passed over; they stay at the top of the list for later
+    // (keys like push keys, which sort before the one the played track gets)
+    await put("/", base({ queues: { dj1: { "-A1": yt("old", "Old - Old"), "-A2": yt("alt1", "Art - Played (Official Video)"), "-A3": yt("yt2", "Art - Fresh") }, dj2: { s1: yt("yt3") } },
+      songHistory: { h1: { type: 1, cid: "yt1", artist: "Art", title: "Played", when: Date.now() - 3600000, dj: "dj2" } } }));
+    const p = startBot("repeats");
+    await sleep(4000);
+    const st = await get("/");
+    check(st.songToPlay.cid === "yt2" && st.songToPlay.djid === "dj1", "the first song not played in the last 4 hours plays (" + st.songToPlay.cid + ")");
+    const order = Object.keys(st.queues.dj1).sort().map((k) => st.queues.dj1[k].cid);
+    check(JSON.stringify(order) === '["old","alt1","yt2"]', "the skipped songs keep their place at the top (" + order + ")");
+    const recent = st.playedRecently || {};
+    check(["1old", "1yt1", "1yt2"].every((id) => recent[id] && recent[id].u - recent[id].w === 4 * 3600000) && recent["1yt1"].n === "art played",
+      "playedRecently holds the plays for the site, each for 4 hours (" + Object.keys(recent) + ")");
+    const notes = Object.values((st.notices || {}).dj1 || {}).map((n) => n.txt);
+    check(notes.length === 1 && /^Skipped 2 songs the room heard in the last 4 hours \("Old - Old" and more\)\. Playing "Art - Fresh" instead\.$/.test(notes[0]),
+      "the DJ is told once what was skipped (" + notes + ")");
+    await healthy(p);
+    return p;
+  },
   async wrong_password() {
     await put("/", base({}));
     const p = startBot("login", { FIRETABLE_PASS: "wrong" });

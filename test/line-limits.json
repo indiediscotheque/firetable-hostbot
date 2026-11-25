@@ -1,7 +1,7 @@
 {
   "//": "Files over 500 lines of code, and functions over 80: today's sizes, which may only go down (cd test && npm run size; --write after making one smaller)",
   "app.js": {
-    "lines": 2066,
+    "lines": 2047,
     "longFunctions": 2
   },
   "lib/discover.js": {

@@ -508,6 +508,10 @@
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
     },
+    "playedRecently": {
+      ".read": true,
+      ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true"
+    },
     "songHistory": {
       ".read": true,
       ".write": "root.child('users/' + auth.uid + '/hostbot').val() == true",
