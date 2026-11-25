@@ -309,6 +309,45 @@ const scenarios = {
     await healthy(p);
     return p;
   },
+  async bus_after_songs_and_in_a_while() {
+    // !leaveafter 2: this song and one more, then off; !bus lists it; a bus
+    // that came while the bot was down leaves as soon as it's back
+    const seat = (id, extra) => Object.assign({ name: id, id, plays: 0 }, extra);
+    await put("/", base(Object.assign(nowPlaying("dj1", "cur1"), {
+      users: Object.assign(base().users, { dj3: { username: "dj3", status: true } }),
+      nameClaim: Object.assign(base().nameClaim, { dj3: "dj3" }),
+      table: [seat("dj1", { plays: 1 }), seat("dj2"), seat("dj3", { busAt: Date.now() - 1000 })],
+      queues: { dj1: { k1: yt("yt1"), k2: yt("yt2") }, dj2: { s1: yt("yt3"), s2: yt("yt4") }, dj3: { t1: yt("yt5") } }
+    })));
+    const p = startBot("bus");
+    await waitFor(p, "Listening now.");
+    await sleep(1500);
+    let st = await get("/");
+    const at = (id) => (st.table || []).find((x) => x && x.id === id);
+    check(!at("dj3") && said(st).some((t) => /dj3's bus is here\. Thanks for playing!/.test(t)), "a bus due while the bot was down: off the decks at once");
+    await say("dj1", "!leaveafter 2");
+    await say("dj2", "!leavein 1h30");
+    await sleep(1500);
+    await say("dj2", "!bus");
+    await sleep(1500);
+    st = await get("/");
+    check(at("dj1") && at("dj1").busSongs === 2 && said(st).some((t) => /dj1, I'll remove you after this song and 1 more/.test(t)), "!leaveafter 2: saved on the seat, said in chat");
+    check(at("dj2") && at("dj2").busAt > Date.now() + 80 * 60000, "!leavein 1h30: the time is saved on the seat");
+    check(said(st).some((t) => /Catching the bus: dj1 \(after this song and 1 more\), dj2 \(in 1 hour 3\d minutes\)/.test(t)), "!bus lists who's leaving and when");
+    await say("boss", "!skip"); // dj1's first song ends: one to go
+    await sleep(2500);
+    st = await get("/");
+    check(st.songToPlay.djid === "dj2" && at("dj1") && at("dj1").removeAfter === true && !at("dj1").busSongs, "one song down: the last one is a plain bus");
+    await say("boss", "!skip");
+    await sleep(2500);
+    check((await get("/songToPlay")).djid === "dj1", "dj1 plays their last song");
+    await say("boss", "!skip");
+    await sleep(2500);
+    st = await get("/");
+    check(!at("dj1") && at("dj2"), "after it, dj1 is off the decks");
+    await healthy(p);
+    return p;
+  },
   async song_tempo() {
     // an old lookup found nothing; the new one searches plainly, skips the
     // karaoke cover and the version with no tempo, and finds the radio edit's
