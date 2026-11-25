@@ -93,6 +93,7 @@ shoegaze,Dream Pop
 indie rock,Indie Rock
 garage rock,Indie Rock
 britpop,Indie Rock
+post rock,Indie Rock
 alternative rock,Indie Rock
 math rock,Indie Rock
 art rock,Indie Rock
@@ -135,16 +136,15 @@ instrumental hip hop,Hip Hop
 grime,Hip Hop
 beats,Hip Hop
 turntablism,Hip Hop
-# --- Downtempo / Ambient
+# --- Downtempo
 downtempo,Downtempo
 chillout,Downtempo
 trip hop,Downtempo
 lounge,Downtempo
 chill,Downtempo
 chillstep,Downtempo
-ambient,Ambient
-drone,Ambient
-post rock,Ambient
+ambient,Downtempo
+drone,Downtempo
 # --- Electronica
 idm,Electronica
 glitch,Electronica
