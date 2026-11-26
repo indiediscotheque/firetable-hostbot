@@ -923,6 +923,16 @@ test("Discover's library: genres, DJs, artists, years, Rising and On this day, a
       now: Date.UTC(2026, 10, 11), genreYearMin: 1
     });
     const u = built.updates;
+    // every song, for the site's search: one row per song, most played first, counted in meta
+    const songs = u["discover/lib/songs/0"];
+    assert.ok(Array.isArray(songs) && songs.length >= 2, "the song index has the room's songs");
+    assert.ok(songs.every((r) => r.length === 5 && typeof r[0] === "string" && r[1] && typeof r[2] === "number" && typeof r[3] === "string" && typeof r[4] === "number"), "rows are [artist, title, type, cid, plays]");
+    assert.ok(songs.every((r, i) => i === 0 || songs[i - 1][4] >= r[4]), "most played first");
+    assert.equal(new Set(songs.map((r) => r[2] + "_" + r[3])).size, songs.length, "each upload once");
+    assert.equal(u["discover/lib/meta"].songs, songs.length);
+    assert.match(u["discover/lib/meta"].songsHash, /^[0-9a-f]{16}$/);
+    assert.equal(library.buildLibrary(db, { users, bpm: {}, cards: {}, now: Date.UTC(2027, 0, 1) }).updates["discover/lib/meta"].songsHash, u["discover/lib/meta"].songsHash,
+      "the hash changes only when the songs do, so the site's deploy reads them only then");
     assert.ok(u["discover/lib/genres"]["nu-disco"].songs >= 2, "every track in its genres");
     assert.deepEqual(u["discover/lib/genres"]["indie-dance"].next, ["nu-disco"], "next door: genres that share songs");
     assert.equal(u["discover/lib/genres"]["nu-disco"].x, 0.64, "the sound map position from genre-axis.csv");

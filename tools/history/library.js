@@ -23,6 +23,7 @@
 //   discover/lib/year/<year>       most played from that year, and finds not played yet
 //   discover/lib/rising            plays up most, the last 4 weeks against the 4 before
 //   discover/lib/onThisDay/<MM-DD> songs first played here on this day in past years
+//   discover/lib/songs/<n>         every song played here, for the site's search (songindex.js)
 //
 // People who turned off "Show my name on public pages" (users/<uid>/
 // publicName = false) have no DJ page and show as nobody on songs.
@@ -32,6 +33,10 @@ var path = require("path");
 var tags = require("../../lib/tags");
 var genres = require("./genres");
 var store = require("./store");
+var songindex = require("./songindex");
+// the genre files' readers: genre-axis.csv, genre-about.csv, genre-stories.md
+var genretext = require("./genretext");
+var readAxis = genretext.readAxis, readAbout = genretext.readAbout, readStories = genretext.readStories;
 
 var DAY = 86400000;
 var ROWS = { fav: 100, newHere: 50, deep: 50, dj: 30, artist: 25, year: 40, genreYear: 40, yearMore: 24, rising: 20, onThisDay: 8 };
@@ -49,58 +54,6 @@ var WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
 function slugOf(s) {
   var out = tags.fold(String(s || "")).toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return out.slice(0, 60) || "x" + tags.hash(String(s)).slice(0, 8).toLowerCase().replace(/[^a-z0-9]/g, "0");
-}
-
-/** The sound map's across axis, from genre-axis.csv (0 band-made .. 1 machine-made). */
-function readAxis(dir) {
-  var out = {};
-  [path.join(__dirname, "genre-axis.csv"), dir ? path.join(dir, "genre-axis.csv") : null].forEach(function(f) {
-    if (!f || !fs.existsSync(f)) return;
-    fs.readFileSync(f, "utf8").split(/\r?\n/).forEach(function(line) {
-      if (!line.trim() || /^#/.test(line) || /^genre,/.test(line)) return;
-      var i = line.lastIndexOf(",");
-      var v = Number(line.slice(i + 1));
-      if (i > 0 && isFinite(v)) out[line.slice(0, i).trim()] = Math.max(0, Math.min(1, v));
-    });
-  });
-  return out;
-}
-
-/**
- * A few sentences about each genre, from genre-stories.md (a copy in
- * history-data/ wins): "## Genre name", then its paragraphs, a blank line
- * between them. Up to three paragraphs of 700 characters each.
- * @returns {Object<string, string[]>} genre name -> paragraphs
- */
-function readStories(dir) {
-  var f = [dir ? path.join(dir, "genre-stories.md") : null, path.join(__dirname, "genre-stories.md")].filter(function(x) { return x && fs.existsSync(x); })[0];
-  /** @type {Object<string, string[]>} */
-  var out = {};
-  if (!f) return out;
-  var name = null;
-  fs.readFileSync(f, "utf8").split(/\r?\n\s*\r?\n/).forEach(function(block) {
-    block = block.trim();
-    var h = /^##\s+(.+)$/.exec(block.split(/\r?\n/)[0]);
-    if (h) { name = h[1].trim(); out[name] = []; block = block.split(/\r?\n/).slice(1).join(" ").trim(); }
-    if (!name || !block || /^#/.test(block)) return;
-    if (out[name].length < 3) out[name].push(block.replace(/\s+/g, " ").slice(0, 700));
-  });
-  Object.keys(out).forEach(function(k) { if (!out[k].length) delete out[k]; });
-  return out;
-}
-
-/** One line about each genre, from genre-about.csv (a copy in history-data/ wins). */
-function readAbout(dir) {
-  var out = {};
-  [path.join(__dirname, "genre-about.csv"), dir ? path.join(dir, "genre-about.csv") : null].forEach(function(f) {
-    if (!f || !fs.existsSync(f)) return;
-    fs.readFileSync(f, "utf8").split(/\r?\n/).forEach(function(line) {
-      if (!line.trim() || /^#/.test(line) || /^genre,/.test(line)) return;
-      var m = /^([^,]+),\s*"?(.*?)"?\s*$/.exec(line);
-      if (m && m[2]) out[m[1].trim()] = m[2].replace(/""/g, '"').slice(0, 200);
-    });
-  });
-  return out;
 }
 
 function median(list) {
@@ -558,7 +511,12 @@ function buildLibrary(db, opts) {
     updates["discover/lib/onThisDay/" + k] = rows(ids.sort(byPlays), ROWS.onThisDay);
   });
 
-  updates["discover/lib/meta"] = { at: now, genres: counts.genres, djs: counts.djs, artists: counts.artists, years: counts.years };
+  // every song, for the site's search (songindex.js)
+  var songs = songindex.songUpdates(songindex.songRows(tracks, function(id) { return uploadOf.get(id); }));
+  Object.assign(updates, songs.updates);
+  counts.songs = songs.meta.songs;
+
+  updates["discover/lib/meta"] = Object.assign({ at: now, genres: counts.genres, djs: counts.djs, artists: counts.artists, years: counts.years }, songs.meta);
   return { updates: updates, counts: counts };
 }
 
@@ -763,7 +721,7 @@ async function publishLibrary(db, env, opts, log) {
   if (found.months.length && found.months[0].viaDiscover) {
     log("library: " + found.months[0].month + ": " + found.months[0].joined + " joined, " + found.months[0].viaDiscover + " through Discover (found_via.csv)");
   }
-  log("library: " + built.counts.genres + " genres, " + built.counts.djs + " DJs, " + built.counts.artists + " artists, " + built.counts.years + " years" +
+  log("library: " + built.counts.genres + " genres, " + built.counts.djs + " DJs, " + built.counts.artists + " artists, " + built.counts.years + " years, " + built.counts.songs + " songs to search" +
     (built.counts.repeats ? "; " + built.counts.repeats + " repeated songs left out of lists" : ""));
   if (!opts.write) {
     if (opts.dir) fs.writeFileSync(path.join(opts.dir, "library-preview.json"), JSON.stringify({ counts: built.counts, sample: Object.keys(updates).slice(0, 50) }, null, 1));
@@ -771,7 +729,7 @@ async function publishLibrary(db, env, opts, log) {
     return built.counts;
   }
   // pages that are gone since the last run leave too
-  for (var coll of ["genre", "genreYear", "dj", "artist", "year", "onThisDay"]) {
+  for (var coll of ["genre", "genreYear", "dj", "artist", "year", "onThisDay", "songs"]) {
     var have = await c.keys("discover/lib/" + coll);
     have.forEach(function(k) {
       var p = "discover/lib/" + coll + "/" + k;
