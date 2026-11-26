@@ -326,7 +326,7 @@ A public playlist for each genre on the room's YouTube account, **"Indie Discoth
 If the sign-in is ever refused (the account's password changed, access removed), `!genrelists` and the log say so: run step 3 again. A playlist deleted on YouTube is made again the next day.
 
 ## social posting
-The site posts the room's new releases, weekly chart and more to Instagram, Facebook, Threads, X, Bluesky and Discord from a GitHub Actions workflow ([firetable-user](https://github.com/indiediscotheque/firetable-user), `.github/workflows/social.yml`; its README, "social posting", says what and when). GitHub's own schedules run late or get skipped, so the bot starts that workflow itself once an hour, at 17 minutes past (`lib/social.js`). The workflow decides what's due; a start with nothing due finishes in a minute or two.
+The site posts the room's new releases, weekly chart and more to Instagram, Facebook, Threads, Bluesky and Discord from a GitHub Actions workflow ([firetable-user](https://github.com/indiediscotheque/firetable-user), `.github/workflows/social.yml`; its README, "social posting", says what and when). GitHub's own schedules run late or get skipped, so the bot starts that workflow itself once an hour, at 17 minutes past (`lib/social.js`). The workflow decides what's due; a start with nothing due finishes in a minute or two.
 
 To turn it on, make a token the bot can start the workflow with:
 1. GitHub → your picture → **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**.
